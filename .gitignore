@@ -1,0 +1,17 @@
+# Jupyter 自动生成的检查点
+.ipynb_checkpoints/
+*_checkpoint.ipynb
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境
+env/
+venv/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
