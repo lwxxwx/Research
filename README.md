@@ -31,22 +31,22 @@ This repository contains AI-related testing scripts, environment configuration f
 git clone https://github.com/lwxxwx/Research.git
 cd Research
 
-###2. Create and Activate Conda Environment
+### 2. Create and Activate Conda Environment
 conda env create -f test/tf_pt_env.yml
 conda activate tf_pt_env
 
-###3. Run Test Scripts
+### 3. Run Test Scripts
 Example 1: Test GPU status
 python test/gpu_test.py
 Example 2: Run comprehensive framework test
 python test/frame_test.py
 
-##Environment Details
+## Environment Details
 Python: 3.11
 Main frameworks: PyTorch, TensorFlow, TensorRT, LangChain, LangGraph, ChromaDB, FAISS, Sentence-Transformers
 Full dependencies: test/tf_pt_env.yml
 
-###frame_test.py Description
+### frame_test.py Description
 The frame_test.py script is a comprehensive environment validation tool that checks the installation and functionality of key AI frameworks:
 
     Python & NumPy: Verifies Python and NumPy versions.
