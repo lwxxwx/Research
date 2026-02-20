@@ -29,7 +29,6 @@ This repository contains AI-related testing scripts, environment configuration f
 ## Quick Start
 
 ### 1. Clone the Repository
-```bash
 git clone https://github.com/lwxxwx/Research.git
 cd Research
 
