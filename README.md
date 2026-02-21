@@ -60,4 +60,64 @@ Notes
 
     This repository is for testing and experimental use only.
     After updating code, use git add . && git commit -m "your message" && git push to sync to GitHub.
+    
+AI Agent Development Scaffold Documentation
+##Project Overview
+This is a local AI agent development scaffold built on LangChain + LangGraph + Llama + RAG. It provides a clear directory structure and modular design to facilitate rapid development and extension of AI applications.
+
+##Directory Structure
+ai-agent-template/
+├── main.py                 # Project entry point
+├── .env.example            # Environment variable configuration template
+├── .gitignore              # Git ignore file configuration
+├── requirements.txt        # Project dependency declarations
+├── agent/
+│   └── graph.py            # LangGraph workflow definition
+├── model/
+│   └── llama.py            # Local Llama model loading wrapper
+├── rag/
+│   └── retriever.py        # RAG knowledge base retrieval tool
+├── prompts/                # Prompt template directory
+├── memory/                 # Conversation memory module directory
+├── tools/                  # Custom tool directory
+├── configs/                # Configuration file directory
+└── utils/                  # Utility function directory
+
+##Quick Start(Run in VS Code with Conda Environment)
+1. Open Project Folder
+
+    Open Visual Studio Code.
+    Go to File > Open Folder.
+    Select and open your ai-agent-template project directory.
+2. Select Python Interpreter
+
+    Click the Python version displayed in the bottom-right corner of VS Code.
+    Choose your existing Conda environment from the list.
+    Ensure the environment is activated in the terminal.
+3. Edit and Run main.py
+
+    Open main.py in VS Code editor.
+    Modify test input or logic as needed.
+    Click the Run ▶ button in the top-right corner to execute the script.
+
+4. View Results in Terminal
+After execution, you can view the running logs and final output in the VS Code terminal.
+
+##Extension Suggestions
+
+    Replace Placeholder Logic: Replace the placeholder functions in model/llama.py and rag/retriever.py with real model loading and retrieval logic.
+    Add Prompt Templates: Manage prompt templates for different scenarios in the prompts/ directory.
+    Implement Conversation Memory: Add conversation history management in the memory/ directory.
+    Integrate Custom Tools: Add custom tools in the tools/ directory to extend the agent's capabilities.
+    Add Configuration Management: Manage environment-specific configurations in the configs/ directory.
+
+##Tech Stack
+
+    LangChain: LLM application development framework
+    LangGraph: Agent workflow construction
+    Llama.cpp: Local Llama model execution
+    ChromaDB: Vector database
+    Python: Primary development language
+
+
 ```
