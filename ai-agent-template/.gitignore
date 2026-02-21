@@ -1,0 +1,6 @@
+.env
+models/
+docs/
+vector_db/
+__pycache__/
+*.pyc
