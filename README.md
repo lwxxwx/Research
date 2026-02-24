@@ -22,6 +22,7 @@ This repository contains AI-related testing scripts, environment configuration f
  ├── langgraph_test.py # LangGraph workflow test│ 
  ├── pytorch_test.py # PyTorch environment test│ 
  ├── sentence-transformers_test.py # Sentence embedding model test│ 
+ ├── model_test.py # LLM model/llama-cpp-python GPU/Gradio test│ 
  └── tf_pt_env.yml # Conda environment file
  ├── .gitignore # Git ignore rules
  └── README.md # Project documentation
