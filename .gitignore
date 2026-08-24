@@ -1,0 +1,28 @@
+# --- Python / UV ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.uv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Environment ---
+.env
+.env.local
+
+# --- Docker & Persistence ---
+pgdata/
+out/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+Thumbs.db
+.DS_Store
