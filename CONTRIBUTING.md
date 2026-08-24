@@ -13,3 +13,5 @@
 - `docs`: 文档变更
 - `style`: 格式变更
 - `refactor`: 重构
+- `test`: 测试变更
+- `chore`: 其他变更
