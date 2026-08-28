@@ -7,3 +7,4 @@ out/
 *.md
 .gitignore
 .dockerignore
+*.log

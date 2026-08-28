@@ -21,7 +21,7 @@
 ### 1.2 原规划 → 新规划迁移说明
 | 原规划特性 | 新规划 (V1.2 Docker+uv) | 处理方式 |
 | :--- | :--- | :--- |
-| **宿主机 Python** | **Backend Container (Python 3.11.9)** | 删除宿主机依赖 |
+| **宿主机 Python** | **Backend Container (Python 3.11.x)** | 删除宿主机依赖 |
 | **venv / pip** | **uv (pyproject.toml + uv.lock)** | 替换为现代依赖管理 |
 | **Venv 位置** | **容器内 /opt/venv** | 隔离源码挂载冲突 |
 | **Docker Compose** | **Dev/Prod 分离** | 明确职责边界 |
@@ -49,7 +49,8 @@ Developer Host (Windows/WSL2)
          │
          ├── backend (Service: backend)
          │     ├── OS: Debian Slim (Linux)
-         │     ├── Runtime: Python 3.11.9 + uv (v0.4.0)
+         │     ├── Runtime: Python 3.11.x (Debian Slim) + uv (v0.12.6)
+         │     │ └── 当前验证版本:Python 3.11.16 (python:3.11-slim 镜像获取)
          │     ├── Venv Path: /opt/venv (隔离挂载)
          │     └── Mount: ./backend -> /app (Dev 模式)
          │
@@ -112,7 +113,9 @@ Schematic_Design_Review/
 - **目标**：固定环境版本，实现轻量化 Healthcheck，确保依赖在构建阶段固化。
 - **修改文件**：`backend/Dockerfile`
 - **核心实现**：
-    1. 使用固定版本：`FROM ghcr.io/astral-sh/uv:0.4.0 AS uv_bin` 和 `FROM python:3.11.9-slim`。
+    1. 使用固定版本：`FROM ghcr.io/astral-sh/uv:0.12.6 AS uv_bin` 和 `FROM python:3.11-slim` (当前验证版本:Python 3.11.16)。
+        - 使用 `python:3.11-slim` 可自动获取最新的 3.11.x 安全补丁版本。
+        - 如需锁定具体版本，可使用 `python:3.11.16-slim`（已验证可用）。
     2. 构建阶段利用 `pyproject.toml` + `uv.lock` 执行 `uv sync --frozen`。
     3. 将 Python 虚拟环境安装在 `/opt/venv`，确保依赖在镜像构建阶段完成，而非启动后安装。
     4. 环境变量配置：`ENV UV_PROJECT_ENVIRONMENT=/opt/venv`。
@@ -303,13 +306,21 @@ Schematic_Design_Review/
 ---
 
 ## 17. 环境架构冻结 (Environment Freeze)
-- **Python Runtime**: 3.11.9 (Debian Slim)
-- **Dependency Manager**: uv 0.4.0 (ghcr.io/astral-sh/uv:0.4.0)
+- **Python Runtime**: 3.11.x (Debian Slim)
+    - 基础镜像：`python:3.11-slim`
+    - 当前验证版本:Python 3.11.16 (通过python:3.11-slim 镜像获取)
+    - 备注：使用 `python:3.11-slim` 标签可自动获取最新补丁版本，确保安全性。
+- **Dependency Manager**: uv 0.12.6 (ghcr.io/astral-sh/uv:0.12.6)
 - **Database**: PostgreSQL 15
 - **Vector Extension**: pgvector (以 Sprint 0 实际构建验证结果记录最终使用版本)
 - **Venv Path**: `/opt/venv` (Container internal)
 - **Networking**: Service-name based (`postgres:5432`)
 - **Persistence**: Named volume `pgdata`
+
+**版本锁定策略**：
+- Python: 使用 `python:3.11-slim` 标签，自动获取 3.11.x 系列最新安全补丁
+- uv: 固定为 0.12.6，使用官方镜像 `ghcr.io/astral-sh/uv:0.12.6`
+- 如需完全锁定 Python 版本，可改用 `python:3.11.16-slim`（已验证可用）
 
 ---
 
