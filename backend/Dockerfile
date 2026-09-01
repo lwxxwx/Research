@@ -36,7 +36,8 @@ FROM runtime AS builder
 COPY --from=uv_bin /uv /usr/local/bin/uv
 
 # 先拷贝依赖文件，最大化 docker layer 缓存命中率
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
+#COPY pyproject.toml uv.lock ./
 # 严格锁定版本、剔除开发依赖、指定 Python 版本（生产最小化）
 RUN uv sync --frozen --no-dev --python python3.11
 
@@ -52,6 +53,9 @@ RUN groupadd -r appuser && useradd -r -g appuser appuser \
 # Stage 4: Final - 生产运行镜像（极致精简，非 root 运行）
 # ============================================================================
 FROM runtime AS final
+
+# 创建非 root 用户（final 阶段必须重新创建，因为用户信息不跨阶段继承）
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 # 拷贝构建产物
 # ⚠️ 重要：COPY --from 的源路径必须使用字面常量，不能用变量
@@ -74,7 +78,7 @@ RUN test -d ${APP_HOME} || (echo "❌ Application code missing in ${APP_HOME}!" 
 # RUN test -f ${APP_HOME}/app/main.py || (echo "❌ Missing app/main.py entry file!" && exit 1)
 
 # ⚠️ 如果业务需要运行期写入日志/缓存文件，请在builder阶段预先创建对应目录并赋权appuser
-# 切换到非 root 用户（权限已在 builder 阶段预置）
+# 切换到非 root 用户（用户已在 final 阶段创建）
 USER appuser
 
 # 健康检查（纯 Python urllib 实现，不依赖 curl）
