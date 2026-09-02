@@ -1,0 +1,20 @@
+# ============================================================================
+# docker-compose.tools.yml
+# 开发辅助工具集合，使用compose profiles隔离，Sprint0非必选
+# 启动示例：
+# docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.tools.yml --profile dev-tools up -d
+#
+# 注意：pgadmin启动后需要手动添加postgres连接，host填 postgres，端口5432
+# ============================================================================
+version: "3.8"
+services:
+  pgadmin:
+    image: dpage/pgadmin4
+    profiles: ["dev-tools"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-dev@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-devpwd}
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    networks:
+      - backend_net

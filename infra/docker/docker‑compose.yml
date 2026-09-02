@@ -1,0 +1,155 @@
+# ============================================================================
+# Docker Compose 公共基座 - Sprint 0 V1.2
+# 文件：infra/docker/docker-compose.yml
+#
+# 职责：
+#   1. 定义 Backend / PostgreSQL / Frontend‑Placeholder 公共服务
+#   2. PostgreSQL Named Volume（支持 VOLUME_SUFFIX 多实例隔离）
+#   3. 定义 Docker Network（支持 NETWORK_SUFFIX 多实例隔离）
+#   4. Dev / Prod 通过 overlay 文件扩展
+#
+# ⚠️ 设计原则：
+#   - 基座只定义"服务是什么"，不定义"服务如何运行"
+#   - container_name / restart / ports 全部下沉到 overlay
+#   - 避免固定配置导致的多实例冲突、调试困难、安全风险
+#
+# ============================================================================
+# 配套 Overlay 文件配置指引
+# ============================================================================
+#
+# docker-compose.dev.yml（开发环境）：
+#   - restart: "no"           # 崩溃保留现场，便于调试
+#   - ports: 暴露服务端口到宿主机
+#   - volumes: 源码挂载（热重载）、数据目录挂载
+#
+# docker-compose.prod.yml（生产环境）：
+#   - restart: unless‑stopped # 高可用自动恢复
+#   - 数据库端口禁止直接暴露宿主机，通过内部网络访问
+#   - 单机docker compose不支持deploy.resources；资源限制依靠Docker Desktop设置 / K8s / Docker Swarm
+#
+# ============================================================================
+# 扩展说明‑Profiles可选工具服务
+# ============================================================================
+# 数据库管理工具(pgadmin)等辅助工具不纳入本基座；
+# 放置于独立 overlay 文件 docker‑compose.tools.yml，使用 compose profiles 按需启用，
+# 示例启动命令：
+#   docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.tools.yml --profile dev-tools up -d
+# ============================================================================
+#
+# Sprint0 开发启动命令：
+#   docker compose -f infra/docker/docker-compose.yml \
+#                  -f infra/docker/docker-compose.dev.yml \
+#                  up -d --build
+#
+# 多实例并行开发（Compose原生方式，设置COMPOSE_PROJECT_NAME）：
+#   $env:COMPOSE_PROJECT_NAME="dev01"
+#   docker compose -f infra/docker/docker-compose.yml \
+#                  -f infra/docker/docker-compose.dev.yml \
+#                  up -d --build
+#
+# 文档约束：Backend访问数据库必须使用服务名 postgres:5432，禁止 localhost
+# ============================================================================
+version: "3.8"
+
+# ============================================================================
+# Named Volumes
+# Sprint0 Environment Freeze：Persistence = Named Volume pgdata
+# 增加 VOLUME_SUFFIX 环境变量，支持本机多套项目实例并行，避免数据串扰
+# ============================================================================
+volumes:
+  pgdata:
+    name: pgdata_${VOLUME_SUFFIX:-base}
+    driver: local
+
+# ============================================================================
+# Networks
+# Sprint0 Environment Freeze：Network 原始名称 backend_net
+# 增加 NETWORK_SUFFIX 支持多实例隔离
+# ============================================================================
+networks:
+  backend_net:
+    name: backend_net_${NETWORK_SUFFIX:-base}
+    driver: bridge
+
+# ============================================================================
+# Services
+# ============================================================================
+services:
+  # --------------------------------------------------------------------------
+  # PostgreSQL + pgvector
+  # Sprint0 Environment Freeze：PostgreSQL 15，pgvector向量扩展
+  # initdb脚本只读挂载，仅volume首次初始化执行
+  #
+  # 基座职责：定义镜像、环境变量、卷挂载、网络、服务就绪健康检查
+  # 运行时配置（container_name / restart / ports）下沉到 overlay
+  # --------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_secure_pwd_CHANGE_ME}
+      POSTGRES_DB: ${POSTGRES_DB:-schematic_review}
+      # PostgreSQL 性能调优（开发默认，生产通过 overlay 覆盖）
+      POSTGRES_SHARED_BUFFERS: ${POSTGRES_SHARED_BUFFERS:-128MB}
+      POSTGRES_MAX_CONNECTIONS: ${POSTGRES_MAX_CONNECTIONS:-20}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    # ⚠️ 使用$$，变量在容器内部解析，读取容器内部POSTGRES_*环境变量
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - backend_net
+
+  # --------------------------------------------------------------------------
+  # Backend FastAPI
+  # build上下文必须与 Dockerfile 中的 COPY 路径匹配
+  # context: ../../backend 与 Sprint0 A3已交付Dockerfile完全兼容
+  #
+  # 基座职责：定义构建上下文、镜像、环境变量、依赖关系
+  # 运行时配置（container_name / restart / ports）下沉到 overlay
+  # ⚠️ 不在这里定义healthcheck，完全复用backend/Dockerfile内部HEALTHCHECK
+  # --------------------------------------------------------------------------
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    image: schematic-review-backend:${TAG:-latest}
+    environment:
+      # ⚠️优先级：.env 文件中 DATABASE_URL > 下面自动拼接的默认值
+      # 对齐.env.example 连接串协议 postgresql+psycopg://
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-dev_secure_pwd_CHANGE_ME}@postgres:5432/${POSTGRES_DB:-schematic_review}}
+      # 对齐 .env.example APP_ENV，不再使用 ENVIRONMENT
+      APP_ENV: ${APP_ENV:-dev}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:-change_me_in_production_env}
+      PYTHONPATH: /app
+      # AI服务相关环境变量，对齐.env.example
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_API_KEY: ${LLM_API_KEY:-your_api_key_here}
+      DATA_DIR: ${DATA_DIR:-/app/data}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend_net
+
+  # --------------------------------------------------------------------------
+  # Frontend Placeholder
+  # Sprint0边界：仅占位UI，不属于Sprint0核心验收阻塞项
+  # 挂载静态占位页面目录，无业务逻辑
+  #
+  # 基座职责：定义镜像、卷挂载、网络
+  # 运行时配置下沉到 overlay
+  # ⚠️ 基座不定义healthcheck：nginx:alpine无内置/healthz端点
+  # --------------------------------------------------------------------------
+  frontend:
+    image: nginx:alpine
+    volumes:
+      - ./frontend-placeholder:/usr/share/nginx/html:ro
+    networks:
+      - backend_net

@@ -1,0 +1,41 @@
+# ============================================================================
+# docker-compose.dev.yml 开发环境Overlay
+# 仅本地开发使用，禁止用于生产
+# ============================================================================
+services:
+  postgres:
+    extends:
+      file: docker‑compose.yml
+      service: postgres
+    restart: "no"
+    # 开发环境才将5432暴露到宿主机，方便本地psql调试
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+
+  backend:
+    extends:
+      file: docker‑compose.yml
+      service: backend
+    restart: "no"
+    volumes:
+      # 源码挂载；venv位于容器内 /opt/venv，隔离挂载冲突，遵循Sprint0约束
+      - ../../backend:/app
+      # 业务数据资产挂载
+      - ../../data:/app/data
+      - ../../scripts:/app/scripts
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    # 开发启用热重载，覆盖Dockerfile内置CMD
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    extends:
+      file: docker‑compose.yml
+      service: frontend
+    restart: "no"
+    # 默认3000，规避8080端口冲突
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    # 新增：覆盖volumes，移除占位目录，挂载本地Vue dist产物
+    #volumes:
+    #  - ../../frontend/dist:/usr/share/nginx/html:ro

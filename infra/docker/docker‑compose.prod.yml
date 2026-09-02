@@ -1,0 +1,29 @@
+# ============================================================================
+# docker-compose.prod.yml 生产环境Overlay
+# 不可变镜像，禁止挂载业务源码
+# ⚠️ 生产建议使用外部反向代理，不要直接暴露容器端口到公网
+# ============================================================================
+version: "3.8"
+services:
+  postgres:
+    extends:
+      service: postgres
+    restart: unless-stopped
+    # ⚠️生产禁止暴露数据库端口，仅使用容器内部网络访问
+  backend:
+    extends:
+      service: backend
+    # ⚠️生产建议注释ports，使用外部反向代理接入；仅内网环境才可打开
+    # ports:
+    #   - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # 仅只读挂载外部数据资产，严禁挂载backend源码
+      - ../../data:/app/data:ro
+    restart: unless-stopped
+  frontend:
+    extends:
+      service: frontend
+    # ⚠️生产建议注释ports，使用外部反向代理接入
+    # ports:
+    #   - "${FRONTEND_PORT:-3000}:80"
+    restart: unless-stopped
