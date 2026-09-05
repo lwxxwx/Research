@@ -5,7 +5,7 @@
 services:
   postgres:
     extends:
-      file: docker‑compose.yml
+      file: docker-compose.yml
       service: postgres
     restart: "no"
     # 开发环境才将5432暴露到宿主机，方便本地psql调试
@@ -14,7 +14,7 @@ services:
 
   backend:
     extends:
-      file: docker‑compose.yml
+      file: docker-compose.yml
       service: backend
     restart: "no"
     volumes:
@@ -30,7 +30,7 @@ services:
 
   frontend:
     extends:
-      file: docker‑compose.yml
+      file: docker-compose.yml
       service: frontend
     restart: "no"
     # 默认3000，规避8080端口冲突
