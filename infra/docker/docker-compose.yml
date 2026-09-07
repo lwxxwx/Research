@@ -49,8 +49,6 @@
 #
 # 文档约束：Backend访问数据库必须使用服务名 postgres:5432，禁止 localhost
 # ============================================================================
-version: "3.8"
-
 # ============================================================================
 # Named Volumes
 # Sprint0 Environment Freeze：Persistence = Named Volume pgdata

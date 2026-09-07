@@ -22,6 +22,8 @@ dependencies = [
     "python-dotenv==1.0.0",
     "pyyaml==6.0.1",
     "jsonschema==4.20.0",               # Golden Case / JSON Schema 校验
+    # JSON日志
+    "python-json-logger==2.0.7",
 
     # HTTP Client
     "httpx==0.25.1",

@@ -16,6 +16,9 @@ services:
     extends:
       file: docker-compose.yml
       service: backend
+    # 【新增】开发环境使用builder阶段镜像：内置uv + 全部dev依赖(pytest等)
+    build:
+      target: builder
     restart: "no"
     volumes:
       # 源码挂载；venv位于容器内 /opt/venv，隔离挂载冲突，遵循Sprint0约束
@@ -27,6 +30,13 @@ services:
       - "${BACKEND_PORT:-8000}:8000"
     # 开发启用热重载，覆盖Dockerfile内置CMD
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    # ==========dev环境给builder镜像补充healthcheck==========
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/healthz')"]
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 5
 
   frontend:
     extends:

@@ -39,7 +39,15 @@ COPY --from=uv_bin /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock README.md ./
 #COPY pyproject.toml uv.lock ./
 # 严格锁定版本、剔除开发依赖、指定 Python 版本（生产最小化）
-RUN uv sync --frozen --no-dev --python python3.11
+#RUN uv sync --frozen --no-dev --python python3.11
+# ========== 1. /opt/venv：完整安装【包含dev依赖】，builder镜像本地使用（开发跑pytest） ==========
+RUN uv sync --frozen --python python3.11 --extra dev
+
+# 👉 为final生产镜像重新构建一份剔除dev的venv，放到/opt/venv_prod
+#RUN uv sync --frozen --no-dev --python python3.11 --project . /opt/venv_prod
+# ========== 2. /opt/venv_prod：生产用虚拟环境，剔除dev依赖 ==========
+# 子shell，临时修改UV_PROJECT_ENVIRONMENT，输出到 /opt/venv_prod
+RUN bash -c "UV_PROJECT_ENVIRONMENT=/opt/venv_prod uv sync --frozen --no-dev --python python3.11"
 
 # 拷贝业务源码
 COPY . .
@@ -57,10 +65,17 @@ FROM runtime AS final
 # 创建非 root 用户（final 阶段必须重新创建，因为用户信息不跨阶段继承）
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
+# 【MODIFIED】新增：预创建uv/pip缓存目录，消除权限告警
+RUN mkdir -p /home/appuser/.cache/uv /home/appuser/.cache/pip && chown -R appuser:appuser /home/appuser
+
 # 拷贝构建产物
 # ⚠️ 重要：COPY --from 的源路径必须使用字面常量，不能用变量
 # 因为源路径在当前阶段解析，而非源阶段，避免未来 APP_HOME 变更导致拷贝失败
-COPY --from=builder /opt/venv /opt/venv
+#COPY --from=builder /opt/venv /opt/venv
+# ========== 3. /opt/venv_prod：生产用虚拟环境，剔除dev依赖 ==========
+COPY --from=builder /opt/venv_prod /opt/venv # 使用不带dev依赖的虚拟环境
+# 【MODIFIED】新增：把uv二进制从builder拷贝进final镜像
+COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 COPY --from=builder /app ${APP_HOME}
 
 # 验证虚拟环境完整性（轻量校验）
