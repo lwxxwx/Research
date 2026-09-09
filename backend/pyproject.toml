@@ -16,7 +16,7 @@ dependencies = [
     # Database
     "sqlalchemy==2.0.23",
     "psycopg[binary]==3.1.18",          # PostgreSQL Driver (psycopg 3)
-    "pgvector==0.5.0",                  # Vector type/operations
+    "pgvector==0.5.0",                  # Vector type/operations(modefied by Phase C · Database)
 
     # Environment & Serialization
     "python-dotenv==1.0.0",

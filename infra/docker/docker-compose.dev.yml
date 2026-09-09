@@ -23,6 +23,8 @@ services:
     volumes:
       # 源码挂载；venv位于容器内 /opt/venv，隔离挂载冲突，遵循Sprint0约束
       - ../../backend:/app
+      # ==========【✅新增挂载：infra目录，解决initdb下SQL脚本找不到】==========
+      - ../../infra:/app/infra
       # 业务数据资产挂载
       - ../../data:/app/data
       - ../../scripts:/app/scripts
