@@ -102,7 +102,8 @@ class RuleExecution(Base):
     evidence_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
     execution_log: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
-    ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="ir_document")
+#    ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="ir_document")
+    ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="rule_executions")
     rule_def: Mapped[Optional["RuleDefinition"]] = relationship(back_populates="executions")
 
 # ============================================================

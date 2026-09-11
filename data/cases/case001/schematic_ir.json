@@ -1,0 +1,586 @@
+{
+  "ir_schema_version": "v1.0",
+  "case_id": "case001",
+  "title": "8051最小系统原理图 (STC89C55RC)",
+  "description": "基于 STC89C55RC 的 8051 最小系统：5V 电源，11.0592MHz 晶振，上电复位电路",
+  "created_at": "2026-09-09T04:33:13.067322",
+  "components": [
+    {
+      "ref": "U1",
+      "lib_name": "STC89C55RC",
+      "value": "STC89C55RC",
+      "footprint": "DIP-40",
+      "attributes": [],
+      "pins": [
+        {
+          "pin_id": "P1.0",
+          "name": "P1.0",
+          "number": "1",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P1.1",
+          "name": "P1.1",
+          "number": "2",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P1.2",
+          "name": "P1.2",
+          "number": "3",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P1.3",
+          "name": "P1.3",
+          "number": "4",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P1.4",
+          "name": "P1.4",
+          "number": "5",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P1.5",
+          "name": "P1.5",
+          "number": "6",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P1.6",
+          "name": "P1.6",
+          "number": "7",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P1.7",
+          "name": "P1.7",
+          "number": "8",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "RST",
+          "name": "RST",
+          "number": "9",
+          "direction": "input",
+          "pin_type": "reset",
+          "attributes": []
+        },
+        {
+          "pin_id": "P3.0",
+          "name": "P3.0",
+          "number": "10",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P3.1",
+          "name": "P3.1",
+          "number": "11",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P3.2",
+          "name": "P3.2",
+          "number": "12",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P3.3",
+          "name": "P3.3",
+          "number": "13",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P3.4",
+          "name": "P3.4",
+          "number": "14",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P3.5",
+          "name": "P3.5",
+          "number": "15",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P3.6",
+          "name": "P3.6",
+          "number": "16",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P3.7",
+          "name": "P3.7",
+          "number": "17",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "XTAL2",
+          "name": "XTAL2",
+          "number": "18",
+          "direction": "output",
+          "pin_type": "clock",
+          "attributes": []
+        },
+        {
+          "pin_id": "XTAL1",
+          "name": "XTAL1",
+          "number": "19",
+          "direction": "input",
+          "pin_type": "clock",
+          "attributes": []
+        },
+        {
+          "pin_id": "GND",
+          "name": "GND",
+          "number": "20",
+          "direction": "power",
+          "pin_type": "ground",
+          "attributes": []
+        },
+        {
+          "pin_id": "P2.0",
+          "name": "P2.0",
+          "number": "21",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P2.1",
+          "name": "P2.1",
+          "number": "22",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P2.2",
+          "name": "P2.2",
+          "number": "23",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P2.3",
+          "name": "P2.3",
+          "number": "24",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P2.4",
+          "name": "P2.4",
+          "number": "25",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P2.5",
+          "name": "P2.5",
+          "number": "26",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P2.6",
+          "name": "P2.6",
+          "number": "27",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P2.7",
+          "name": "P2.7",
+          "number": "28",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "PSEN",
+          "name": "PSEN",
+          "number": "29",
+          "direction": "output",
+          "pin_type": "other",
+          "attributes": []
+        },
+        {
+          "pin_id": "ALE",
+          "name": "ALE",
+          "number": "30",
+          "direction": "output",
+          "pin_type": "other",
+          "attributes": []
+        },
+        {
+          "pin_id": "EA",
+          "name": "EA",
+          "number": "31",
+          "direction": "input",
+          "pin_type": "other",
+          "attributes": []
+        },
+        {
+          "pin_id": "P0.7",
+          "name": "P0.7",
+          "number": "32",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P0.6",
+          "name": "P0.6",
+          "number": "33",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P0.5",
+          "name": "P0.5",
+          "number": "34",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P0.4",
+          "name": "P0.4",
+          "number": "35",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P0.3",
+          "name": "P0.3",
+          "number": "36",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P0.2",
+          "name": "P0.2",
+          "number": "37",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P0.1",
+          "name": "P0.1",
+          "number": "38",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "P0.0",
+          "name": "P0.0",
+          "number": "39",
+          "direction": "bidirectional",
+          "pin_type": "io",
+          "attributes": []
+        },
+        {
+          "pin_id": "VCC",
+          "name": "VCC",
+          "number": "40",
+          "direction": "power",
+          "pin_type": "power",
+          "attributes": []
+        }
+      ],
+      "intent": "8051微控制器核心，执行程序逻辑",
+      "context": "8051最小系统主控芯片",
+      "constraint": "VCC=5V ±5%，晶振频率11.0592MHz"
+    },
+    {
+      "ref": "Y1",
+      "lib_name": "CRYSTAL",
+      "value": "11.0592MHz",
+      "footprint": "HC-49S",
+      "attributes": [],
+      "pins": [
+        {
+          "pin_id": "pin1",
+          "name": "XTAL1",
+          "number": "1",
+          "direction": "output",
+          "pin_type": "clock",
+          "attributes": []
+        },
+        {
+          "pin_id": "pin2",
+          "name": "XTAL2",
+          "number": "2",
+          "direction": "output",
+          "pin_type": "clock",
+          "attributes": []
+        }
+      ],
+      "intent": "提供系统时钟信号",
+      "context": "8051外部晶振电路",
+      "constraint": "频率11.0592MHz，负载电容22pF"
+    },
+    {
+      "ref": "C1",
+      "lib_name": "CAP",
+      "value": "22pF",
+      "footprint": "0805",
+      "attributes": [],
+      "pins": [
+        {
+          "pin_id": "pin1",
+          "name": "pin1",
+          "number": "1",
+          "direction": "input",
+          "pin_type": "other",
+          "attributes": []
+        },
+        {
+          "pin_id": "pin2",
+          "name": "pin2",
+          "number": "2",
+          "direction": "output",
+          "pin_type": "other",
+          "attributes": []
+        }
+      ],
+      "intent": "晶振负载电容",
+      "context": "晶振电路匹配电容",
+      "constraint": "22pF ±5%"
+    },
+    {
+      "ref": "C2",
+      "lib_name": "CAP",
+      "value": "22pF",
+      "footprint": "0805",
+      "attributes": [],
+      "pins": [
+        {
+          "pin_id": "pin1",
+          "name": "pin1",
+          "number": "1",
+          "direction": "input",
+          "pin_type": "other",
+          "attributes": []
+        },
+        {
+          "pin_id": "pin2",
+          "name": "pin2",
+          "number": "2",
+          "direction": "output",
+          "pin_type": "other",
+          "attributes": []
+        }
+      ],
+      "intent": "晶振负载电容",
+      "context": "晶振电路匹配电容",
+      "constraint": "22pF ±5%"
+    },
+    {
+      "ref": "C3",
+      "lib_name": "CAP_ELEC",
+      "value": "10μF",
+      "footprint": "Radial-5mm",
+      "attributes": [],
+      "pins": [
+        {
+          "pin_id": "pin1",
+          "name": "pin1",
+          "number": "1",
+          "direction": "input",
+          "pin_type": "other",
+          "attributes": []
+        },
+        {
+          "pin_id": "pin2",
+          "name": "pin2",
+          "number": "2",
+          "direction": "output",
+          "pin_type": "other",
+          "attributes": []
+        }
+      ],
+      "intent": "复位电路电容，提供上电复位延时",
+      "context": "复位电路",
+      "constraint": "10μF 电解电容"
+    },
+    {
+      "ref": "R1",
+      "lib_name": "RES",
+      "value": "10kΩ",
+      "footprint": "0805",
+      "attributes": [],
+      "pins": [
+        {
+          "pin_id": "pin1",
+          "name": "pin1",
+          "number": "1",
+          "direction": "input",
+          "pin_type": "other",
+          "attributes": []
+        },
+        {
+          "pin_id": "pin2",
+          "name": "pin2",
+          "number": "2",
+          "direction": "output",
+          "pin_type": "other",
+          "attributes": []
+        }
+      ],
+      "intent": "复位电路下拉电阻，保证复位后RST电平为低",
+      "context": "复位电路，配合C3形成RC延时",
+      "constraint": "10kΩ ±1%"
+    },
+    {
+      "ref": "SW1",
+      "lib_name": "SW_PB",
+      "value": "复位按键",
+      "footprint": "SW_PB",
+      "attributes": [],
+      "pins": [
+        {
+          "pin_id": "pin1",
+          "name": "pin1",
+          "number": "1",
+          "direction": "input",
+          "pin_type": "other",
+          "attributes": []
+        },
+        {
+          "pin_id": "pin2",
+          "name": "pin2",
+          "number": "2",
+          "direction": "output",
+          "pin_type": "other",
+          "attributes": []
+        }
+      ],
+      "intent": "手动复位控制，按下时将RST引脚拉低",
+      "context": "复位电路手动触发，用于系统复位",
+      "constraint": "常开按键，按下时导通"
+    }
+  ],
+  "nets": [
+    {
+      "net_name": "VCC",
+      "connected_pins": [
+        "U1.VCC"
+      ],
+      "attributes": [],
+      "is_power": true,
+      "is_ground": false,
+      "voltage": 5.0,
+      "description": "系统电源网络 +5V"
+    },
+    {
+      "net_name": "GND",
+      "connected_pins": [
+        "U1.GND",
+        "C1.pin2",
+        "C2.pin2",
+        "C3.pin2",
+        "R1.pin2",
+        "SW1.pin2"
+      ],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": true,
+      "voltage": 0.0,
+      "description": "系统参考地"
+    },
+    {
+      "net_name": "XTAL_OSC",
+      "connected_pins": [
+        "U1.XTAL1",
+        "U1.XTAL2",
+        "Y1.pin1",
+        "Y1.pin2",
+        "C1.pin1",
+        "C2.pin1"
+      ],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "晶振振荡网络"
+    },
+    {
+      "net_name": "RST",
+      "connected_pins": [
+        "U1.RST",
+        "R1.pin1",
+        "C3.pin1",
+        "SW1.pin1"
+      ],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "复位信号网络，上电时 C3 充电产生高电平，R1 下拉保证复位后为低"
+    },
+    {
+      "net_name": "EA_GND",
+      "connected_pins": [
+        "U1.EA"
+      ],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": true,
+      "voltage": 0.0,
+      "description": "EA引脚接地，选择内部程序存储器"
+    }
+  ],
+  "extra_meta": {
+    "source": "8051最小系统原理图",
+    "design_tool": "基于图片还原",
+    "total_components": 7,
+    "total_pins": 52,
+    "total_nets": 5,
+    "power_consumption": "~50mW",
+    "semantic_coverage": "100%"
+  }
+}

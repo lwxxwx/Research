@@ -3,6 +3,10 @@
 数据库初始化脚本
 ⚠️ 重要约束：本脚本仅用于【全新空数据库】初始化，**不能作为迁移脚本**
 已有存量数据库禁止重复执行；Sprint‑1引入Alembic处理后续schema变更。
+💡 使用提示：
+   - 本脚本已支持"数据库已初始化"的友好提示（不会输出错误堆栈）
+   - 检测到对象已存在时，会跳过 DDL 执行，直接进行 Schema 校验
+   - 如需彻底重建：请先清空数据库（见 README 或 CONTRIBUTING）
 Schema唯一事实源：infra/docker/initdb/002_schema.sql
 Sprint‑0：建表review_defect，业务层实现JSON解析写入；Sprint‑0不使用该表做查询，Sprint‑1全面启用。
 """
@@ -10,12 +14,16 @@ import logging
 import pathlib
 from sqlalchemy import create_engine, text
 from app.core.config import settings
+#增加提示导入
+from psycopg.errors import DuplicateObject, DuplicateTable
+from sqlalchemy.exc import ProgrammingError
 
 logger = logging.getLogger(__name__)
 
 def get_engine():
     return create_engine(settings.database_url, echo=settings.database_echo)
 
+'''
 def run_init_sql(engine, sql_file: pathlib.Path):
     """执行单个初始化sql文件"""
     logger.info(f"执行初始化SQL: {sql_file.name}")
@@ -24,7 +32,43 @@ def run_init_sql(engine, sql_file: pathlib.Path):
         conn.execute(text(sql_text))
         conn.commit()
     logger.info(f"✅ {sql_file.name} 执行完成")
+'''
 
+def run_init_sql(engine, sql_file: pathlib.Path) -> bool:
+    """
+    执行单个初始化 SQL 文件
+    
+    Returns:
+        True: 本次执行成功完成了所有 SQL
+        False: 检测到数据库已初始化（对象已存在），跳过执行
+    """
+    logger.info(f"执行初始化SQL: {sql_file.name}")
+    sql_text = sql_file.read_text(encoding="utf-8")
+    
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(sql_text))
+            conn.commit()
+        logger.info(f"✅ {sql_file.name} 执行完成")
+        return True
+    except ProgrammingError as e:
+        # 检查是否为"对象已存在"类错误（幂等冲突）
+        orig = getattr(e, "orig", None)
+        if orig is not None and isinstance(orig, (DuplicateObject, DuplicateTable)):
+            logger.warning(
+                f"⚠️ {sql_file.name} 检测到数据库已初始化"
+                f"（对象已存在: {orig}），跳过执行。"
+                f"\n    💡 如需重新初始化，请先清空数据库："
+                f"\n       1. 停 backend: docker compose ... stop backend"
+                f"\n       2. 删库重建: docker compose ... exec postgres dropdb -U postgres --if-exists schematic_review"
+                f"\n                   docker compose ... exec postgres createdb -U postgres schematic_review"
+                f"\n       3. 重新启动: docker compose ... start backend"
+            )
+            return False
+        # 其他 ProgrammingError 继续抛出
+        raise
+
+'''
 def init_database():
     engine = get_engine()
     init_dir = pathlib.Path("/app/infra/docker/initdb")
@@ -34,7 +78,28 @@ def init_database():
     logger.info(f"发现 {len(sql_files)} 个SQL初始化文件")
     for f in sql_files:
         run_init_sql(engine, f)
+'''
 
+def init_database():
+    engine = get_engine()
+    init_dir = pathlib.Path("/app/infra/docker/initdb")
+
+    # ========== 执行所有SQL文件 ==========
+    sql_files = sorted([f for f in init_dir.glob("*.sql") if f.is_file()])
+    logger.info(f"发现 {len(sql_files)} 个SQL初始化文件")
+    
+    all_skipped = True
+    for f in sql_files:
+        executed = run_init_sql(engine, f)
+        if executed:
+            all_skipped = False
+
+    if all_skipped:
+        logger.info(
+            "ℹ️ 所有 SQL 文件均已检测到数据库已初始化，跳过 DDL 执行。"
+            "下面进入 Schema 校验环节..."
+        )
+  
     # ========== 校验环节 ==========
     with engine.connect() as conn:
         # 1. pgvector扩展校验
