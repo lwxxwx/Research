@@ -1,0 +1,16 @@
+rule_id: POWER_003
+rule_name: 器件功率降额检查
+version: "1.0"
+category: power
+severity: high
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "power_checks.check_derating"
+  params: {}
+
+rule_basis: "通用硬件降额设计规范（Sprint0 预留，Sprint1 补实现）"
+suggestion: "核对器件功耗与环境温度，确保工作点在降额曲线允许范围内。"

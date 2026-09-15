@@ -1,0 +1,19 @@
+rule_id: POWER_002
+rule_name: 高电平RC复位电路拓扑检查
+version: "1.0"
+category: timing
+severity: medium
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "power_checks.check_reset_rc_topology"
+  params:
+    reset_net: "RST"
+    vcc_net: "VCC"
+    gnd_net: "GND"
+
+rule_basis: "STC89C55RC Datasheet V2.1 §6.3 Reset Circuit；AN-8051-001 §7；8051 RefDes §4"
+suggestion: "修改 RC 复位拓扑：延时电容 C3 接 VCC-RST，手动复位按键 SW1 接 VCC-RST，保留 R1(10kΩ) 下拉 RST 到 GND，保证上电产生高电平复位脉冲。"

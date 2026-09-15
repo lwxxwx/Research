@@ -1,0 +1,47 @@
+# evaluation.yaml · case001 Golden Case 评测配置
+# Golden Case Format v1.0 · Sprint 0 Business Freeze
+case_id: case001
+evaluation_ver: "1.0"
+case_class: A
+ir_path: ./schematic_ir.json
+ground_truth_path: ./expected_review.json
+enabled: true
+strict_ir_validation: true
+
+# 判定条件（A 类：规则引擎 Rule-Only，缺陷全部为 rule origin）
+pass_criteria:
+  rule_checks:
+    - defect_ref: DEF-CASE001-1
+      origin_must_be: rule
+      rule_id: POWER_001
+      component_refs_intersect: [U1]
+      net_refs_intersect: [VCC]
+      risk_must_be:
+        one_of: [critical]
+      evidence_must_have_at_least:
+        n: 2
+        source_types: [datasheet, application_note]   # 至少命中其中一个来源
+      suggestion_keywords_any: [去耦, 0.1μF, 陶瓷]
+      root_cause_keywords_any: [去耦, VCC, 噪声]
+    - defect_ref: DEF-CASE001-2
+      origin_must_be: rule
+      rule_id: POWER_002
+      component_refs_intersect: [C3, R1, SW1]
+      net_refs_intersect: [RST, GND]
+      risk_must_be:
+        one_of: [medium, high]
+      evidence_must_have_at_least:
+        n: 2
+        source_types: [datasheet, application_note]
+      suggestion_keywords_any: [VCC, 高电平, 复位]
+      root_cause_keywords_any: [RST, 复位, 上拉]
+
+benchmark_weights:
+  rule_metrics_weight: 0.8        # A 类：规则权重更高
+  ai_metrics_weight: 0.2
+
+benchmark_tags:
+  - rule_only
+  - sprint0_baseline
+skip_categories: []
+notes: "case001 为 A 类（Rule-Only）基线用例。满足 Sprint0 K7：Case001 Rule Hit >= 2（POWER_001 去耦缺失 + POWER_002 复位RC）。无 ai_discovered 缺陷。"

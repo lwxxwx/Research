@@ -1,0 +1,20 @@
+rule_id: POWER_001
+rule_name: MCU电源引脚去耦电容检查
+version: "1.0"
+category: power
+severity: critical
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "power_checks.check_decoupling"
+  params:
+    target_component_refs: ["U1"]
+    power_net_names: ["VCC"]
+    decouple_cap_value_expected: "0.1μF"
+    ground_net_names: ["GND", "VSS"]
+
+rule_basis: "STC89C55RC Datasheet V2.1 §7.1 Power Supply Decoupling；AN-8051-001 §3"
+suggestion: "在 MCU 的 VCC 引脚就近增加 0.1μF X7R 陶瓷去耦电容到 GND，距离引脚 < 5mm；可并联 10μF 电解电容作为低频储能。"

@@ -53,6 +53,7 @@ python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
 asyncio_mode = "auto"
+pythonpath = ["."]          # ← 新增
 
 [tool.ruff]
 line-length = 120

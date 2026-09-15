@@ -1,0 +1,51 @@
+# Case001 案例元信息
+# Golden Case Format v1.0 · Sprint 0 Business Freeze
+
+case_id: case001
+case_class: A
+title: "8051最小系统原理图 (STC89C55RC)"
+description: "基于 STC89C55RC 的 8051 最小系统：5V 电源，11.0592MHz 晶振，上电复位电路"
+
+# A 类 case 定义（V1.2）：标准/少量可检测电气问题，适合规则引擎基线测试。
+# 本 case 的缺陷（去耦缺失、复位 RC 连接）均可被确定性规则稳定检出，故归为 A 类（Rule-Only）。
+# 对应 Sprint0 Phase G：本 case 作为 Rule-Only Benchmark 基线数据源。
+# AI 期望发现数量：A 类 case 应为 0（无 origin=ai_discovered 缺陷）
+ai_expected_count: 0
+
+# IR 来源
+ir_generated_by: "Phase D"
+ir_schema_version: "v1.0"
+
+# 校准状态
+calibration_status: CALIBRATED
+calibrated_at: "2026-09-11T00:00:00+08:00"
+
+# 标签
+tags:
+  - power
+  - decoupling
+  - reset
+  - crystal
+  - mcu
+
+# 已知设计缺陷（供规则引擎/RAG 参考）
+# 两条缺陷均可被规则检出（rule origin），合计 Rule Hit >= 2，满足 Sprint0 K7 验收。
+known_design_defects:
+  - id: E1
+    summary: "U1.VCC 引脚缺少 0.1μF 去耦电容"
+    risk: critical
+    rule_id: POWER_001
+    ground_truth: "DEF-CASE001-1"
+  - id: E2
+    summary: "复位电路 RC 连接异常：C3/SW1 均跨接 RST-GND，RST 无到 VCC 的上拉路径，无法产生 8051 高电平复位脉冲"
+    risk: medium
+    rule_id: POWER_002
+    ground_truth: "DEF-CASE001-2"
+
+# 备注
+notes: |
+  Case001 为 A 类（Rule-Only）综合案例，覆盖电源、晶振、复位三大模块。
+  schematic_ir.json 由 Phase D 生成，晶振为单一合并网络 Net[XTAL_OSC]（XTAL1/XTAL2 共网），
+  并含 EA_GND 接地网络。网络清单（5 个）：VCC / GND / XTAL_OSC / RST / EA_GND。
+  修正记录：原 DeepSeek 交付声明为 B 类且无 ai_discovered 缺陷，与 V1.2 B 类四要素不符；
+  结合 Phase G Rule-Only 基线定位，统一修正为 A 类，并补齐第二条规则命中（E2 复位 RC）。
