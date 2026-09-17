@@ -1,0 +1,9 @@
+ingest_entries:
+  - file: "./data/knowledge/datasheets/stc89c55rc_oscillator_crystal.md"
+  - file: "./data/knowledge/datasheets/stc89c55rc_power_supply.md"
+  - file: "./data/knowledge/application_notes/an_mcu_reset_circuit.md"
+  - file: "./data/knowledge/reference_designs/ref_stc89c55_minimum_system.md"
+  - file: "./data/knowledge/reference_designs/an_8051_io_port_feature.md"
+case_evidence_scan: null
+#  root_dir: "./data/cases"
+#  glob_pattern: "case*/evidence/**/*.md"

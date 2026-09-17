@@ -39,6 +39,9 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 5
+    # =========✅新增：开发环境注入PYTHONPATH，解决uv run python -m app.*模块找不到 =========
+    environment:
+      - PYTHONPATH=/app
 
   frontend:
     extends:

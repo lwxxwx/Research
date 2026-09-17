@@ -1,3 +1,10 @@
+#---
+#source_title: "AN‑8051‑001 P3端口去耦说明"
+#source_type: "application_note"
+#source_section: "power‑decouple"
+#part_numbers: ["STC89C55RC"]
+#related_rule_ids: ["POWER_001"]
+#---
 # 应用笔记摘录 · AN-8051-001
 
 > 来源：AN-8051-001《8051 Minimum System Design Guide》

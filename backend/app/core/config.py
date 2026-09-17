@@ -1,15 +1,13 @@
 # app/core/config.py
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import field_validator, Field
 from typing import List, Optional
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file="/app/.env",
         env_file_encoding="utf-8",
         extra="ignore"
     )
-
     # ========== 豆包风格：核心必需字段 ==========
     app_env: str
     secret_key: str
@@ -26,6 +24,15 @@ class Settings(BaseSettings):
     # ========== 新增：支持LLM扩展 ==========
     llm_model: Optional[str] = None
     llm_base_url: Optional[str] = None
+    # -------- 【✅新增】Embedding配置 --------
+    openai_embedding_model: str = "text-embedding-3-small"
+    openai_embedding_api_key: Optional[str] = None
+    #rag_embedding_backend: str = Field(default="fake", env="RAG_EMBEDDING_BACKEND")
+    rag_embedding_backend: str = Field(
+    default="fake",
+    json_schema_extra={"env": "RAG_EMBEDDING_BACKEND"}
+    )
+
 
     @property
     def is_dev(self) -> bool:

@@ -10,6 +10,7 @@
 3. 补齐 Phase L 风险管理矩阵（Risk -> Impact -> Mitigation -> Acceptance）。
 4. 明确 5 项 Business Freeze 具体内容与 Environment Freeze 边界。
 5. 统一 Docker / Compose 执行指令规范，明确 Frontend Placeholder 验收边界。
+6. 工程规范调整：全部Python测试脚本统一放置于 `backend/tests`，scripts目录仅保留运维脚本。
 
 ---
 
@@ -76,6 +77,7 @@ Developer Host (Windows/WSL2)
 Schematic_Design_Review/
 ├── backend/                # 后端源码
 │   ├── app/                # 业务逻辑
+│   ├── tests/              # Python测试、测试CLI入口脚本，需存在__init__.py
 │   ├── pyproject.toml      # uv 依赖定义
 │   ├── uv.lock             # 锁定文件
 │   └── Dockerfile          # 多阶段构建
@@ -221,7 +223,7 @@ Schematic_Design_Review/
     docker compose `
       -f infra/docker/docker-compose.yml `
       -f infra/docker/docker-compose.dev.yml `
-      exec backend uv run python -m scripts.test_rules --case case001
+      exec backend uv run python -m tests.test_rules --case case001
     ```
 - **标准**：Case001 至少命中 2 条规则。
 
@@ -241,7 +243,7 @@ Schematic_Design_Review/
         docker compose `
           -f infra/docker/docker-compose.yml `
           -f infra/docker/docker-compose.dev.yml `
-          exec backend uv run python -m scripts.run_benchmark
+          exec backend uv run python -m tests.test_benchmark
         ```
 - **输出**：`out/bench_ruleonly_sprint0.csv`。
 - **验收标准**：以 Case001 为基准输出四项指标；10 Case 框架已预留用于后续扩展。
@@ -287,6 +289,7 @@ Schematic_Design_Review/
 | **Rule 误报/漏报** | 降低工具可信度 | 建立误报/漏报反馈闭环 | EAR 指标 ≥ 60% |
 | **Benchmark 指标稳定性** | 指标波动大，无法客观评估进度 | 固化评测脚本与指标计算公式 | Benchmark Format 冻结文档 |
 | **环境一致性风险** | Windows/Linux 表现不一 | 强制容器化开发，固定版本 | bootstrap 脚本统一验证 |
+| **RAG种子知识库依赖OpenAI Embedding外网服务** | ingest导入失败；CI执行消耗OpenAI token；网络不通导致Sprint0 Phase‑H无法验收 | 1.开发环境配置`.env`密钥；2.CI流水线必须mock OpenAIEmbeddings，禁止真实外网调用；3.密钥可独立配置`OPENAI_EMBEDDING_API_KEY` | 开发容器ingest可正常完成知识库导入；CI单元测试无OpenAI网络请求 |
 
 ---
 
@@ -301,7 +304,7 @@ Schematic_Design_Review/
 | **初始化数据库** | `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.dev.yml exec backend uv run python -m scripts.init_db` |
 | **运行单元测试** | `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.dev.yml exec backend uv run pytest` |
 | **运行代码检查** | `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.dev.yml exec backend uv run ruff check .` |
-| **运行 Benchmark** | `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.dev.yml exec backend uv run python -m scripts.run_benchmark` |
+| **运行 Benchmark** | `docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.dev.yml exec backend uv run python -m tests.test_benchmark` |
 
 ---
 
@@ -311,6 +314,7 @@ Schematic_Design_Review/
     - 当前验证版本:Python 3.11.16 (通过python:3.11-slim 镜像获取)
     - 备注：使用 `python:3.11-slim` 标签可自动获取最新补丁版本，确保安全性。
 - **Dependency Manager**: uv 0.12.6 (ghcr.io/astral-sh/uv:0.12.6)
+- **【✅Phase‑H RAG依赖新增】**：`langchain‑openai==0.2.8`（仅用于Embedding调用，Sprint0不使用LangGraph）
 - **Database**: PostgreSQL 15
 - **Vector Extension**: pgvector (以 Sprint 0 实际构建验证结果记录最终使用版本)
 - **Venv Path**: `/opt/venv` (Container internal)
@@ -339,3 +343,5 @@ Schematic_Design_Review/
 1. **Healthcheck 失败**: 检查 `backend` 是否在 8000 端口监听，且 `/api/v1/healthz` 返回 200。
 2. **挂载冲突**: 确认宿主机没有同名 `.venv` 目录被映射进容器 `/app`（已通过 `/opt/venv` 隔离）。
 3. **数据库连接**: 确保容器内 `DATABASE_URL` 使用 `postgres` 服务名而非 `localhost`。
+4. **Python测试模块导入失败**：确认 `backend/tests/__init__.py` 空文件存在，tests目录被识别为Python包，支持`‑m tests.xxx`模块执行方式。
+
