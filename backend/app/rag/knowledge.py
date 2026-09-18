@@ -1,16 +1,19 @@
 """
 app/rag/knowledge.py
-RAG模块内部Pydantic模型
+RAG 模块内部 Pydantic 模型
 - RetrievalResult：检索返回结果，可直接映射为 type=rag_ref evidence
-- IngestConfig / IngestConfigEntry：ingest导入yaml配置模型
-注意：数据库ORM模型仍然在 app/persistence/models.py，此处仅为内存schema，不操作DB
+- IngestConfig / IngestConfigEntry：ingest 导入 yaml 配置模型
+注意：数据库 ORM 模型仍然在 app/persistence/models.py，此处仅为内存 schema，不操作 DB
+
+v1.2 变更（豆包优化 5）：
+- 优化 5：RetrievalResult 增加 is_continuation 字段，供 Sprint1 重排时降权续块
 """
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
 
 class RetrievalResult(BaseModel):
-    """RAG单条检索结果，可直接映射为evidence字典"""
+    """RAG 单条检索结果，可直接映射为 evidence 字典"""
     source_type: str = Field(description="对应evidence.source_type")
     source_title: str = Field(description="对应evidence.source，原始文档全名")
     source_section: str = Field(description="对应evidence.section，章节/页码信息")
@@ -21,6 +24,14 @@ class RetrievalResult(BaseModel):
     doc_id: Optional[int] = Field(default=None, description="knowledge_doc表主键")
     chunk_id: Optional[int] = Field(default=None, description="knowledge_chunk表主键")
 
+    # === 优化 5：新增 is_continuation 字段 ===
+    # 说明：chunk 落库时 meta_json 已有此字段，但 RetrievalResult 此前未透传；
+    #       Sprint1 做重排（Rerank）时用于降权「续块」（信息不完整，非首选）
+    is_continuation: bool = Field(
+        default=False,
+        description="是否为超长章节的续块；Sprint1 重排时用于降权",
+    )
+
 
 class IngestConfigEntry(BaseModel):
     file: str = Field(description="待导入md文件相对路径")
@@ -28,4 +39,4 @@ class IngestConfigEntry(BaseModel):
 
 class IngestConfig(BaseModel):
     ingest_entries: List[IngestConfigEntry] = Field(default_factory=list, description="显式指定导入文件列表")
-    case_evidence_scan: Optional[dict] = Field(default=None, description="B‑Case evidence目录扫描配置")
+    case_evidence_scan: Optional[dict] = Field(default=None, description="B-Case evidence目录扫描配置")
