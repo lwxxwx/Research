@@ -8,11 +8,9 @@ from sqlalchemy.orm import DeclarativeBase, relationship, Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-
 class Base(DeclarativeBase):
     """注意：Sprint0禁止 Base.metadata.create_all()，schema唯一来源：infra/docker/initdb/002_schema.sql"""
     pass
-
 # ============================================================
 # 1. User
 # ============================================================
@@ -25,7 +23,6 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     projects: Mapped[List["Project"]] = relationship(back_populates="owner")
     feedbacks: Mapped[List["FeedbackItem"]] = relationship(back_populates="creator")
-
 # ============================================================
 # 2. Project
 # ============================================================
@@ -39,7 +36,6 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     owner: Mapped[Optional["User"]] = relationship(back_populates="projects")
     schematic_cases: Mapped[List["SchematicCase"]] = relationship(back_populates="project", cascade="all, delete-orphan")
-
 # ============================================================
 # 3. SchematicCase
 # ============================================================
@@ -57,7 +53,6 @@ class SchematicCase(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     project: Mapped[Optional["Project"]] = relationship(back_populates="schematic_cases")
     ir_documents: Mapped[List["IRDocument"]] = relationship(back_populates="schematic_case", cascade="all, delete-orphan")
-
 # ============================================================
 # 4. IRDocument
 # ============================================================
@@ -71,7 +66,6 @@ class IRDocument(Base):
     schematic_case: Mapped[Optional["SchematicCase"]] = relationship(back_populates="ir_documents")
     rule_executions: Mapped[List["RuleExecution"]] = relationship(back_populates="ir_document", cascade="all, delete-orphan")
     review_results: Mapped[List["ReviewResult"]] = relationship(back_populates="ir_document", cascade="all, delete-orphan")
-
 # ============================================================
 # 5. RuleDefinition
 # ============================================================
@@ -89,7 +83,6 @@ class RuleDefinition(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     executions: Mapped[List["RuleExecution"]] = relationship(back_populates="rule_def")
-
 # ============================================================
 # 6. RuleExecution
 # ============================================================
@@ -105,7 +98,6 @@ class RuleExecution(Base):
 #    ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="ir_document")
     ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="rule_executions")
     rule_def: Mapped[Optional["RuleDefinition"]] = relationship(back_populates="executions")
-
 # ============================================================
 # 7. ReviewResult
 # ============================================================
@@ -137,7 +129,6 @@ class ReviewResult(Base):
         Index("idx_review_result_category", "category"),
         Index("idx_review_result_task_id", "task_id"),
     )
-
 # ============================================================
 # 8. ReviewDefect（新增：缺陷明细表）
 # ============================================================
@@ -177,16 +168,16 @@ class ReviewDefect(Base):
         Index("idx_review_defect_origin", "origin"),
         Index("idx_review_defect_rule_id", "rule_id"),
     )
-
 # ============================================================
 # 9. FeedbackItem（增强：关联 review_defect）
-# ============================================================
+# ===== ✅ MODIFIED Sprint0 Phase‑I：对齐002_schema.sql全部字段 =====
 class FeedbackItem(Base):
     __tablename__ = "feedback_item"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     review_result_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("review_result.id", ondelete="CASCADE"))
-    review_defect_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("review_defect.id", ondelete="CASCADE"))  # 新增
+    review_defect_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("review_defect.id", ondelete="CASCADE"))
     feedback_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    # ----- 【注意】SQL字段名 comment，Pydantic使用expert_suggestion做业务字段 -----
     comment: Mapped[Optional[str]] = mapped_column(Text)
     expert_suggestion: Mapped[Optional[str]] = mapped_column(Text)
     suggestion_adopted: Mapped[Optional[str]] = mapped_column(String(16))
@@ -204,7 +195,6 @@ class FeedbackItem(Base):
         Index("idx_feedback_item_result", "review_result_id"),
         Index("idx_feedback_item_defect", "review_defect_id"),
     )
-
 # ============================================================
 # 10. KnowledgeDoc
 # ============================================================
@@ -221,7 +211,6 @@ class KnowledgeDoc(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     chunks: Mapped[List["KnowledgeChunk"]] = relationship(back_populates="doc", cascade="all, delete-orphan")
-
 # ============================================================
 # 11. KnowledgeChunk
 # ============================================================
@@ -238,10 +227,9 @@ class KnowledgeChunk(Base):
     __table_args__ = (
         Index("idx_knowledge_chunk_embedding", "embedding", postgresql_using="hnsw", postgresql_ops={"embedding": "vector_cosine_ops"}),
     )
-
 # ============================================================
 # 12. RuleCandidate（P1，Sprint‑1业务使用）
-# ============================================================
+# ===== ✅ MODIFIED Sprint0 Phase‑I：对齐002_schema.sql触发器、时区字段 =====
 class RuleCandidate(Base):
     __tablename__ = "rule_candidates"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -254,6 +242,7 @@ class RuleCandidate(Base):
     evidence_refs: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     proposed_yaml: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="proposed")
+    # ----- ✅ 对齐SQL：TIMESTAMPTZ + 触发器自动更新updated_at -----
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("NOW()"))
     __table_args__ = (

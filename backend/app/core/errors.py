@@ -1,7 +1,6 @@
 # app/core/errors.py
-from fastapi import Request
+from fastapi import Request, FastAPI
 from fastapi.responses import JSONResponse
-from fastapi import FastAPI
 import logging
 
 logger = logging.getLogger(__name__)
@@ -9,6 +8,7 @@ logger = logging.getLogger(__name__)
 class BusinessException(Exception):
     """业务自定义异常"""
     def __init__(self, code: int, message: str):
+        super().__init__(message)   # 让 Exception 正确初始化 args / str()
         self.code = code
         self.message = message
 
