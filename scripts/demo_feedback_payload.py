@@ -18,12 +18,12 @@ case001 IR文件
 1. 仅本地demo_sprint0.ps1调用；CI流水线不运行此脚本，CI使用tests/test_demo.py纯内存mock；
 2. Sprint‑0不接入LLM；Mock ReviewReport部分预留注释，Sprint‑1接入LLM后直接替换该块；
 3. 依赖前置：
-   - /app/data/cases/case001/schematic_ir.json 文件容器挂载存在；
-   - /app/data/rules 规则yaml目录存在；
+   - /data/cases/case001/schematic_ir.json 文件容器挂载存在；
+   - /data/rules 规则yaml目录存在；
    - 已经执行ingest_seed_knowledge灌入RAG seed知识库；
 4. 幂等：重复运行不会触发review_defect_defect_id_key唯一约束冲突，存在记录直接复用主键。
 
-输出容器路径 /app/out/demo_sprint0/：
+输出容器路径 /out/demo_sprint0/：
     fb_false_neg.json
     fb_knowledge_gap.json
     payload_run.log   # 业务日志全部写入此文件；stdout只输出单行JSON给ps1解析
@@ -101,7 +101,8 @@ def safe_get(obj, attr, default, log_file):
 
 
 def main():
-    out_dir = Path("/app/out/demo_sprint0")
+    #out_dir = Path("/app/out/demo_sprint0")
+    out_dir = Path("/out/demo_sprint0")
     out_dir.mkdir(parents=True, exist_ok=True)
     log_path = out_dir / "payload_run.log"
     log_fh = open(log_path, "w", encoding="utf-8")
@@ -111,14 +112,16 @@ def main():
         log_fh.flush()
 
     try:
-        ir_path = Path("/app/data/cases/case001/schematic_ir.json")
+        #ir_path = Path("/app/data/cases/case001/schematic_ir.json")
+        ir_path = Path("/data/cases/case001/schematic_ir.json")
         log(f"[Demo‑Payload] 加载IR文件: {ir_path}")
 
         # -------- Step1 真实IR解析（复用test_ir_schema.py） --------
         ir_doc = load_ir(ir_path)
 
         # -------- Step2 执行全部规则：execute_all_rules第二个参数传入【规则目录Path】，函数内部自动load_rule_definitions --------
-        rules_dir = Path("/app/data/rules")
+        #rules_dir = Path("/app/data/rules")
+        rules_dir = Path("/data/rules")
         rule_hit_results = execute_all_rules(ir_doc, rules_dir)
 
         if len(rule_hit_results) == 0:

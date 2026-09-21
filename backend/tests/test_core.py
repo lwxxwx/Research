@@ -52,7 +52,7 @@ def _set_required_env(monkeypatch, **overrides):
         "APP_ENV": "dev",
         "SECRET_KEY": "x" * 32,
         "DATABASE_URL": "postgresql+psycopg://u:p@postgres:5432/db",
-        "DATA_DIR": "/app/data",
+        "DATA_DIR": "/data",
         "LLM_PROVIDER": "mock",
         "LLM_API_KEY": "k",
     }

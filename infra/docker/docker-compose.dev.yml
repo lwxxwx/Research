@@ -1,6 +1,13 @@
 # ============================================================================
 # docker-compose.dev.yml 开发环境Overlay
 # 仅本地开发使用，禁止用于生产
+#
+# 【方案A】并列挂载（flat mounts）
+#   背景：Docker Desktop for Windows 在「父 target /app + 子 target /app/xxx」
+#         嵌套 bind mount 时，会按「父 source + target 相对路径」在宿主机
+#         backend/ 下预创建 data/scripts/infra/out 空目录。
+#   方案：把 data/scripts/infra/out 的挂载点从 /app/xxx 提升到 /xxx（并列），
+#         消除 target 父子关系，不触发推导创建。
 # ============================================================================
 services:
   postgres:
@@ -16,32 +23,53 @@ services:
     extends:
       file: docker-compose.yml
       service: backend
-    # 【新增】开发环境使用builder阶段镜像：内置uv + 全部dev依赖(pytest等)
+    # 开发环境使用builder阶段镜像：内置uv + 全部dev依赖(pytest等)
     build:
       target: builder
     restart: "no"
     volumes:
       # 源码挂载；venv位于容器内 /opt/venv，隔离挂载冲突，遵循Sprint0约束
       - ../../backend:/app
-      # ==========【✅新增挂载：infra目录，解决initdb下SQL脚本找不到】==========
-      - ../../infra:/app/infra
+
+      # ------------------------------------------------------------
+      # [原逻辑 - 保留注释，便于对照回滚]
+      # ==========【挂载 infra 目录，解决initdb下SQL脚本找不到】==========
+      # - ../../infra:/app/infra
       # 业务数据资产挂载
-      - ../../data:/app/data
-      - ../../scripts:/app/scripts
+      # - ../../data:/app/data
+      # - ../../scripts:/app/scripts
+      # ------------------------------------------------------------
+
+      # 【方案A-新增】并列挂载：target 从 /app/xxx 提升到 /xxx
+      # 消除 /app 与 /app/xxx 的父子关系，避免 Docker Desktop
+      # 在宿主机 backend/ 下按 target 相对路径预创建空目录
+      - ../../data:/data
+      - ../../scripts:/scripts
+      - ../../infra:/infra
+      - ../../out:/out
+
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     # 开发启用热重载，覆盖Dockerfile内置CMD
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-    # ==========dev环境给builder镜像补充healthcheck==========
+    # dev环境给builder镜像补充healthcheck
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/healthz')"]
       interval: 10s
       timeout: 5s
       start_period: 15s
       retries: 5
-    # =========✅新增：开发环境注入PYTHONPATH，解决uv run python -m app.*模块找不到 =========
     environment:
-      - PYTHONPATH=/app
+      # 开发环境注入PYTHONPATH，解决 uv run python -m app.* 模块找不到
+      - PYTHONPATH=/app:/
+
+      # ------------------------------------------------------------
+      # [原逻辑 - 保留注释，便于对照回滚]
+      # （原版本此处无 DATA_DIR）
+      # ------------------------------------------------------------
+
+      # 【方案A-新增】容器内数据根路径，与 volumes 中 /data 对齐
+      - DATA_DIR=/data
 
   frontend:
     extends:

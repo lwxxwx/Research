@@ -120,9 +120,10 @@ $outDir="./out/demo_sprint0"
 Remove-Item $outDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory $outDir | Out-Null
 # 同时清空容器内demo输出目录，防止容器内残留旧json/log
-docker compose -f $f1 -f $f2 exec -T backend rm -rf /app/out/demo_sprint0
-docker compose -f $f1 -f $f2 exec -T backend mkdir -p /app/out/demo_sprint0
-
+#docker compose -f $f1 -f $f2 exec -T backend rm -rf /app/out/demo_sprint0
+docker compose -f $f1 -f $f2 exec -T backend rm -rf /out/demo_sprint0
+#docker compose -f $f1 -f $f2 exec -T backend mkdir -p /app/out/demo_sprint0
+docker compose -f $f1 -f $f2 exec -T backend mkdir -p /out/demo_sprint0
 Write-Info "Step 5‑1: 在容器内执行demo_feedback_payload脚本生成ReviewResult、ReviewDefect测试记录，输出feedback json载荷（幂等，重复运行复用已有DB记录）"
 $genCmd = @("compose","-f",$f1,"-f",$f2,"exec","-T","backend","/opt/venv/bin/python","-m","scripts.demo_feedback_payload")
 # 【V1.16关键修复】临时关闭terminating error，docker外部命令靠LASTEXITCODE判断，不抛RemoteException
@@ -134,9 +135,11 @@ $ErrorActionPreference = $oldErrPref
 
 # ========== 无论payload成功 OR 失败：优先读取并打印容器payload_run.log，同步到宿主机 =========
 Write-Host "`n==== Demo‑Payload 运行日志 ====" -ForegroundColor Cyan
-docker compose -f $f1 -f $f2 exec -T backend cat /app/out/demo_sprint0/payload_run.log
+#docker compose -f $f1 -f $f2 exec -T backend cat /app/out/demo_sprint0/payload_run.log
+docker compose -f $f1 -f $f2 exec -T backend cat /out/demo_sprint0/payload_run.log
 Write-Host "==== End Demo‑Payload 运行日志 ====`n" -ForegroundColor Cyan
-docker compose -f $f1 -f $f2 cp backend:/app/out/demo_sprint0/payload_run.log "$outDir/payload_run.log"
+#docker compose -f $f1 -f $f2 cp backend:/app/out/demo_sprint0/payload_run.log "$outDir/payload_run.log"
+docker compose -f $f1 -f $f2 cp backend:/out/demo_sprint0/payload_run.log "$outDir/payload_run.log"
 
 if($payloadExitCode -ne 0){
     Write-Error "demo_feedback_payload.py 执行失败！payload退出码=$payloadExitCode"
@@ -149,15 +152,19 @@ $jsonLine = ($genOutput | Where-Object { $_ -match '^\{'}) | Select-Object -Firs
 Write-Info $jsonLine
 
 Write-Host ">> 提交false_negative反馈，生成rule_candidate草稿"
-docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.feedback_service /app/out/demo_sprint0/fb_false_neg.json | Out-File "$outDir/feedback_false_neg_submit.log" -Encoding utf8
+#docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.feedback_service /app/out/demo_sprint0/fb_false_neg.json | Out-File "$outDir/feedback_false_neg_submit.log" -Encoding utf8
+docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.feedback_service /out/demo_sprint0/fb_false_neg.json | Out-File "$outDir/feedback_false_neg_submit.log" -Encoding utf8
 Write-Host ">> 提交knowledge_gap反馈"
-docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.feedback_service /app/out/demo_sprint0/fb_knowledge_gap.json | Out-File "$outDir/feedback_gap_submit.log" -Encoding utf8
+#docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.feedback_service /app/out/demo_sprint0/fb_knowledge_gap.json | Out-File "$outDir/feedback_gap_submit.log" -Encoding utf8
+docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.feedback_service /out/demo_sprint0/fb_knowledge_gap.json | Out-File "$outDir/feedback_gap_submit.log" -Encoding utf8
 
 Write-Host ">> 导出rule_candidate候选列表（容器内直接写JSON文件，禁止stdout输出JSON，规避Windows管道GBK乱码）"
-docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --list --status proposed --output-json /app/out/demo_sprint0/candidate_list.json
+#docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --list --status proposed --output-json /app/out/demo_sprint0/candidate_list.json
+docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --list --status proposed --output-json /out/demo_sprint0/candidate_list.json
 
 # ✅修复：使用 docker compose cp（带上f1 f2配置），支持compose服务名backend；原生docker cp不识别compose服务名！
-docker compose -f $f1 -f $f2 cp backend:/app/out/demo_sprint0/candidate_list.json "$outDir/candidate_list.json"
+#docker compose -f $f1 -f $f2 cp backend:/app/out/demo_sprint0/candidate_list.json "$outDir/candidate_list.json"
+docker compose -f $f1 -f $f2 cp backend:/out/demo_sprint0/candidate_list.json "$outDir/candidate_list.json"
 
 $candidateListRaw = Get-Content "$outDir/candidate_list.json" -Encoding utf8 | ConvertFrom-Json
 if ($candidateListRaw.Count -lt 1) {
@@ -167,12 +174,17 @@ if ($candidateListRaw.Count -lt 1) {
 $candidateId= $candidateListRaw[0].candidate_id
 
 Write-Host ">> 导出rule_candidate草稿YAML（容器内生成yaml文件）"
-docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --export-yaml /app/out/demo_sprint0/rule_candidate_proposed.yaml --candidate-id $candidateId
-docker compose -f $f1 -f $f2 cp backend:/app/out/demo_sprint0/rule_candidate_proposed.yaml "$outDir/rule_candidate_proposed.yaml"
+#docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --export-yaml /app/out/demo_sprint0/rule_candidate_proposed.yaml --candidate-id $candidateId
+docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --export-yaml /out/demo_sprint0/rule_candidate_proposed.yaml --candidate-id $candidateId
+#docker compose -f $f1 -f $f2 cp backend:/app/out/demo_sprint0/rule_candidate_proposed.yaml "$outDir/rule_candidate_proposed.yaml"
+docker compose -f $f1 -f $f2 cp backend:/out/demo_sprint0/rule_candidate_proposed.yaml "$outDir/rule_candidate_proposed.yaml"
+
 
 Write-Host ">> 导出knowledge‑gap backlog（容器内生成json）"
-docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --export-knowledge-gap /app/out/demo_sprint0/knowledge_gap_backlog.json
-docker compose -f $f1 -f $f2 cp backend:/app/out/demo_sprint0/knowledge_gap_backlog.json "$outDir/knowledge_gap_backlog.json"
+#docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --export-knowledge-gap /app/out/demo_sprint0/knowledge_gap_backlog.json
+docker compose -f $f1 -f $f2 exec -T backend uv run python -m app.services.rule_evolution_service --export-knowledge-gap /out/demo_sprint0/knowledge_gap_backlog.json
+#docker compose -f $f1 -f $f2 cp backend:/app/out/demo_sprint0/knowledge_gap_backlog.json "$outDir/knowledge_gap_backlog.json"
+docker compose -f $f1 -f $f2 cp backend:/out/demo_sprint0/knowledge_gap_backlog.json "$outDir/knowledge_gap_backlog.json"
 
 Write-Host "`n==== Sprint0 Phase‑I‑J Demo Finished ===="
 Write-Host "产物目录：$outDir"

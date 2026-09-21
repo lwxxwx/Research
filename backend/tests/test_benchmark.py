@@ -27,7 +27,7 @@ from app.services.benchmark_service import (
 def main() -> None:
     # Sprint0 基线只跑 case001；Sprint1 扩至 10 case 时在此追加路径
     case_list = [
-        "/app/data/cases/case001",
+        "/data/cases/case001",
     ]
 
     results = []

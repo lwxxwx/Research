@@ -27,8 +27,10 @@ from typing import Any, Optional, List
 
 from app.ir import load_ir, SchematicIRDocument, IRSchemaValidator
 
-BENCH_OUT_DIR = "/app/out"
-RULES_DIR = pathlib.Path("/app/data/rules")
+#BENCH_OUT_DIR = "/app/out"
+#RULES_DIR = pathlib.Path("/app/data/rules")
+BENCH_OUT_DIR = os.getenv("BENCH_OUT_DIR", "/out")
+RULES_DIR = pathlib.Path(os.getenv("RULES_DIR", "/data/rules"))
 
 # === 规范开关 ===
 # ir_ref 是否豁免 source/section 要求（仅要求 detail >= 10）。
