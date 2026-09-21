@@ -1,13 +1,13 @@
 # backend/tests/test_feedback_rule.py
 """
-Phase‑I Feedback & RuleCandidate集成测试
+Phase-I Feedback & RuleCandidate集成测试
 测试范围：
 1. FeedbackType 6类枚举校验
 2. 全部6类feedback_item落库测试（依赖review_result/review_defect外键）
 3. false_negative / new_rule_candidate自动生成proposed rule_candidate草稿
 4. knowledge_gap导出backlog JSON
 5. rule_candidate草稿YAML语法可解析（仅语法校验，不跑benchmark）
-标记@pytest.mark.integration，依赖真实PostgreSQL；CI单元模式‑m "not integration"跳过
+标记@pytest.mark.integration，依赖真实PostgreSQL；CI单元模式-m "not integration"跳过
 """
 import json
 import pytest
@@ -42,7 +42,7 @@ def feedback_test_fixture(pg_session: Session):
     返回：(review_result_id, review_defect_id)
     """
     rr = ReviewResult(
-        task_id="TASK‑TEST‑001",
+        task_id="TASK-TEST-001",
         review_output_json={},
         is_rule_only=True,
         category="power",
@@ -54,7 +54,7 @@ def feedback_test_fixture(pg_session: Session):
 
     rd = ReviewDefect(
         review_result_id=rr.id,
-        defect_id="DEF‑TEST‑001",
+        defect_id="DEF-TEST-001",
         category="power",
         location={"sheet":"P1"},
         risk="medium",
@@ -86,7 +86,7 @@ def test_feedback_type_enum_all_six():
 
 @pytest.mark.integration
 def test_feedback_correct_defect_no_candidate(pg_session: Session, feedback_test_fixture):
-    """TC‑I‑1 correct_defect落库，**不生成rule_candidate**"""
+    """TC-I-1 correct_defect落库，**不生成rule_candidate**"""
     rr_id, rd_id = feedback_test_fixture
     svc = FeedbackService()
     fb_in = FeedbackCreate(
@@ -106,7 +106,7 @@ def test_feedback_correct_defect_no_candidate(pg_session: Session, feedback_test
 
 @pytest.mark.integration
 def test_feedback_false_positive_no_candidate(pg_session: Session, feedback_test_fixture):
-    """TC‑I‑2 false_positive落库，不生成rule_candidate"""
+    """TC-I-2 false_positive落库，不生成rule_candidate"""
     rr_id, rd_id = feedback_test_fixture
     svc = FeedbackService()
     fb_in = FeedbackCreate(
@@ -123,7 +123,7 @@ def test_feedback_false_positive_no_candidate(pg_session: Session, feedback_test
 
 @pytest.mark.integration
 def test_feedback_suggestion_update_no_candidate(pg_session: Session, feedback_test_fixture):
-    """TC‑I‑3 suggestion_update落库，存储suggestion_diff_json，不生成候选"""
+    """TC-I-3 suggestion_update落库，存储suggestion_diff_json，不生成候选"""
     rr_id, rd_id = feedback_test_fixture
     svc = FeedbackService()
     fb_in = FeedbackCreate(
@@ -143,13 +143,20 @@ def test_feedback_suggestion_update_no_candidate(pg_session: Session, feedback_t
 
 @pytest.mark.integration
 def test_feedback_false_negative_generate_candidate(pg_session: Session, feedback_test_fixture):
-    """TC‑I‑4 false_negative → 自动生成proposed rule_candidate草稿"""
+    """TC-I-4 false_negative → 自动生成proposed rule_candidate草稿"""
     rr_id, rd_id = feedback_test_fixture
     svc = FeedbackService()
     hint = {
-        "title": "漏检‑电源去耦候选",
+        "title": "漏检-电源去耦候选",
         "severity": "high",
-        "evidence_refs": [{"source_type":"datasheet","source":"MP2307.pdf","section":"p6"}]
+        "evidence_refs": [
+            {
+                "source_type": "datasheet",
+                "source": "MP2307.pdf",
+                "section": "p6",
+                "reason": "MP2307 datasheet p6 明确建议 VCC 引脚附近增加 100nF 去耦电容"
+            }
+        ]
     }
     fb_in = FeedbackCreate(
         review_result_id=rr_id,
@@ -167,7 +174,7 @@ def test_feedback_false_negative_generate_candidate(pg_session: Session, feedbac
     assert rc.from_feedback_id == out.id
     assert rc.status == "proposed"
     assert rc.severity == "high"
-    assert "AUTO‑GENERATED DRAFT RULE CANDIDATE" in rc.proposed_yaml
+    assert "AUTO-GENERATED DRAFT RULE CANDIDATE" in rc.proposed_yaml
     # 校验草稿YAML语法合法（仅语法，不执行）
     parsed = yaml.safe_load(rc.proposed_yaml)
     assert parsed["rule_id"] is not None
@@ -176,7 +183,7 @@ def test_feedback_false_negative_generate_candidate(pg_session: Session, feedbac
 
 @pytest.mark.integration
 def test_feedback_new_rule_candidate_generate_candidate(pg_session: Session, feedback_test_fixture):
-    """TC‑I‑5 new_rule_candidate反馈生成候选草稿"""
+    """TC-I-5 new_rule_candidate反馈生成候选草稿"""
     rr_id, rd_id = feedback_test_fixture
     svc = FeedbackService()
     fb_in = FeedbackCreate(
@@ -196,7 +203,7 @@ def test_feedback_new_rule_candidate_generate_candidate(pg_session: Session, fee
 
 @pytest.mark.integration
 def test_feedback_knowledge_gap_backlog_export(pg_session: Session, feedback_test_fixture, tmp_path):
-    """TC‑I‑6 knowledge_gap落库；导出知识缺口JSON backlog"""
+    """TC-I-6 knowledge_gap落库；导出知识缺口JSON backlog"""
     rr_id, rd_id = feedback_test_fixture
     svc = FeedbackService()
     ev1 = FeedbackCreate(
@@ -207,10 +214,10 @@ def test_feedback_knowledge_gap_backlog_export(pg_session: Session, feedback_tes
         created_by=None
     )
     # 新建第二组缺陷，避免唯一约束冲突
-    rr2 = ReviewResult(task_id="TASK‑TEST‑002", review_output_json={}, is_rule_only=True, category="power", risk="medium", review_status="AI_CONFIRMED")
+    rr2 = ReviewResult(task_id="TASK-TEST-002", review_output_json={}, is_rule_only=True, category="power", risk="medium", review_status="AI_CONFIRMED")
     pg_session.add(rr2)
     pg_session.flush()
-    rd2 = ReviewDefect(review_result_id=rr2.id, defect_id="DEF‑TEST‑002", category="power", location={"sheet":"P1"}, risk="medium", evidence=[], root_cause="test", suggestion="test", confidence=0.8, review_status="AI_CONFIRMED", origin="rule")
+    rd2 = ReviewDefect(review_result_id=rr2.id, defect_id="DEF-TEST-002", category="power", location={"sheet":"P1"}, risk="medium", evidence=[], root_cause="test", suggestion="test", confidence=0.8, review_status="AI_CONFIRMED", origin="rule")
     pg_session.add(rd2)
     pg_session.flush()
 
@@ -227,7 +234,7 @@ def test_feedback_knowledge_gap_backlog_export(pg_session: Session, feedback_tes
     rev = RuleEvolutionService()
     out_file = tmp_path / "knowledge_gap_backlog.json"
     rev.export_knowledge_gap_backlog(pg_session, str(out_file))
-    data = json.loads(out_file.read_text(encoding="utf‑8"))
+    data = json.loads(out_file.read_text(encoding="utf-8"))
     assert len(data) >=2
     assert any("MP2307热降额" in x["expert_suggestion"] for x in data)
 

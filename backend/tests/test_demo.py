@@ -1,11 +1,11 @@
 """
-Phase‑J CI Mock E2E冒烟测试
+Phase-J CI Mock E2E冒烟测试
 ⚠️CI流水线：mock全部IR/规则引擎输出，**完全不调用OpenAI外网、不读取真实case文件、不消耗token**
 真实完整Demo跑scripts/demo_sprint0.ps1（本地需要.env OPENAI_API_KEY + 完整case数据）
 链路（纯内存mock，无外部文件依赖）：
-Mock IR数据 → Mock规则引擎输出 → Mock‑LLM生成ReviewReport → DB落库ReviewResult+ReviewDefect
+Mock IR数据 → Mock规则引擎输出 → Mock-LLM生成ReviewReport → DB落库ReviewResult+ReviewDefect
 → 模拟提交2条反馈 false_negative + knowledge_gap
-→ rule_evolution生成rule_candidate草稿、导出knowledge‑gap backlog
+→ rule_evolution生成rule_candidate草稿、导出knowledge-gap backlog
 只校验链路完整性、产物存在、DB记录；**不校验LLM文本语义正确性、不读取磁盘case文件**
 """
 import json
@@ -32,7 +32,7 @@ def pg_session():
     conn = engine.connect()
     trans = conn.begin()
     sess = Session(bind=conn)
-    # ✅ NEW: scope=module契约注释 DeepSeek‑5.1
+    # ✅ NEW: scope=module契约注释 DeepSeek-5.1
     """
     ⚠️【契约说明 scope="module"】
     本fixture为module级别session，模块下**全部测试共享同一个数据库会话事务**。
@@ -52,7 +52,7 @@ def prepare_out_dir():
     # yield
     # # 测试结束不自动清理，方便人工查看产物
 
-    # ✅ NEW: DeepSeek‑5.2 执行前rmtree清空旧产物，避免历史文件造成断言误通过
+    # ✅ NEW: DeepSeek-5.2 执行前rmtree清空旧产物，避免历史文件造成断言误通过
     if OUT_DIR.exists():
         shutil.rmtree(OUT_DIR)
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -63,17 +63,17 @@ def prepare_out_dir():
 def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
     """CI Mock完整Sprint0 Demo冒烟，无OpenAI外网，无磁盘case文件依赖"""
     # ========= ✅ 全部Mock，删除load_ir / execute_all_rules真实文件读取逻辑 =========
-    # Step1 Mock RAG证据（跳过真实retriever检索，Sprint‑1接入LangGraph再用真实retriever）
+    # Step1 Mock RAG证据（跳过真实retriever检索，Sprint-1接入LangGraph再用真实retriever）
     mock_rag_evidence = [
         {"type":"rag_ref","source_type":"datasheet","source":"STC89C55RC_ds.pdf","section":"晶振电路","reason":"晶振负载电容建议22pF"}
     ]
     # Step2 Mock LLM输出ReviewReport（不调用OpenAI），Defect满足V1.2 10字段 + review_status
     mock_report = {
-        "task_id": "R‑MOCK‑001",
-        "report_id": "R‑MOCK‑001",
+        "task_id": "R-MOCK-001",
+        "report_id": "R-MOCK-001",
         "defects": [
             {
-                "defect_id":"DEF‑MOCK‑001",
+                "defect_id":"DEF-MOCK-001",
                 "category":"power",
                 # ===== 旧代码注释掉 =====
                 # "location":{"sheet":"POWER_PAGE1","path":"U1.VCC"},
@@ -102,7 +102,7 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
     report_json_path.write_text(json.dumps(mock_report,indent=2,ensure_ascii=False),encoding="utf-8")
     # 【关键】先写入ReviewResult、ReviewDefect拿到真实外键ID，再提交Feedback
     mock_rr = ReviewResult(
-        task_id="R‑MOCK‑001",
+        task_id="R-MOCK-001",
         review_output_json=json.dumps(mock_report),
         is_rule_only=True,
         category="power",
@@ -113,7 +113,7 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
     pg_session.flush()
     mock_rd = ReviewDefect(
         review_result_id=mock_rr.id,
-        defect_id="DEF‑MOCK‑001",
+        defect_id="DEF-MOCK-001",
         category="power",
         # ===== 旧代码注释掉 =====
         # location={"sheet":"POWER_PAGE1","path":"U1.VCC"},
@@ -178,8 +178,8 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
     rc_text = rc_yaml_path.read_text(encoding="utf-8")
     rc_parsed = yaml.safe_load(rc_text)
     assert rc_parsed is not None
-    assert rc_parsed["version"] == "0.1‑proposed"
+    assert rc_parsed["version"] == "0.1-proposed"
     assert rc_parsed["rule_id"] is not None
-    gap_data = json.loads(gap_json_path.read_text(encoding="utf‑8"))
+    gap_data = json.loads(gap_json_path.read_text(encoding="utf-8"))
     assert len(gap_data)>=1
-    print("\n✅ Sprint0 Mock‑E2E Demo全部链路冒烟通过，产物输出到out/demo_sprint0")
+    print("\n✅ Sprint0 Mock-E2E Demo全部链路冒烟通过，产物输出到out/demo_sprint0")

@@ -1,6 +1,6 @@
 # tests/test_db_schema.py
 """
-Phase‑C Database Schema 冒烟测试
+Phase-C Database Schema 冒烟测试
 执行命令：
 docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.dev.yml exec backend uv run pytest tests/test_db_schema.py -v
 ⚠️ 重要：本测试只做读校验，建表必须通过 scripts.init_db 执行，禁止 Base.metadata.create_all()
@@ -72,20 +72,20 @@ def test_orm_metadata_table_names_match_db(db_engine):
     orm_only = orm_tables - db_tables
     assert len(orm_only) == 0, f"ORM has tables which not exist in DB: {orm_only}"
 
-# ===== ✅ NEW Sprint0 Phase‑I 新增冒烟测试 =====
+# ===== ✅ NEW Sprint0 Phase-I 新增冒烟测试 =====
 def test_rule_candidates_table_exists(db_engine):
-    """Phase‑I：校验新增rule_candidates表存在"""
+    """Phase-I：校验新增rule_candidates表存在"""
     insp = inspect(db_engine)
     actual_tables = set(insp.get_table_names(schema="public"))
-    assert "rule_candidates" in actual_tables, "Missing table rule_candidates (Phase‑I)"
+    assert "rule_candidates" in actual_tables, "Missing table rule_candidates (Phase-I)"
 
 def test_feedback_item_phasei_new_columns(db_engine):
-    """Phase‑I：校验feedback_item新增suggestion_diff_json / rule_candidate_ref字段"""
+    """Phase-I：校验feedback_item新增suggestion_diff_json / rule_candidate_ref字段"""
     insp = inspect(db_engine)
     cols = {c["name"] for c in insp.get_columns("feedback_item", schema="public")}
     require_cols = {"suggestion_diff_json","rule_candidate_ref","attached_refs"}
     missing = require_cols - cols
-    assert len(missing)==0, f"feedback_item missing Phase‑I columns: {missing}"
+    assert len(missing)==0, f"feedback_item missing Phase-I columns: {missing}"
 
 def test_rule_candidates_indexes(db_engine):
     """校验rule_candidates关键索引存在"""
