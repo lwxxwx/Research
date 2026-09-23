@@ -1,7 +1,7 @@
 # app/persistence/models.py
 from sqlalchemy import (
     Column, BigInteger, String, Text, Boolean, Float, Integer,
-    ForeignKey, TIMESTAMP, Index, text
+    ForeignKey, TIMESTAMP, Index, UniqueConstraint, CheckConstraint, text
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, relationship, Mapped, mapped_column
@@ -53,6 +53,11 @@ class SchematicCase(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     project: Mapped[Optional["Project"]] = relationship(back_populates="schematic_cases")
     ir_documents: Mapped[List["IRDocument"]] = relationship(back_populates="schematic_case", cascade="all, delete-orphan")
+
+    # ✅ 对齐 SQL：UNIQUE(project_id, case_id)
+    __table_args__ = (
+        UniqueConstraint("project_id", "case_id", name="uq_schematic_case_project_case"),
+    )    
 # ============================================================
 # 4. IRDocument
 # ============================================================
@@ -143,7 +148,8 @@ class ReviewDefect(Base):
     component: Mapped[Optional[str]] = mapped_column(String(100))
     net: Mapped[Optional[str]] = mapped_column(String(100))
     risk: Mapped[str] = mapped_column(String(16), nullable=False, server_default="medium")
-    evidence: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    #evidence: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    evidence: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     root_cause: Mapped[str] = mapped_column(Text, nullable=False)
     suggestion: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, server_default="0.5")
@@ -191,6 +197,14 @@ class FeedbackItem(Base):
     defect: Mapped[Optional["ReviewDefect"]] = relationship(back_populates="feedbacks")
     creator: Mapped[Optional["User"]] = relationship(back_populates="feedbacks")
     __table_args__ = (
+        # ✅ 对齐 SQL：DB 层强制 6 种反馈类型
+        CheckConstraint(
+            "feedback_type IN ("
+            "'correct_defect','false_positive','false_negative',"
+            "'suggestion_update','new_rule_candidate','knowledge_gap'"
+            ")",
+            name="check_feedback_item_type",
+        ),
         Index("idx_feedback_item_type", "feedback_type"),
         Index("idx_feedback_item_result", "review_result_id"),
         Index("idx_feedback_item_defect", "review_defect_id"),
@@ -236,6 +250,8 @@ class RuleCandidate(Base):
     candidate_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     from_feedback_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("feedback_item.id"))
     case_id: Mapped[Optional[str]] = mapped_column(String(64))
+    # ✅ Sprint0：普通字段，无外键；Sprint-1 tasks 表创建后再补 ForeignKey
+    task_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[Optional[str]] = mapped_column(String(16))
@@ -248,4 +264,6 @@ class RuleCandidate(Base):
     __table_args__ = (
         Index("idx_rule_candidates_status", "status"),
         Index("idx_rule_candidates_case_id", "case_id"),
+         # ✅ 对齐 SQL
+        Index("idx_rule_candidates_from_feedback_id", "from_feedback_id"), 
     )

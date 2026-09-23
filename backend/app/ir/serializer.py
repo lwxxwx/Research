@@ -20,7 +20,10 @@ import pathlib
 import argparse
 from typing import Optional
 
-from app.ir.schema import SchematicIRDocument, EXAMPLE_8031_CASE001
+# from app.ir.schema import SchematicIRDocument, EXAMPLE_8031_CASE001  # 原代码：EXAMPLE_8031_CASE001 现为函数别名
+# ===== [NEW] 显式导入函数式示例获取入口 =====
+from app.ir.schema import SchematicIRDocument, get_8051_example
+# ===== [/NEW] =====
 from app.ir.validator import IRSchemaValidator
 
 
@@ -59,22 +62,58 @@ def validate_ir_file(file_path: str, strict_mode: bool = False) -> bool:
         print(f"状态: {'✅ PASS' if result.is_valid else '❌ FAIL'}")
         
         # ===== 摘要信息 =====
+        # ===== [NEW] summary 现为 IRValidationSummary 模型，改用属性访问 =====
+        # 原代码（Dict 访问方式，已失效）：
+        # print(f"\n📊 摘要:")
+        # print(f"  - Schema版本: {result.summary.get('ir_schema_version', 'N/A')}")
+        # print(f"  - Case ID: {result.summary.get('case_id', 'N/A')}")
+        # print(f"  - 元件数: {result.summary.get('total_components', 0)}")
+        # print(f"  - 网络数: {result.summary.get('total_nets', 0)}")
+        # print(f"  - 引脚数: {result.summary.get('total_pins', 0)}")
+        # print(f"  - 悬浮元件: {result.summary.get('floating_components', 0)}")
+        #
+        # 兼容说明：
+        #   - 新版 summary 是 IRValidationSummary 模型，只包含 total_components /
+        #     total_nets / total_pins / floating_components / floating_pins /
+        #     semantic_coverage / extra 这些结构化字段。
+        #   - ir_schema_version、case_id 不再出现在 summary 中，
+        #     这两个值在验证器内部未放入 summary（旧版本是 validator 直接给的字典）。
+        #     为避免改变 validator 逻辑，这里直接从文档对象读取。
         print(f"\n📊 摘要:")
-        print(f"  - Schema版本: {result.summary.get('ir_schema_version', 'N/A')}")
-        print(f"  - Case ID: {result.summary.get('case_id', 'N/A')}")
-        print(f"  - 元件数: {result.summary.get('total_components', 0)}")
-        print(f"  - 网络数: {result.summary.get('total_nets', 0)}")
-        print(f"  - 引脚数: {result.summary.get('total_pins', 0)}")
-        print(f"  - 悬浮元件: {result.summary.get('floating_components', 0)}")
+        print(f"  - Schema版本: {doc.ir_schema_version}")
+        print(f"  - Case ID: {doc.case_id}")
+        print(f"  - 元件数: {result.summary.total_components}")
+        print(f"  - 网络数: {result.summary.total_nets}")
+        print(f"  - 引脚数: {result.summary.total_pins}")
+        print(f"  - 悬浮元件: {len(result.summary.floating_components)}")
+        # ===== [/NEW] =====
         
         # ===== 三语义字段覆盖率 (Sprint 0 验收观测) =====
-        semantic = result.summary.get('semantic_coverage', {})
-        if semantic:
-            total = semantic.get('total_components', 0)
+        # ===== [NEW] semantic_coverage 现为 Optional[float]（0.0~1.0） =====
+        # 原代码（旧 validator 返回 dict，含 has_intent/has_context/has_constraint）：
+        # semantic = result.summary.get('semantic_coverage', {})
+        # if semantic:
+        #     total = semantic.get('total_components', 0)
+        #     print(f"\n📝 三语义字段覆盖率 (Sprint 0 验收观测):")
+        #     print(f"  - intent: {semantic.get('has_intent', 0)}/{total} ({semantic.get('has_intent', 0)/total*100:.1f}%)")
+        #     print(f"  - context: {semantic.get('has_context', 0)}/{total} ({semantic.get('has_context', 0)/total*100:.1f}%)")
+        #     print(f"  - constraint: {semantic.get('has_constraint', 0)}/{total} ({semantic.get('has_constraint', 0)/total*100:.1f}%)")
+        #
+        # 兼容说明：
+        #   - 新版 summary.semantic_coverage 是 float（0.0~1.0），仅表示"三语义综合覆盖率"。
+        #   - 旧版精细的 intent/context/constraint 分项覆盖率，仍可从 validator 的
+        #     原始 summary 字典里拿到；但既然 summary 已结构化，这里只展示综合覆盖率。
+        #   - 为保持 CLI 输出语义接近，这里从文档对象重新计算分项覆盖率。
+        total_components = result.summary.total_components
+        if total_components > 0:
+            has_intent = sum(1 for c in doc.components if c.intent)
+            has_context = sum(1 for c in doc.components if c.context)
+            has_constraint = sum(1 for c in doc.components if c.constraint)
             print(f"\n📝 三语义字段覆盖率 (Sprint 0 验收观测):")
-            print(f"  - intent: {semantic.get('has_intent', 0)}/{total} ({semantic.get('has_intent', 0)/total*100:.1f}%)")
-            print(f"  - context: {semantic.get('has_context', 0)}/{total} ({semantic.get('has_context', 0)/total*100:.1f}%)")
-            print(f"  - constraint: {semantic.get('has_constraint', 0)}/{total} ({semantic.get('has_constraint', 0)/total*100:.1f}%)")
+            print(f"  - intent: {has_intent}/{total_components} ({has_intent/total_components*100:.1f}%)")
+            print(f"  - context: {has_context}/{total_components} ({has_context/total_components*100:.1f}%)")
+            print(f"  - constraint: {has_constraint}/{total_components} ({has_constraint/total_components*100:.1f}%)")
+        # ===== [/NEW] =====
         
         # ===== 错误和警告 =====
         if result.errors:
@@ -100,22 +139,38 @@ def generate_case001_sample(output_dir: pathlib.Path) -> None:
     out_file = output_dir / "schematic_ir.json"
     
     # 使用 DeepSeek 完整示例
-    ir_doc = EXAMPLE_8031_CASE001
+    # ir_doc = EXAMPLE_8031_CASE001  # 原代码：EXAMPLE_8031_CASE001 现为函数别名
+    # ===== [NEW] 调用函数获取文档 =====
+    ir_doc = get_8051_example()
+    # ===== [/NEW] =====
     dump_ir(ir_doc, out_file)
     
     # 自动验证生成的示例（普通模式）
     result = IRSchemaValidator.validate(ir_doc, strict_mode=False)
     
+    # ===== [NEW] summary 现为 IRValidationSummary 模型，改用属性访问 =====
+    # 原代码：
+    # print(f"\n📊 生成的示例统计:")
+    # print(f"  - 元件数: {result.summary.get('total_components', 0)}")
+    # print(f"  - 引脚数: {result.summary.get('total_pins', 0)}")
+    # print(f"  - 网络数: {result.summary.get('total_nets', 0)}")
+    #
+    # semantic = result.summary.get('semantic_coverage', {})
+    # total = semantic.get('total_components', 0)
+    # if total > 0:
+    #     intent_rate = semantic.get('has_intent', 0) / total * 100
+    #     print(f"  - 三语义覆盖率: {intent_rate:.1f}%")
     print(f"\n📊 生成的示例统计:")
-    print(f"  - 元件数: {result.summary.get('total_components', 0)}")
-    print(f"  - 引脚数: {result.summary.get('total_pins', 0)}")
-    print(f"  - 网络数: {result.summary.get('total_nets', 0)}")
+    print(f"  - 元件数: {result.summary.total_components}")
+    print(f"  - 引脚数: {result.summary.total_pins}")
+    print(f"  - 网络数: {result.summary.total_nets}")
     
-    semantic = result.summary.get('semantic_coverage', {})
-    total = semantic.get('total_components', 0)
+    total = result.summary.total_components
     if total > 0:
-        intent_rate = semantic.get('has_intent', 0) / total * 100
+        has_intent = sum(1 for c in ir_doc.components if c.intent)
+        intent_rate = has_intent / total * 100
         print(f"  - 三语义覆盖率: {intent_rate:.1f}%")
+    # ===== [/NEW] =====
     
     if result.is_valid:
         print(f"\n✅ 示例 IR 验证通过")

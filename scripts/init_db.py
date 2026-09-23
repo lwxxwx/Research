@@ -82,7 +82,7 @@ def init_database():
 
 def init_database():
     engine = get_engine()
-    init_dir = pathlib.Path("/app/infra/docker/initdb")
+    init_dir = pathlib.Path("/infra/docker/initdb")
 
     # ========== 执行所有SQL文件 ==========
     sql_files = sorted([f for f in init_dir.glob("*.sql") if f.is_file()])

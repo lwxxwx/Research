@@ -27,7 +27,10 @@
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
-    NEW.updated_at = CURRENT_TIMESTAMP;
+    -- ✅ 用 clock_timestamp() 而非 CURRENT_TIMESTAMP：
+    --    CURRENT_TIMESTAMP/NOW() 在同一事务内恒定，导致同事务内多次 UPDATE 时
+    --    updated_at 不变。clock_timestamp() 每次调用返回真实当前时刻，符合审计语义。
+    NEW.updated_at = clock_timestamp();
     RETURN NEW;
 END;
 $$ language 'plpgsql';
@@ -164,7 +167,7 @@ CREATE TABLE IF NOT EXISTS review_defect (
     component VARCHAR(100),
     net VARCHAR(100),
     risk VARCHAR(16) NOT NULL DEFAULT 'medium',
-    evidence JSONB NOT NULL DEFAULT '[]',    -- [{source, section, reason}]
+    evidence JSONB NOT NULL DEFAULT '[]'::jsonb,    -- [{source, section, reason}]
     root_cause TEXT NOT NULL,
     suggestion TEXT NOT NULL,
     confidence FLOAT DEFAULT 0.5,
@@ -205,9 +208,9 @@ CREATE TABLE IF NOT EXISTS feedback_item (
     suggestion_adopted VARCHAR(16),              -- yes / partial / no
 
     -- V1.2 Phase‑I扩展字段
-    suggestion_diff_json JSONB NOT NULL DEFAULT '[]',
+    suggestion_diff_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     rule_candidate_ref VARCHAR(64),
-    attached_refs JSONB DEFAULT '[]',
+    attached_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
 
     created_by BIGINT REFERENCES users(id),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -239,7 +242,7 @@ CREATE TABLE IF NOT EXISTS knowledge_doc (
     source VARCHAR(256),
     source_type VARCHAR(32),                     -- datasheet / reference_design / review_case
     content_md TEXT NOT NULL,
-    metadata JSONB DEFAULT '{}',
+    metadata JSONB DEFAULT '{}'::jsonb,
     version VARCHAR(20) DEFAULT 'v1.0',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -254,7 +257,7 @@ CREATE TABLE IF NOT EXISTS knowledge_chunk (
     knowledge_doc_id BIGINT REFERENCES knowledge_doc(id) ON DELETE CASCADE,
     chunk_text TEXT NOT NULL,
     embedding vector(1536),                       -- 适配OpenAI embedding
-    metadata JSONB DEFAULT '{}',
+    metadata JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_knowledge_chunk_embedding ON knowledge_chunk USING hnsw (embedding vector_cosine_ops);
@@ -272,11 +275,11 @@ CREATE TABLE IF NOT EXISTS rule_candidates (
     title VARCHAR(256) NOT NULL,
     description TEXT NOT NULL,
     severity VARCHAR(16),
-    evidence_refs JSONB NOT NULL DEFAULT '[]',
+    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
     proposed_yaml TEXT,
     status VARCHAR(32) NOT NULL DEFAULT 'proposed',  -- proposed/designing/benchmarked/accepted/rejected
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 CREATE TRIGGER update_rule_candidates_updated_at BEFORE UPDATE ON rule_candidates FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 

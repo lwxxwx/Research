@@ -10,11 +10,27 @@ Schematic IR 验证器
     - 增加 pin_id 有效性验证
     - lib_name 缺失提升为 Error（规则引擎匹配核心字段）
     - floating_components 统计复用结构化返回，避免重复遍历
+
+===== [NEW] v1.0.1 适配说明 =====
+schema.py 中 IRValidationResult.summary 已由 Dict[str, Any] 改为
+IRValidationSummary 结构化模型（extra="forbid"），本文件在 validate()
+末尾构造 summary 时做字段对齐：
+    - floating_components: int → List[str]（改为位号列表）
+    - floating_pins: int → List[str]（改为 'Ref.pin_id' 列表）
+    - semantic_coverage: dict → Optional[float]（改为综合覆盖率 0.0~1.0）
+    - 原先的 ir_schema_version / case_id / component_types / net_types
+      与 semantic_coverage 分项统计，全部收敛到 summary.extra 中保留，
+      保证信息不丢失。
+验证逻辑本身不做任何改动。
+===== [/NEW] =====
 """
 
 from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
-from app.ir.schema import SchematicIRDocument, IRValidationResult
+# ===== [NEW] 导入结构化 Summary 模型 =====
+from app.ir.schema import SchematicIRDocument, IRValidationResult, IRValidationSummary
+# ===== [/NEW] =====
+# from app.ir.schema import SchematicIRDocument, IRValidationResult  # 原代码
 
 
 @dataclass
@@ -255,19 +271,58 @@ class IRSchemaValidator:
             "total_components": total_components,
         }
         
-        summary = {
-            "ir_schema_version": ir.ir_schema_version,
-            "case_id": ir.case_id,
-            "total_components": total_components,
-            "total_nets": len(ir.nets),
-            "total_pins": total_pins,
-            "component_types": component_types,
-            "net_types": net_types,
-            "semantic_coverage": semantic_coverage,
-            # ===== 复用悬浮元件检查结果，避免重复遍历 =====
-            "floating_components": len(floating_result.floating_component_refs),
-            "floating_pins": len(floating_result.floating_pin_refs),
-        }
+        # ===== [NEW] summary 改为构造 IRValidationSummary 实例 =====
+        # 原代码（构造 Dict[str, Any]，已不兼容新的结构化 summary）：
+        # summary = {
+        #     "ir_schema_version": ir.ir_schema_version,
+        #     "case_id": ir.case_id,
+        #     "total_components": total_components,
+        #     "total_nets": len(ir.nets),
+        #     "total_pins": total_pins,
+        #     "component_types": component_types,
+        #     "net_types": net_types,
+        #     "semantic_coverage": semantic_coverage,
+        #     # ===== 复用悬浮元件检查结果，避免重复遍历 =====
+        #     "floating_components": len(floating_result.floating_component_refs),
+        #     "floating_pins": len(floating_result.floating_pin_refs),
+        # }
+        #
+        # 字段映射说明：
+        #   - floating_components：int → List[str]（IRValidationSummary 要求位号列表）
+        #   - floating_pins：int → List[str]（IRValidationSummary 要求 'Ref.pin_id' 列表）
+        #   - semantic_coverage：dict → Optional[float]（综合覆盖率，0.0~1.0）
+        #   - ir_schema_version / case_id / component_types / net_types /
+        #     semantic_coverage 分项统计 → 收敛进 extra 字典，保证信息不丢失
+        if total_components > 0:
+            # 综合覆盖率：intent、context、constraint 三项都填才算"完全覆盖"
+            has_intent = semantic_coverage["has_intent"]
+            has_context = semantic_coverage["has_context"]
+            has_constraint = semantic_coverage["has_constraint"]
+            fully_covered = sum(
+                1 for c in ir.components
+                if c.intent and c.context and c.constraint
+            )
+            semantic_coverage_float: Optional[float] = fully_covered / total_components
+        else:
+            semantic_coverage_float = None
+        
+        summary = IRValidationSummary(
+            total_components=total_components,
+            total_nets=len(ir.nets),
+            total_pins=total_pins,
+            floating_components=sorted(floating_result.floating_component_refs),
+            floating_pins=sorted(floating_result.floating_pin_refs),
+            semantic_coverage=semantic_coverage_float,
+            extra={
+                "ir_schema_version": ir.ir_schema_version,
+                "case_id": ir.case_id,
+                "component_types": component_types,
+                "net_types": net_types,
+                # 保留原精细统计，便于 CLI 与测试继续消费
+                "semantic_coverage_detail": semantic_coverage,
+            },
+        )
+        # ===== [/NEW] =====
         
         return IRValidationResult(
             is_valid=len(errors) == 0,
