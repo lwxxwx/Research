@@ -8,6 +8,12 @@ ground_truth_path: ./expected_review.json
 enabled: true
 strict_ir_validation: true
 
+# ===== [NEW] v1.0.1 说明：info/low 级命中不计入 Benchmark =====
+# 引擎新增 IO_001（severity=low）规则，用于输出 IO 悬空提示；
+# 该级命中不进入 expected_review.json 的 defects[]，也不计入 Precision/Recall。
+# Benchmark 侧请使用 execute_defect_rules()（仅返回 medium/high/critical）。
+# ===== [/NEW] =====
+
 # 判定条件（A 类：规则引擎 Rule-Only，缺陷全部为 rule origin）
 pass_criteria:
   rule_checks:
