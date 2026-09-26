@@ -13,6 +13,36 @@ CLI 命令：
   
   # 生成到指定目录
   docker compose exec backend uv run python -m app.ir.serializer --generate-case001 --out-dir ./data/cases/case001
+
+            序列化 (dump)                        反序列化 (load)
+  ┌──────────────────────────┐         ┌──────────────────────────┐
+  │                          │         │                          │
+  │  Python 对象             │         │  Python 对象             │
+  │  SchematicIRDocument     │         │  SchematicIRDocument     │
+  │   ├─ case_id: "case001"  │         │   ├─ case_id: "case001"  │
+  │   ├─ components: [...]   │         │   ├─ components: [...]   │
+  │   └─ nets: [...]         │         │   └─ nets: [...]         │
+  │                          │         │                          │
+  └───────────┬──────────────┘         └───────────▲──────────────┘
+              │                                    │
+              │  model_dump_json()                 │  model_validate()
+              │  （序列化）                         │  （反序列化）
+              ▼                                    │
+  ┌──────────────────────────┐         ┌──────────────────────────┐
+  │                          │         │                          │
+  │  JSON 字符串              │  文件   │  Python dict             │
+  │  '{"case_id": "case001"…'│ ──────► │  {"case_id": "case001",…}│
+  │                          │         │                          │
+  └──────────────────────────┘         └──────────────────────────┘
+              │                                    ▲
+              │  写文件 write_text                  │  json.loads
+              │                                    │
+              ▼                                    │
+  ┌──────────────────────────┐         ┌──────────────────────────┐
+  │  schematic_ir.json       │ ──────► │  读文件 read_text         │
+  │  (磁盘上的文件)           │         │                          │
+  └──────────────────────────┘         └──────────────────────────┘
+
 """
 
 import json

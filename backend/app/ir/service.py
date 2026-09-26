@@ -1,6 +1,36 @@
 """
 IR 持久化服务：写入/读取数据库 ir_document 表
 对应 ORM 模型 IRDocument (Phase C)
+
+写入路径：
+  Pydantic 对象 (SchematicIRDocument)
+       │
+       │ ir_doc.model_dump(mode="json")
+       ▼
+  Python dict (JSON 兼容)
+       │
+       │ IRDocument(ir_json=...)
+       ▼
+  SQLAlchemy 对象 (未入库)
+       │
+       │ session.add + flush/commit
+       ▼
+  数据库 ir_document 表 (JSONB 列)
+
+读取路径：
+  数据库 ir_document 表 (JSONB 列)
+       │
+       │ session.get / query
+       ▼
+  SQLAlchemy 对象 (IRDocument)
+       │
+       │ rec.ir_json  ← SQLAlchemy 自动 json.loads
+       ▼
+  Python dict
+       │
+       │ SchematicIRDocument.model_validate(...)
+       ▼
+  Pydantic 对象 (SchematicIRDocument)
 """
 
 from typing import Optional

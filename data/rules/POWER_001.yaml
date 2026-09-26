@@ -9,7 +9,7 @@ applicable_condition:
   scope: schematic
 
 check_logic:
-  function: "power_checks.check_decoupling"
+  function: "circuit_checks.check_decoupling"   # v1.0.1: 原 power_checks.check_decoupling
   params:
     target_component_refs: ["U1"]
     power_net_names: ["VCC"]

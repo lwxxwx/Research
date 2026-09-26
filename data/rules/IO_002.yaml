@@ -1,0 +1,17 @@
+rule_id: IO_002
+rule_name: IO 方向冲突检查
+version: "1.0"
+category: interface
+severity: critical
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "circuit_checks.check_io_direction"
+  params:
+    ignore_bidirectional: true
+
+rule_basis: "通用数字电路设计规范：两个输出引脚不得直接相连（可能烧器件或电平不确定）。"
+suggestion: "检查冲突网络的引脚方向：两个 OUTPUT 同网需要电平转换、改为开漏或增加仲裁电路。"

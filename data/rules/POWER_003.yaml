@@ -9,7 +9,7 @@ applicable_condition:
   scope: schematic
 
 check_logic:
-  function: "power_checks.check_derating"
+  function: "circuit_checks.check_derating"   # v1.0.1: 原 power_checks.check_derating
   params: {}
 
 rule_basis: "通用硬件降额设计规范（Sprint0 预留，Sprint1 补实现）"

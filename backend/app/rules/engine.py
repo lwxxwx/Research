@@ -12,6 +12,13 @@ Sprint0 Phase F：规则引擎。
   rule_id / rule_name / version / category / severity
   component / net / hit_message / rule_suggestion / rule_basis
   evidence_ir_refs / origin
+
+v1.0.1 变更：
+  - 新增 execute_defect_rules()：仅返回 severity ∈ {medium, high, critical} 的命中，
+    用于 K7 断言 / Benchmark 等"只看缺陷"的场景；
+    execute_all_rules() 保持"返回所有命中"的语义不变。
+  - 修复 _cond_matches 的 attribute_exists 分支：
+    Attribute 是 Pydantic 对象而非 dict，改用 hasattr(a, "key") 判定。
 """
 from __future__ import annotations
 
@@ -111,7 +118,8 @@ def _cond_matches(cond: Dict[str, Any], ir: SchematicIRDocument) -> bool:
         found = False
         for c in ir.components:
             for a in c.attributes:
-                if isinstance(a, dict) and a.get("name") in keys:
+                # 修复：Attribute 是 Pydantic 对象，用 .key 而非 dict.get("name")
+                if hasattr(a, "key") and a.key in keys:
                     found = True
                     break
             if found:
@@ -199,7 +207,7 @@ def execute_all_rules(
     rules_dir: Path,
     rule_ids: Optional[List[str]] = None,
 ) -> List[RuleResult]:
-    """加载全部规则，批量执行，返回所有 RuleResult。"""
+    """加载全部规则，批量执行，返回所有 RuleResult（含 low 级提示）。"""
     rules = load_rule_definitions(rules_dir)
     if rule_ids:
         rules = [r for r in rules if r.rule_id in rule_ids]
@@ -208,3 +216,23 @@ def execute_all_rules(
     for r in rules:
         all_hits.extend(run_single_rule(r, ir))
     return all_hits
+
+
+def execute_defect_rules(
+    ir: SchematicIRDocument,
+    rules_dir: Path,
+    rule_ids: Optional[List[str]] = None,
+) -> List[RuleResult]:
+    """
+    只返回缺陷（severity ∈ {medium, high, critical}）的命中结果。
+
+    用途：
+      - Sprint0 K7 断言：case001 Rule Hit ≥ 2
+      - Benchmark / 报告 / 落库：只处理真正的缺陷，不含 low 级提示
+
+    说明：
+      execute_all_rules() 保持"返回所有命中"的语义不变；
+      本函数是其"只取缺陷"的便捷入口，两者可共存。
+    """
+    all_hits = execute_all_rules(ir, rules_dir, rule_ids)
+    return [r for r in all_hits if r.severity in {"medium", "high", "critical"}]

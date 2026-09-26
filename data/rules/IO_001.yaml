@@ -1,0 +1,16 @@
+rule_id: IO_001
+rule_name: IO 引脚悬空检查
+version: "1.0"
+category: interface
+severity: low
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "circuit_checks.check_io_floating"
+  params: {}
+
+rule_basis: "通用数字电路设计规范：未使用的 IO 引脚建议引出或标注 DNP；悬空仅为提示，不构成缺陷。"
+suggestion: "若 IO 引脚为预留/调试用途，可忽略；若为设计遗漏，建议连接或标注 DNP（Do Not Populate）。"

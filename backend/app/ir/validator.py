@@ -2,6 +2,28 @@
 Schematic IR 验证器
 提供完整的 IR 文档校验功能，包含元件完整性、网络引用检查
 
+                        ┌──────────────────────┐
+                        │  SchematicIRDocument │
+                        └──────────┬───────────┘
+                                   │
+                    ┌──────────────┼─────────────────┐
+                    ▼              ▼                 ▼
+          validate_components  validate_nets   check_floating_components
+                    │              │                 │
+                    ▼              ▼                 ▼
+               (errors,warnings) (errors,warnings)  FloatingCheckResult
+                    │              │                 │
+                    └──────┬───────┴─────────────────┘
+                           ▼
+                    合并 errors/warnings
+                           │
+                           ▼
+                   构造 IRValidationSummary
+                     （7 个字段 + extra）
+                           │
+                           ▼
+                    IRValidationResult
+
 修正记录 (2026-09-09)：
     - intent/context 缺失：降级为 Warning，不阻断验证
     - 增加 strict_mode 参数（用于 Golden Case 验收）

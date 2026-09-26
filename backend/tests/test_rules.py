@@ -2,13 +2,16 @@
 Phase-F 规则引擎测试（pytest + CLI 入口）
 
 覆盖内容：
-    - 规则 YAML 加载（恰好 3 条 POWER_001/002/003）
+    - 规则 YAML 加载（恰好 5 条：POWER_001/002/003 + IO_001/002）
     - 规则必填字段完整性（对齐 Rule YAML Format v1.0）
     - POWER_001 在 case001 命中 VCC 去耦缺失
     - POWER_002 在 case001 命中 RST 拓扑异常
     - POWER_003 在 case001 不命中（Sprint0 预留）
+    - IO_001 在 case001 命中（U1 的 32 个 IO 引脚全悬空，汇总一条）
+    - IO_002 在 case001 不命中（全为 BIDIRECTIONAL，无输出冲突）
+    - execute_defect_rules 排除 low 级提示（IO_001）
     - RuleResult 关键字段非空 + evidence_ir_refs 结构化
-    - Sprint0 K7 锚点：case001 Rule Hit >= 2
+    - Sprint0 K7 锚点：case001 Rule Hit >= 2（仅计缺陷，不含 low 提示）
 
 执行命令：
     # 全部测试（pytest，CI 使用）
@@ -22,7 +25,7 @@ Phase-F 规则引擎测试（pytest + CLI 入口）
 前置条件：
     1. 容器已启动
     2. data/cases/case001/schematic_ir.json 已就位
-    3. data/rules/POWER_00{1,2,3}.yaml 已就位
+    3. data/rules/POWER_00{1,2,3}.yaml + IO_00{1,2}.yaml 已就位
 
 ⚠️ 本测试不依赖 PostgreSQL
 """
@@ -38,7 +41,12 @@ import pytest
 
 from app.ir.schema import SchematicIRDocument
 from app.ir.serializer import load_ir
-from app.rules.engine import RuleResult, execute_all_rules, load_rule_definitions
+from app.rules.engine import (
+    RuleResult,
+    execute_all_rules,
+    execute_defect_rules,
+    load_rule_definitions,
+)
 
 
 # ============================================================
@@ -74,21 +82,28 @@ def case001_ir() -> SchematicIRDocument:
 
 @pytest.fixture(scope="module")
 def case001_results(case001_ir) -> List[RuleResult]:
-    """case001 跑全部规则的命中结果（模块级缓存）。"""
+    """case001 跑全部规则的命中结果（模块级缓存，含 low 级提示）。"""
     assert RULES_ROOT.exists(), f"rules dir not found: {RULES_ROOT}"
     return execute_all_rules(case001_ir, RULES_ROOT)
+
+
+@pytest.fixture(scope="module")
+def case001_defects(case001_ir) -> List[RuleResult]:
+    """case001 只含缺陷（severity ∈ {medium, high, critical}）的命中结果。"""
+    assert RULES_ROOT.exists(), f"rules dir not found: {RULES_ROOT}"
+    return execute_defect_rules(case001_ir, RULES_ROOT)
 
 
 # ============================================================
 # 规则加载测试
 # ============================================================
 
-def test_rules_loaded_exactly_three():
-    """Phase F 目标：加载恰好 3 条规则 POWER_001/002/003。"""
+def test_rules_loaded_exactly_five():
+    """Phase F + IO 扩展：加载恰好 5 条规则 POWER_001/002/003 + IO_001/002。"""
     rules = load_rule_definitions(RULES_ROOT)
     rule_ids = sorted(r.rule_id for r in rules)
-    assert rule_ids == ["POWER_001", "POWER_002", "POWER_003"], (
-        f"应加载 3 条规则，实际 {rule_ids}"
+    assert rule_ids == ["IO_001", "IO_002", "POWER_001", "POWER_002", "POWER_003"], (
+        f"应加载 5 条规则，实际 {rule_ids}"
     )
 
 
@@ -118,19 +133,19 @@ def test_rules_required_fields_present():
 
 
 # ============================================================
-# Sprint0 K7 锚点
+# Sprint0 K7 锚点（仅计缺陷，不含 low 提示）
 # ============================================================
 
-def test_case001_rule_hit_at_least_2(case001_results):
-    """Sprint0 K7：case001 至少命中 2 条规则。"""
-    assert len(case001_results) >= 2, (
-        f"case001 Rule Hit = {len(case001_results)} < 2 (Sprint0 K7)"
+def test_case001_defect_hit_at_least_2(case001_defects):
+    """Sprint0 K7：case001 至少命中 2 条缺陷（severity ∈ {medium,high,critical}）。"""
+    assert len(case001_defects) >= 2, (
+        f"case001 Rule Hit = {len(case001_defects)} < 2 (Sprint0 K7)"
     )
 
 
-def test_case001_hits_power001_and_power002(case001_results):
+def test_case001_hits_power001_and_power002(case001_defects):
     """case001 必须命中 POWER_001 与 POWER_002。"""
-    hit_ids = {r.rule_id for r in case001_results}
+    hit_ids = {r.rule_id for r in case001_defects}
     assert "POWER_001" in hit_ids, f"POWER_001 未命中；hit_ids={sorted(hit_ids)}"
     assert "POWER_002" in hit_ids, f"POWER_002 未命中；hit_ids={sorted(hit_ids)}"
 
@@ -158,7 +173,7 @@ def test_case001_rule_result_schema(case001_results):
 
 
 # ============================================================
-# 单条规则定位精度
+# 单条规则定位精度（POWER 系列）
 # ============================================================
 
 def test_power001_hits_vcc_net(case001_results):
@@ -186,6 +201,47 @@ def test_power003_no_hits_on_case001(case001_results):
     power003 = [r for r in case001_results if r.rule_id == "POWER_003"]
     assert power003 == [], (
         f"POWER_003 在 case001 上不应命中，实际命中 {len(power003)} 条"
+    )
+
+
+# ============================================================
+# IO 规则测试（Sprint0 扩展）
+# ============================================================
+
+def test_io001_hits_case001(case001_results):
+    """IO_001 应在 case001 上命中（U1 有 32 个 IO 悬空，汇总 1 条）。"""
+    io001 = [r for r in case001_results if r.rule_id == "IO_001"]
+    assert len(io001) == 1, f"IO_001 命中数应为 1（汇总），实际 {len(io001)}"
+    hit = io001[0]
+    assert hit.component == "U1", f"IO_001 component 应为 U1，实际 {hit.component}"
+    assert "32" in hit.hit_message, (
+        f"IO_001 message 应包含 32，实际 {hit.hit_message}"
+    )
+
+
+def test_io001_severity_is_low(case001_results):
+    """IO_001 severity 应为 low（提示级，不改规范）。"""
+    io001 = [r for r in case001_results if r.rule_id == "IO_001"]
+    assert len(io001) == 1
+    assert io001[0].severity == "low"
+    assert io001[0].category == "interface"
+
+
+def test_io002_no_hits_on_case001(case001_results):
+    """IO_002 在 case001 上不应命中（全部 BIDIRECTIONAL，无输出冲突）。"""
+    io002 = [r for r in case001_results if r.rule_id == "IO_002"]
+    assert io002 == [], f"IO_002 不应命中，实际 {len(io002)} 条"
+
+
+def test_execute_defect_rules_excludes_low(case001_defects):
+    """execute_defect_rules 只返回 medium/high/critical，不含 low。"""
+    for r in case001_defects:
+        assert r.severity in {"medium", "high", "critical"}, (
+            f"{r.rule_id} severity={r.severity} 不应出现在 defect 结果里"
+        )
+    # IO_001（low）不应出现
+    assert all(r.rule_id != "IO_001" for r in case001_defects), (
+        "IO_001（low）不应出现在 execute_defect_rules 结果里"
     )
 
 
@@ -220,7 +276,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=str(RULES_ROOT),
         help=f"rules 根目录（默认 {RULES_ROOT}）",
     )
-    parser.add_argument("--strict", action="store_true", help="IR 严格模式校验")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="（保留选项）当前 load_ir 不支持 strict；此选项不影响加载行为",
+    )
     return parser
 
 
@@ -239,17 +299,17 @@ def main() -> int:
         print(f"[FAIL] IR not found: {ir_path}", file=sys.stderr)
         return 1
 
-    try:
-        ir = load_ir(ir_path, strict=args.strict)
-    except TypeError:
-        # 兼容 load_ir(path) 旧签名
-        ir = load_ir(ir_path)
+    # 注：load_ir 当前不支持 strict 参数；
+    # --strict 选项保留是为了向后兼容 CLI，当前不影响行为。
+    ir = load_ir(ir_path)
 
     rules = load_rule_definitions(rules_root)
     print(f"[RuleEngine] case={args.case}")
     print(f"[RuleEngine] rules_loaded={[r.rule_id for r in rules]}")
 
     results = execute_all_rules(ir, rules_root)
+    defects = execute_defect_rules(ir, rules_root)
+
     print(f"[RuleEngine] applicable_hits={len(results)}")
     for r in results:
         print(
@@ -258,20 +318,20 @@ def main() -> int:
         )
 
     if args.case == "case001":
-        if len(results) < 2:
+        if len(defects) < 2:
             print(
-                f"[FAIL] case001 Rule Hit = {len(results)} < 2 (Sprint0 K7)",
+                f"[FAIL] case001 Rule Hit = {len(defects)} < 2 (Sprint0 K7)",
                 file=sys.stderr,
             )
             return 1
-        hit_ids = sorted({r.rule_id for r in results})
+        hit_ids = sorted({r.rule_id for r in defects})
         print(
-            f"[PASS] case001 Rule Hit = {len(results)} "
-            f"(>=2, Sprint0 K7), hit_ids={hit_ids}"
+            f"[PASS] case001 Rule Hit = {len(defects)} "
+            f"(>=2, Sprint0 K7, defects only), hit_ids={hit_ids}"
         )
         return 0
 
-    print(f"[OK] case={args.case} Rule Hit = {len(results)}")
+    print(f"[OK] case={args.case} Rule Hit (defects) = {len(defects)}")
     return 0
 
 

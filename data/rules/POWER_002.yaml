@@ -9,7 +9,7 @@ applicable_condition:
   scope: schematic
 
 check_logic:
-  function: "power_checks.check_reset_rc_topology"
+  function: "circuit_checks.check_reset_rc_topology"   # v1.0.1: 原 power_checks.check_reset_rc_topology
   params:
     reset_net: "RST"
     vcc_net: "VCC"
