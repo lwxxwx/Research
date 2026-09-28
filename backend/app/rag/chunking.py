@@ -29,8 +29,13 @@ v1.4 变更（豆包新优化 1 / 5 / 7）：
 - 优化 5：_hard_split 标点查找逻辑简化（单层 offset 遍历，遇标点即切）
 - 优化 7：Chunk dataclass 删除未使用 meta 字段；移除 field import
 
-v1.5 变更（豆包新优化 2）：
+v1.5 变更：
 - 优化 2：_hard_split 注释与循环语义显式对齐（说明 offset=0 检查 limit-1 位置）
+
+- _split_long_section 末尾新增短尾块并入逻辑：
+  最后一块 < EVIDENCE_MIN_LEN 且存在前一块时，并入前一块。
+  当前 EVIDENCE_MIN_LEN=10 下不触发；未来提高阈值时自动生效，
+  避免短尾块被 process_markdown_file_v2 过滤。
 
 对齐规范：
 - Sprint0 V1.2 §13 Phase H
@@ -100,6 +105,17 @@ def split_text_chunk(text: str, chunk_size: int, chunk_overlap: int) -> List[str
     Sprint-0 v1.0 简单固定字符分片
     ⚠️ deprecated：请使用 split_text_chunk_v2
 
+    输入 text、chunk_size、chunk_overlap
+    ↓ 打印DeprecationWarning废弃警告
+    ↓ 初始化 chunks=[], start=0, total_len=len(text)
+    ↓ while start < total_len:
+        ├─ end = start + chunk_size
+        ├─ seg = text[start:end]
+        ├─ append进chunks
+        └─ start += (chunk_size‑chunk_overlap)
+    ↓ 循环结束返回 chunks列表
+
+
     === 优化 4：deprecation 注释精确化 ===
     计划在 Sprint1 或后续大版本中删除；删除前将通过 changelog 提前公告
     """
@@ -152,6 +168,19 @@ def _split_by_h2(body: str, doc_section: str = "(untitled)") -> List[Tuple[str, 
     """
     按 ## 二级标题切分，返回 [(section_title, section_body), ...]
 
+    输入 body(md正文)、doc_section
+    ↓ finditer 找出全部 ## H2标题匹配对象 → matches
+    ├─ matches为空 → 返回 [(doc_section, body.strip())]
+    └─ 存在H2标题
+        ↓ parts = []
+        ↓ 如果第一个H2不在0位置，提取开头intro，非空则加入parts
+        ↓ for循环遍历每一个H2 match
+            ├─ title = 捕获的标题
+            ├─ start = 当前H2结尾
+            └─ end = 下一个H2开头 / 文档末尾
+            ↓ 切片取出章节内容strip，append(标题,内容)
+        ↓ return parts
+
     - 首个 ## 之前的内容（引言/文档标题）标记为文档级 section（优化 1）
     - 无 ## 时回落到文档级 section（M3.1 补丁）
     """
@@ -185,6 +214,19 @@ def _hard_split(text: str, limit: int) -> List[str]:
 
     仅用于「单个段落超过 limit 且无 \\n\\n 边界」的极端场景。
     优先在句号 / 感叹号 / 问号 / 分号 / 换行处切；若找不到边界，再按 limit 硬切。
+
+    输入 text, limit
+    ↓ if len(text) <= limit → return [text]
+    ↓ result=[], remaining=text
+    ↓ while len(remaining) > limit:
+        ├─ cut_pos = limit  # 默认硬切位置
+        ├─ for offset 向前最多回溯100字符:
+        │    └─ 如果命中标点 → 更新cut_pos，break
+        ├─ result.append(remaining[:cut_pos])
+        └─ remaining = remaining[cut_pos:]
+    ↓ while结束，remaining长度 ≤ limit
+    ↓ if remaining非空 → append进result
+    ↓ return result
 
     === 优化 5：简化标点查找逻辑 ===
     用单层 offset 遍历替代原「外层 punct + 内层 offset」的双层遍历。
@@ -223,8 +265,26 @@ def _hard_split(text: str, limit: int) -> List[str]:
 
 def _split_long_section(section: str, section_body: str, limit: int) -> List[Chunk]:
     """
+    
+    输入 section、section_body、limit
+    ↓ if len (section_body) <= limit → return [Chunk (...,False)]
+    ↓ has_code /has_table ?
+    └─True → return [完整章节 Chunk]
+    ↓ re.split 按空行拆分为段落列表 paragraphs
+    ↓ chunks=[], buf=""
+    ↓ for p in paragraphs:
+    ├─if len (p) > limit:
+    │   ├─ buf 非空 → 输出 buf 为 Chunk，清空 buf
+    │   ├─ _hard_split 切分 p 为 pieces
+    │   └─遍历 pieces 生成多个 Chunk（piece0=False，其余 True）
+    │   └─ continue
+    └─ p 本身不超长
+    ├─ if buf + p +2 <= limit: buf 拼接 "\n\n"+p
+    └─ else: 刷 buf 输出 Chunk；buf=p
+    ↓ for 结束，如果 buf 不为空输出最后一块 Chunk
+    ↓ return chunks
+    
     单章节超过 limit 时，按段落聚合拆分（M2 核心）
-
     - 段落边界：\\n\\n
     - 保护代码块与表格：如整体包含 ``` 或表格行，则整段不切（宁可超长）
     - ★ BUG2 修复：单个段落超 limit 时字符硬切兜底
@@ -282,6 +342,22 @@ def _split_long_section(section: str, section_body: str, limit: int) -> List[Chu
             text=buf,
             is_continuation=bool(chunks),
         ))
+    
+    # ★ 新增：末尾短尾块并入前一块，避免丢信息
+    # 逻辑：如果最后一块长度 < EVIDENCE_MIN_LEN 且前面还有块，
+    #      把最后一块并入前一块（可能超 chunk_size，但保证语义完整）
+    while (
+        len(chunks) >= 2
+        and len(chunks[-1].text.strip()) < EVIDENCE_MIN_LEN
+    ):
+        tail = chunks.pop()
+        prev = chunks[-1]
+        chunks[-1] = Chunk(
+            section=prev.section,
+            text=prev.text + "\n\n" + tail.text,
+            is_continuation=prev.is_continuation,
+        )
+
     return chunks
 
 
@@ -293,6 +369,17 @@ def split_text_chunk_v2(
 ) -> List[Chunk]:
     """
     v1.1/v1.3 语义优先切片（BUG1 修复版）
+
+    split_text_chunk_v2(text, chunk_size, doc_section)
+        ↓ chunks = []
+        ↓ 调用 _split_by_h2() → 按##切分成多个(section_title, section_body)
+        ↓ for循环遍历每一个章节
+                ├─ 如果section_body去掉空白为空 → continue跳过
+                └─ 调用 _split_long_section(章节名,章节正文,chunk_size)
+                        ↓ 内部：短直接返回；有代码/表格不切分；否则段落合并+_hard_split兜底切长段落
+                        ↓ 得到若干Chunk对象
+                        ↓ append加入总chunks列表
+        ↓ return chunks
 
     ★ BUG1 修复说明：
       本函数**不支持 overlap**。段落聚合的 chunk 边界已是语义完整单元，
@@ -349,7 +436,6 @@ def process_markdown_file(
     chunk_list = split_text_chunk(content_stripped, chunk_size, chunk_overlap)
     return meta, content, chunk_list
 
-
 def process_markdown_file_v2(
     file_path: pathlib.Path,
     chunk_size: int,
@@ -358,6 +444,7 @@ def process_markdown_file_v2(
 ) -> Tuple[Dict[str, Any], str, List[Chunk]]:
     """
     v1.1/v1.3 统一入口（推荐）
+
     :returns: (meta_dict, original_content_text, [Chunk, ...])
               Chunk.section 为 chunk 级 source_section（M3）
 
@@ -373,27 +460,21 @@ def process_markdown_file_v2(
             f"小于最小阈值 {EVIDENCE_MIN_LEN}，拒绝入库"
         )
 
-    # ★ BUG1 修复：不再传递 chunk_overlap
     chunks = split_text_chunk_v2(
         content_stripped,
         chunk_size,
-        # chunk_overlap,   # --- 原代码（保留，已弃用） ---
         doc_section=meta["source_section"],
     )
 
-    # 过滤过短碎片
+    # 过滤过短碎片（不做任何抢救合并）
     valid_chunks = [c for c in chunks if len(c.text.strip()) >= EVIDENCE_MIN_LEN]
 
-    # === 优化 6：异常信息附带每个 chunk 的长度列表 ===
+    # 异常信息附带每个 chunk 的长度列表
     if not valid_chunks:
         lengths = [len(c.text.strip()) for c in chunks]
         raise ValueError(
             f"[{file_path.name}] 切片后无有效 chunk "
             f"(全部 < {EVIDENCE_MIN_LEN} 字符)；chunk 长度列表: {lengths}"
         )
-        # --- 原内容（保留） ---
-        # raise ValueError(
-        #     f"[{file_path.name}] 切片后无有效 chunk（全部 < {EVIDENCE_MIN_LEN} 字符）"
-        # )
 
     return meta, content, valid_chunks

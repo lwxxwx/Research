@@ -1,6 +1,6 @@
 """
 tests/test_rag_seed.py
-Sprint-0 Phase-H v1.7 RAG Seed Knowledge 测试
+Sprint-0 Phase-H v1.8 RAG Seed Knowledge 测试
 
 v1.1 新增：
 - 语义切片边界测试（M2）
@@ -32,21 +32,22 @@ v1.6 新增（豆包轻微缺陷 1 / 2）：
 
 v1.7 变更（豆包方案 A）：
 - 方案 A.1：test_hard_split_choose_closest_punct_with_multiple 改用字符串全等断言
-             （蕴含 len == 20 与末位标点类型），与 near_limit 测试风格统一
-- 方案 A.2：新增 HARD_SPLIT_TOLERANCE 常量（=50），替代 +50 魔法数字；
-             说明当前 _hard_split 保证 <= limit，容差为防御性余量
+- 方案 A.2：新增 HARD_SPLIT_TOLERANCE 常量（=50），替代 +50 魔法数字
 - 方案 A.3：同步更新文件头部 v1.7 变更注释
+
+v1.8 变更（并入逻辑集成验证 + ingest 回归）：
+- 新增 test_process_v2_merges_short_tail_chunk 等 3 个并入逻辑集成测试
+- 新增 test_ingest_uses_embed_documents_not_embed_query 回归测试
+- test_split_v2_single_long_paragraph / test_split_v2_hard_split_section_preserved
+  加 monkeypatch 禁用并入，与全局 EVIDENCE_MIN_LEN 解耦
 
 约束：
 1. CI 默认 RAG_EMBEDDING_BACKEND=fake，不触网
 2. 纯解析逻辑为 pytest 用例；DB 读写标记 @pytest.mark.integration
 """
-# ★ 优化 4（v1.5）：删除未使用 import json
-# --- 原 import（保留，已删） ---
-# import json
-
 import pathlib
 import tempfile
+
 import pytest
 
 from app.services.benchmark_service import _evidence_is_complete, EVIDENCE_MIN_LEN
@@ -489,11 +490,6 @@ def test_hard_split_choose_closest_punct_with_multiple():
     # ★ 方案 A.1：字符串全等断言（蕴含 len == 20 与末位标点类型）
     assert pieces[0] == "A" * 15 + "！" + "A" * 3 + "。"
 
-    # --- 上一轮断言（保留，已弃用） ---
-    # assert len(pieces[0]) == 20
-    # assert pieces[0].endswith("。")
-    # assert not pieces[0].endswith("！")
-
 
 def test_hard_split_falls_back_when_no_punct_within_window():
     """
@@ -504,12 +500,17 @@ def test_hard_split_falls_back_when_no_punct_within_window():
     assert pieces[0] == "A" * 20
 
 
-def test_split_v2_single_long_paragraph():
+def test_split_v2_single_long_paragraph(monkeypatch):
     """
     BUG2：单段超长时字符硬切兜底
 
     ★ 方案 A.2（v1.7）：+50 抽为 HARD_SPLIT_TOLERANCE 常量
+    ★ v1.8：加 monkeypatch 禁用并入逻辑，稳定断言，与全局阈值解耦
     """
+    import app.rag.chunking as chunking_module
+    # 临时禁用并入：EVIDENCE_MIN_LEN=0，尾块长度 > 0 永不触发并入
+    monkeypatch.setattr(chunking_module, "EVIDENCE_MIN_LEN", 0)
+
     long_para = "这是一句完整的话。" * 200
     md = f"## Long Section\n{long_para}\n"
     chunks = split_text_chunk_v2(md, chunk_size=400)
@@ -520,15 +521,20 @@ def test_split_v2_single_long_paragraph():
         #   - 当前 _hard_split 保证 cut_pos ∈ [limit-99, limit]，每块 <= limit
         #   - HARD_SPLIT_TOLERANCE 为防御性余量
         assert len(c.text) <= 400 + HARD_SPLIT_TOLERANCE, f"chunk 超长: {len(c.text)}"
-        # --- 原断言（保留，已弃用） ---
-        # assert len(c.text) <= 400 + 50, f"chunk 超长: {len(c.text)}"
     assert chunks[0].is_continuation is False
     for c in chunks[1:]:
         assert c.is_continuation is True, f"续块 is_continuation 应为 True"
 
 
-def test_split_v2_hard_split_section_preserved():
-    """BUG2：硬切产生的所有块沿用同一 section"""
+def test_split_v2_hard_split_section_preserved(monkeypatch):
+    """
+    BUG2：硬切产生的所有块沿用同一 section
+
+    ★ v1.8：加 monkeypatch 禁用并入，稳定断言
+    """
+    import app.rag.chunking as chunking_module
+    monkeypatch.setattr(chunking_module, "EVIDENCE_MIN_LEN", 0)
+
     long_para = "这是一句完整的话。" * 200
     md = f"## Long Section\n{long_para}\n"
     chunks = split_text_chunk_v2(md, chunk_size=400)
@@ -608,6 +614,114 @@ BBB 内容。
 
 
 # ============================================================
+# v1.8 新增测试（并入前一块逻辑的集成验证）
+# ============================================================
+def test_process_v2_merges_short_tail_chunk(monkeypatch):
+    """
+    v1.5 并入逻辑集成验证：
+      通过 process_markdown_file_v2 入口，验证尾块 < EVIDENCE_MIN_LEN 时被并入前一块。
+
+    构造：
+      - 段落1：290 字符（接近 chunk_size=300）
+      - 段落2：5 字符（远 < EVIDENCE_MIN_LEN=10）
+    临时把 EVIDENCE_MIN_LEN 调到 20，触发并入。
+
+    预期：
+      - 尾块 5 < 20 被并入前一块
+      - 最终 1 个 chunk，长度 290 + 2 + 5 = 297
+    """
+    import app.rag.chunking as chunking_module
+    monkeypatch.setattr(chunking_module, "EVIDENCE_MIN_LEN", 20)
+
+    para1 = "甲" * 290
+    para2 = "乙" * 5
+    md = f"## Merge Test\n{para1}\n\n{para2}\n"
+
+    tmp = _make_md(md)
+    try:
+        _meta, _content, chunks = process_markdown_file_v2(tmp, chunk_size=300)
+        # 并入后只有 1 块
+        assert len(chunks) == 1, (
+            f"尾块 5 < 20 应并入前一块，实际 {len(chunks)} 块"
+        )
+        # 长度 = 290 + 2 + 5 = 297
+        assert len(chunks[0].text) == 297, (
+            f"并入后长度应为 297，实际 {len(chunks[0].text)}"
+        )
+        assert chunks[0].section == "Merge Test"
+        assert chunks[0].is_continuation is False
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def test_process_v2_no_merge_when_tail_above_threshold(monkeypatch):
+    """
+    v1.5 并入逻辑边界：
+      尾块 >= EVIDENCE_MIN_LEN 时不并入。
+
+    构造：
+      - 段落1：290 字符
+      - 段落2：15 字符
+    临时把 EVIDENCE_MIN_LEN 调到 10，尾块 15 >= 10，不并入。
+
+    预期：保持 2 块。
+    """
+    import app.rag.chunking as chunking_module
+    monkeypatch.setattr(chunking_module, "EVIDENCE_MIN_LEN", 10)
+
+    para1 = "甲" * 290
+    para2 = "乙" * 15
+    md = f"## No Merge Test\n{para1}\n\n{para2}\n"
+
+    tmp = _make_md(md)
+    try:
+        _meta, _content, chunks = process_markdown_file_v2(tmp, chunk_size=300)
+        assert len(chunks) == 2, (
+            f"尾块 15 >= 10 不应并入，实际 {len(chunks)} 块"
+        )
+        assert chunks[0].section == "No Merge Test"
+        assert chunks[1].section == "No Merge Test"
+        # 尾块标记续块
+        assert chunks[0].is_continuation is False
+        assert chunks[1].is_continuation is True
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def test_process_v2_merge_only_within_same_section(monkeypatch):
+    """
+    v1.5 并入逻辑边界：不同 section 不合并。
+
+    构造：
+      - Section A：280 字符
+      - Section B：50 字符（独立 section，长度 >= 阈值）
+    临时把 EVIDENCE_MIN_LEN 调到 20。
+
+    预期：Section A 1 块（280 >= 20）；Section B 1 块（50 >= 20）；
+         两块 section 不同，不合并。
+    """
+    import app.rag.chunking as chunking_module
+    monkeypatch.setattr(chunking_module, "EVIDENCE_MIN_LEN", 20)
+
+    md = (
+        f"## Section A\n{'A' * 280}\n\n"
+        f"## Section B\n{'B' * 50}\n"
+    )
+
+    tmp = _make_md(md)
+    try:
+        _meta, _content, chunks = process_markdown_file_v2(tmp, chunk_size=300)
+        a_chunks = [c for c in chunks if c.section == "Section A"]
+        b_chunks = [c for c in chunks if c.section == "Section B"]
+        assert len(a_chunks) == 1
+        assert len(b_chunks) == 1
+        assert a_chunks[0].text == "A" * 280
+        assert b_chunks[0].text == "B" * 50
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+# ============================================================
 # 集成测试（依赖 DB + 已 ingest）
 # ============================================================
 @pytest.mark.integration
@@ -669,3 +783,57 @@ def test_retriever_passes_is_continuation():
     for r in results:
         assert hasattr(r, "is_continuation")
         assert isinstance(r.is_continuation, bool)
+
+
+@pytest.mark.integration
+def test_ingest_uses_embed_documents_not_embed_query():
+    """
+    v1.5 BUG 修复回归：
+      验证 ingest_single_file 用 embed_documents，而不是 embed_query。
+
+    方法：
+      - 用 spy 包装 embedding client，记录调用次数
+      - 调用 ingest_single_file，写入一条测试数据
+      - 断言 embed_documents 被调用、embed_query 未被调用
+
+    注意：
+      - 标记 integration，会写库（每次运行新增一条 doc/chunk）
+      - 仅适用于 dev/test 环境
+    """
+    from app.rag import ingest as ingest_module
+
+    md_content = """---
+source_type: datasheet
+source_title: embed method regression test
+source_section: test section
+part_numbers: ["T1"]
+related_rule_ids: ["R1"]
+---
+这是一段足够长的测试正文，用于触发切片逻辑并验证 embedding 方法。
+补充文字使其超过最小长度阈值，确保切片器产出至少一个有效 chunk。
+"""
+    tmp = _make_md(md_content)
+    try:
+        real_client = get_embedding_client()
+        call_log = {"embed_documents": 0, "embed_query": 0}
+
+        class SpyEmbedding:
+            def embed_documents(self, texts):
+                call_log["embed_documents"] += 1
+                return real_client.embed_documents(texts)
+
+            def embed_query(self, text):
+                call_log["embed_query"] += 1
+                return real_client.embed_query(text)
+
+        with get_db_session() as db:
+            ingest_module.ingest_single_file(db, tmp, SpyEmbedding())
+
+        assert call_log["embed_documents"] >= 1, (
+            "ingest_single_file 应调用 embed_documents"
+        )
+        assert call_log["embed_query"] == 0, (
+            "ingest_single_file 不应调用 embed_query"
+        )
+    finally:
+        tmp.unlink(missing_ok=True)

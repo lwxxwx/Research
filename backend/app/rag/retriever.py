@@ -2,6 +2,12 @@
 app/rag/retriever.py
 Sprint-0 v1.5 RAG 检索器
 
+ 用 embedding 工厂 + SQLAlchemy 2.0 方法链 + pgvector 余弦距离 从 DB 捞候选，
+ 用 joinedload 消除 N+1、过采样 + 集合交集过滤 精选结果，
+ 用 _as_dict 四层 fallback + 限流告警 兜住 JSONB 边界，用 assert 哨兵
+ 守护数据完整性，最终组装成 RetrievalResult 返回——是一个防御式编程 + 性能优化并重的检索实现。
+
+
 v1.1 变更：
 - M4：joinedload(KnowledgeChunk.doc) 消除 N+1 查询
 - M5：dict(meta_raw) 替代 dict(meta_raw.items())
