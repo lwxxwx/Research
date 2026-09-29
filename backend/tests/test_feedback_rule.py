@@ -8,15 +8,32 @@ Phase-I Feedback & RuleCandidate集成测试
 4. knowledge_gap导出backlog JSON
 5. rule_candidate草稿YAML语法可解析（仅语法校验，不跑benchmark）
 标记@pytest.mark.integration，依赖真实PostgreSQL；CI单元模式-m "not integration"跳过
+
+v1.1 变更（schema v1.1 强类型对齐）：
+- ★ rule_candidate 从 dict 改为 RuleCandidate 强类型（schema v1.1 改进 4）
+- ★ 新增 test_feedback_out_created_at_is_datetime（schema v1.1 改进 2）
+- ★ 删除对 "AUTO-GENERATED DRAFT RULE CANDIDATE" 硬编码字符串的断言
+- ★ import 增加 RuleCandidate
+
+v1.2 变更（RuleCandidate 字段集对齐）：
+- ★ RuleCandidate 字段集从 5 扩到 11（对齐 rule_format.md + models.py）
+  - rule_text → rule_name（改名）
+  - rationale → rule_basis（改名）
+  - 新增 category 必填、applicable_condition、check_logic、suggestion、
+        title、description、evidence_refs
+- ★ 更新 test_feedback_false_negative_generate_candidate 的 RuleCandidate 构造
+- ★ 更新 test_feedback_new_rule_candidate_generate_candidate 的 RuleCandidate 构造
+- ★ 补字段集完整传递断言（验证 rule_name/rule_basis/suggestion/check_logic/
+  evidence_refs 都进 proposed_yaml；验证 ORM 冗余字段 title/description/evidence_refs）
 """
 import json
 import pytest
 import yaml
 from sqlalchemy.orm import Session
-from app.schemas.feedback import FeedbackCreate, FeedbackType, SuggestionDiff
+from app.schemas.feedback import FeedbackCreate, FeedbackType, SuggestionDiff, RuleCandidate
 from app.services.feedback_service import FeedbackService
 from app.services.rule_evolution_service import RuleEvolutionService
-from app.persistence.models import FeedbackItem, RuleCandidate, ReviewResult, ReviewDefect
+from app.persistence.models import FeedbackItem, RuleCandidate as RuleCandidateORM, ReviewResult, ReviewDefect
 
 
 @pytest.fixture(scope="function")
@@ -100,7 +117,7 @@ def test_feedback_correct_defect_no_candidate(pg_session: Session, feedback_test
     assert out.id > 0
     assert out.feedback_type == FeedbackType.CORRECT_DEFECT
     assert out.rule_candidate_ref is None
-    cnt = pg_session.query(RuleCandidate).filter(RuleCandidate.from_feedback_id == out.id).count()
+    cnt = pg_session.query(RuleCandidateORM).filter(RuleCandidateORM.from_feedback_id == out.id).count()
     assert cnt == 0
 
 
@@ -118,7 +135,7 @@ def test_feedback_false_positive_no_candidate(pg_session: Session, feedback_test
     )
     out = svc.submit_feedback(pg_session, fb_in)
     assert out.rule_candidate_ref is None
-    assert pg_session.query(RuleCandidate).filter(RuleCandidate.from_feedback_id == out.id).count() == 0
+    assert pg_session.query(RuleCandidateORM).filter(RuleCandidateORM.from_feedback_id == out.id).count() == 0
 
 
 @pytest.mark.integration
@@ -138,7 +155,7 @@ def test_feedback_suggestion_update_no_candidate(pg_session: Session, feedback_t
     assert len(out.suggestion_diff) == 1
     assert out.suggestion_diff[0].old == "旧建议"
     assert out.rule_candidate_ref is None
-    assert pg_session.query(RuleCandidate).filter(RuleCandidate.from_feedback_id == out.id).count() == 0
+    assert pg_session.query(RuleCandidateORM).filter(RuleCandidateORM.from_feedback_id == out.id).count() == 0
 
 
 @pytest.mark.integration
@@ -146,18 +163,55 @@ def test_feedback_false_negative_generate_candidate(pg_session: Session, feedbac
     """TC-I-4 false_negative → 自动生成proposed rule_candidate草稿"""
     rr_id, rd_id = feedback_test_fixture
     svc = FeedbackService()
-    hint = {
-        "title": "漏检-电源去耦候选",
-        "severity": "high",
-        "evidence_refs": [
+
+    # ★ v1.2：RuleCandidate 字段集对齐（11 字段）
+    # --- 原代码（保留，已弃用） ---
+    # hint = {
+    #     "title": "漏检-电源去耦候选",
+    #     "severity": "high",
+    #     "evidence_refs": [
+    #         {
+    #             "source_type": "datasheet",
+    #             "source": "MP2307.pdf",
+    #             "section": "p6",
+    #             "reason": "MP2307 datasheet p6 明确建议 VCC 引脚附近增加 100nF 去耦电容"
+    #         }
+    #     ]
+    # }
+    # --- v1.1 版本（保留，已弃用） ---
+    # hint = RuleCandidate(
+    #     rule_id="POWER_DECOUP_001",
+    #     rule_text="VCC 引脚附近应增加 100nF 去耦电容（MP2307 datasheet p6 建议）",
+    #     severity="high",
+    #     category="power",
+    #     rationale="漏检-电源去耦候选；来源：MP2307 datasheet p6",
+    # )
+    hint = RuleCandidate(
+        rule_id="POWER_DECOUP_001",
+        rule_name="VCC 引脚附近应增加 100nF 去耦电容",             # ★ 改名：原 rule_text
+        category="power",
+        severity="high",
+        rule_basis="漏检-电源去耦候选；来源：MP2307 datasheet p6",  # ★ 改名：原 rationale
+        # ★ 新增：验证字段集完整传递
+        suggestion="建议在 VCC 引脚 5mm 内增加 0.1μF X7R 陶瓷电容到 GND",
+        applicable_condition={"scope": "schematic"},
+        check_logic={
+            "function": "circuit_checks.check_decoupling",
+            "params": {
+                "power_net_names": ["VCC"],
+                "decouple_cap_value_expected": "0.1μF",
+            },
+        },
+        evidence_refs=[
             {
-                "source_type": "datasheet",
                 "source": "MP2307.pdf",
                 "section": "p6",
-                "reason": "MP2307 datasheet p6 明确建议 VCC 引脚附近增加 100nF 去耦电容"
+                "reason": "MP2307 datasheet p6 明确建议 VCC 引脚附近增加 100nF 去耦电容",
             }
-        ]
-    }
+        ],
+        title="漏检-电源去耦候选",
+        description="由 false_negative 反馈自动生成",
+    )
     fb_in = FeedbackCreate(
         review_result_id=rr_id,
         review_defect_id=rd_id,
@@ -169,16 +223,34 @@ def test_feedback_false_negative_generate_candidate(pg_session: Session, feedbac
     out = svc.submit_feedback(pg_session, fb_in)
     cand_ref = out.rule_candidate_ref
     assert cand_ref is not None
-    rc: RuleCandidate = pg_session.query(RuleCandidate).filter(RuleCandidate.candidate_id == cand_ref).first()
+    rc: RuleCandidateORM = pg_session.query(RuleCandidateORM).filter(RuleCandidateORM.candidate_id == cand_ref).first()
     assert rc is not None
     assert rc.from_feedback_id == out.id
     assert rc.status == "proposed"
     assert rc.severity == "high"
-    assert "AUTO-GENERATED DRAFT RULE CANDIDATE" in rc.proposed_yaml
+
+    # ★ 删除硬编码字符串断言，仅保留结构化断言
+    # --- 原代码（保留，已弃用） ---
+    # assert "AUTO-GENERATED DRAFT RULE CANDIDATE" in rc.proposed_yaml
+
     # 校验草稿YAML语法合法（仅语法，不执行）
     parsed = yaml.safe_load(rc.proposed_yaml)
     assert parsed["rule_id"] is not None
     assert parsed["severity"] == "high"
+
+    # ★ v1.2：验证字段集完整传递（rule_candidate → proposed_yaml）
+    assert parsed["rule_id"] == "POWER_DECOUP_001"
+    assert parsed["rule_name"] == "VCC 引脚附近应增加 100nF 去耦电容"
+    assert "MP2307" in parsed["rule_basis"]
+    assert "0.1μF X7R" in parsed["suggestion"]
+    assert parsed["check_logic"]["function"] == "circuit_checks.check_decoupling"
+
+    # ★ v1.2：验证 ORM 冗余字段（title / description / evidence_refs）
+    assert rc.title == "漏检-电源去耦候选"
+    assert rc.description == "由 false_negative 反馈自动生成"
+    assert rc.evidence_refs is not None
+    assert len(rc.evidence_refs) == 1
+    assert rc.evidence_refs[0]["source"] == "MP2307.pdf"
 
 
 @pytest.mark.integration
@@ -186,19 +258,41 @@ def test_feedback_new_rule_candidate_generate_candidate(pg_session: Session, fee
     """TC-I-5 new_rule_candidate反馈生成候选草稿"""
     rr_id, rd_id = feedback_test_fixture
     svc = FeedbackService()
+
+    # ★ v1.2：RuleCandidate 字段集对齐（11 字段）
+    # --- 原代码（保留，已弃用） ---
+    # rule_candidate={"title":"专家提交时钟规则草稿","severity":"medium"}
+    # --- v1.1 版本（保留，已弃用） ---
+    # rule_candidate=RuleCandidate(
+    #     rule_id="CLOCK_001",
+    #     rule_text="时钟走线需满足阻抗与长度匹配要求",
+    #     severity="medium",
+    #     category="clock",
+    # ),
     fb_in = FeedbackCreate(
         review_result_id=rr_id,
         review_defect_id=rd_id,
         feedback_type=FeedbackType.NEW_RULE_CANDIDATE,
         expert_suggestion="专家直接提交新规则候选",
-        rule_candidate={"title":"专家提交时钟规则草稿","severity":"medium"},
+        rule_candidate=RuleCandidate(
+            rule_id="CLOCK_001",
+            rule_name="时钟走线需满足阻抗与长度匹配要求",        # ★ 改名：原 rule_text
+            category="clock",
+            severity="medium",
+            rule_basis="专家经验：高速时钟走线需控制阻抗",        # ★ 新增
+        ),
         created_by=None
     )
     out = svc.submit_feedback(pg_session, fb_in)
     assert out.rule_candidate_ref is not None
-    rc = pg_session.query(RuleCandidate).filter(RuleCandidate.candidate_id == out.rule_candidate_ref).first()
+    rc = pg_session.query(RuleCandidateORM).filter(RuleCandidateORM.candidate_id == out.rule_candidate_ref).first()
     assert rc.status == "proposed"
-    assert yaml.safe_load(rc.proposed_yaml) is not None
+    parsed = yaml.safe_load(rc.proposed_yaml)
+    assert parsed is not None
+
+    # ★ v1.2：验证字段集完整传递
+    assert parsed["rule_id"] == "CLOCK_001"
+    assert parsed["rule_name"] == "时钟走线需满足阻抗与长度匹配要求"
 
 
 @pytest.mark.integration
@@ -235,7 +329,7 @@ def test_feedback_knowledge_gap_backlog_export(pg_session: Session, feedback_tes
     out_file = tmp_path / "knowledge_gap_backlog.json"
     rev.export_knowledge_gap_backlog(pg_session, str(out_file))
     data = json.loads(out_file.read_text(encoding="utf-8"))
-    assert len(data) >=2
+    assert len(data) >= 2
     assert any("MP2307热降额" in x["expert_suggestion"] for x in data)
 
 
@@ -257,4 +351,27 @@ def test_rule_evolution_list_candidates(pg_session: Session, feedback_test_fixtu
     ids = [x["candidate_id"] for x in lst]
     assert out.rule_candidate_ref in ids
     empty = rev.list_candidates(pg_session, status="accepted")
-    assert len(empty) ==0
+    assert len(empty) == 0
+
+
+# ============================================================
+# ★ v1.1 新增：schema v1.1 改进 2 回归测试
+# FeedbackOut.created_at 类型断言
+# ============================================================
+@pytest.mark.integration
+def test_feedback_out_created_at_is_datetime(pg_session: Session, feedback_test_fixture):
+    """schema v1.1：FeedbackOut.created_at 类型为 datetime"""
+    from datetime import datetime
+    rr_id, rd_id = feedback_test_fixture
+    svc = FeedbackService()
+    fb_in = FeedbackCreate(
+        review_result_id=rr_id,
+        review_defect_id=rd_id,
+        feedback_type=FeedbackType.CORRECT_DEFECT,
+        expert_suggestion="created_at 类型检查",
+        created_by=None,
+    )
+    out = svc.submit_feedback(pg_session, fb_in)
+    assert isinstance(out.created_at, datetime), (
+        f"created_at 应为 datetime，实际 {type(out.created_at)}"
+    )
