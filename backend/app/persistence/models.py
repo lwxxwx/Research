@@ -177,6 +177,25 @@ class ReviewDefect(Base):
 # ============================================================
 # 9. FeedbackItem（增强：关联 review_defect）
 # ===== ✅ MODIFIED Sprint0 Phase‑I：对齐002_schema.sql全部字段 =====
+#
+# ⚠️ 待解决问题（Sprint 1，不是 Sprint 0 阻塞项）：
+#
+# 问题 1：FeedbackItem.rule_candidate_ref 无 DB 外键约束
+#   - 该列是普通 String(64)，仅存 RuleCandidate.candidate_id 字符串
+#   - 若 RuleCandidate 记录被删除，FeedbackItem.rule_candidate_ref 会残留
+#     悬空 candidate_id 字符串，DB 不校验
+#   - 建议（Sprint 1）：
+#       RuleEvolutionService.delete_candidate() 中先反向更新
+#       FeedbackItem.rule_candidate_ref = NULL，再 db.delete(rc)
+#
+# 问题 2：review_result_id / review_defect_id 均使用 ondelete="CASCADE"
+#   - 删除 ReviewResult → 关联 FeedbackItem 级联删除（业务上可能合理）
+#   - 删除 ReviewDefect → 关联 FeedbackItem 级联删除（业务上需评估）
+#   - 若 FeedbackItem 只应依附 ReviewResult、不应依附 ReviewDefect，
+#     则 review_defect_id 的 ondelete 应改为 "SET NULL"
+#   - 待 Sprint 1 明确业务语义后决定
+# ============================================================
+class FeedbackItem(Base):
 class FeedbackItem(Base):
     __tablename__ = "feedback_item"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)

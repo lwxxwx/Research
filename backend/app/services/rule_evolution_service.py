@@ -86,6 +86,22 @@ enabled: true
 
 
 class RuleEvolutionService:
+    """
+    ⚠️ 待解决问题（Sprint 1，不是 Sprint 0 阻塞项）：
+
+    delete_candidate 方法缺失
+      - 当前无「物理删除 RuleCandidate」的对外方法
+      - 若未来直接 db.delete(rc)，会残留 FeedbackItem.rule_candidate_ref
+        悬空字符串（该列无 DB 外键约束）
+      - 建议（Sprint 1）新增 delete_candidate(db, candidate_id, commit=True)：
+          1) 查候选，不存在抛 RuleCandidateNotFoundError
+          2) db.query(FeedbackItem).filter(
+                 FeedbackItem.rule_candidate_ref == candidate_id
+             ).update({FeedbackItem.rule_candidate_ref: None},
+                      synchronize_session="fetch")
+          3) db.delete(rc)
+          4) commit 由参数控制（与 submit_feedback 保持一致）
+    """
     def generate_candidate_from_feedback(
         self,
         db: Session,
