@@ -17,7 +17,9 @@ comment_by(字符串用户名) → ORM created_by 存users.id(int主键)
 v1.1 变更（改进点，逻辑与参数保持不变）：
 - ★ 改进 1：新增 FeedbackServiceError / FeedbackNotFoundError 异常类
             替换裸 ValueError（保留兼容：仍继承 ValueError，旧调用方 except ValueError 不受影响）
-- ★ 改进 2：db.scalar → db.scalar_one_or_none（更严格：多行时抛错，而非静默取首行）
+- ★ 改进 2：db.scalar → db.execute(select(...)).scalar_one_or_none()
+            （更严格：多行时抛错，而非静默取首行；
+             Session 无 scalar_one_or_none，必须链式调用 Result 上的方法）
 - ★ 改进 3：__init__ 支持依赖注入（rule_evolution 可选传入），默认行为不变
 - ★ 改进 4：加 logger，在关键节点打印日志（提交、外键校验失败、规则候选生成、完成）
 - ★ 改进 5：新增内部辅助方法 _validate_refs / _build_orm / _dispatch_evolution / _build_out
@@ -34,10 +36,12 @@ feedback_in (FeedbackCreate), commit (bool, 默认 True)
 ★ 改进 4：logger.info 入口日志（review_result_id / review_defect_id / feedback_type）
     ↓
 [1] _validate_refs(db, feedback_in)
-    ├─ ★ 改进 2：db.scalar_one_or_none（多行抛错）
+    ├─ ★ 改进 2：db.execute(select(...)).scalar_one_or_none()
+    │            （Session 无 scalar_one_or_none；必须链式调用 Result 上的方法）
     ├─ 查 ReviewResult（by review_result_id）
     ├─ 查 ReviewDefect（by review_defect_id）
     ├─ ★ 改进 1：不存在 → 抛 FeedbackNotFoundError（继承 ValueError）
+    │            同时 logger.warning
     └─ 返回 (review_result, review_defect)
     ↓
 [2] _build_orm(feedback_in)
@@ -53,7 +57,11 @@ feedback_in (FeedbackCreate), commit (bool, 默认 True)
 [3] _dispatch_evolution(db, feedback_id, feedback_in, db_feedback)
     ├─ if feedback_type in (FALSE_NEGATIVE, NEW_RULE_CANDIDATE):
     │   ├─ ★ 改进 4：logger.info「触发规则候选生成」
-    │   ├─ candidate_ref = rule_evolution.generate_candidate_from_feedback(...)
+    │   ├─ ★ v1.2：hint_payload = rule_candidate.model_dump()
+    │   │           （RuleCandidate Pydantic 对象 → dict）
+    │   │           rule_candidate 为 None 时 → hint_payload = None
+    │   ├─ candidate_ref = rule_evolution.generate_candidate_from_feedback(
+    │   │                       db, feedback_id, case_id=None, hint_payload=...)
     │   ├─ db_feedback.rule_candidate_ref = candidate_ref
     │   └─ db.flush()
     └─ else: candidate_ref = None（跳过）
@@ -77,11 +85,19 @@ feedback_in (FeedbackCreate), commit (bool, 默认 True)
     ├─ suggestion_diff ← [SuggestionDiff(**x) for x in suggestion_diff_json]
     ├─ rule_candidate_ref ← db_feedback.rule_candidate_ref
     ├─ created_by ← db_feedback.created_by
-    └─ created_at ← db_feedback.created_at.isoformat() if ... else ""
+    └─ ★ schema v1.1：created_at ← db_feedback.created_at（datetime，直接传）
     ↓
 return FeedbackOut
 
--待解决问题：RuleCandidate 字段与 rule_evolution 期望不一致，字段没有对齐。
+- 已解决（v1.2 / v1.3）：
+    - RuleCandidate 字段集已对齐 rule_format.md（Rule YAML Format v1.0）
+      和 models.py 的 RuleCandidate ORM：5 → 11 字段
+    - rule_text → rule_name；rationale → rule_basis
+    - 新增 category（必填）/ applicable_condition / check_logic / suggestion
+      / title / description / evidence_refs
+    - rule_evolution_service 的 hint.get(k, default) → hint.get(k) or default
+      （修复 evidence_refs=None 导致 enumerate(None) / ORM NOT NULL 违反）
+    - feedback_service._dispatch_evolution 已传 rule_candidate.model_dump()
 """
 from typing import Optional  # noqa: F401  # ★ 改进 7：保留旧 import 兼容，新代码用 X | None
 
@@ -116,6 +132,19 @@ class FeedbackNotFoundError(FeedbackServiceError):
 
 
 class FeedbackService:
+    """
+    ⚠️ 待解决问题（Sprint 1，不是 Sprint 0 阻塞项）：
+
+    1. FeedbackItem.rule_candidate_ref 与 RuleCandidate 之间无 DB 外键约束
+       - 详见 app/persistence/models.py FeedbackItem 类注释
+       - 删除候选需先清 FeedbackItem.rule_candidate_ref（Sprint 1 实现）
+
+    2. FeedbackItem 的 review_defect_id 使用 ondelete="CASCADE"
+       - 删除 ReviewDefect 会连带删除 FeedbackItem
+       - 待 Sprint 1 明确业务语义后决定是否改为 "SET NULL"
+
+    详见 app/persistence/models.py 对应类注释。
+    """
     # ★ 改进 3：__init__ 支持依赖注入（默认行为不变）
     # ------------------------------------------------------------
     # 原代码：
@@ -126,6 +155,7 @@ class FeedbackService:
     #     - 新代码允许外部传入（便于 mock、复用、控制生命周期）
     #     - 不传时行为完全一致
     # ------------------------------------------------------------
+    
     def __init__(self, rule_evolution: "RuleEvolutionService | None" = None):
         # --- 原代码（保留，已弃用） ---
         # self.rule_evolution = RuleEvolutionService()
@@ -378,7 +408,9 @@ class FeedbackService:
                 db=db,
                 feedback_id=feedback_id,
                 case_id=None,
-                # ★ v1.1：RuleCandidate（Pydantic）→ dict，兼容 rule_evolution_service 旧接口
+                # ★ v1.2：RuleCandidate（Pydantic）→ dict，
+                # 字段集已与 rule_evolution_service 期望的 key 对齐（11 字段）
+                # 无需字段名映射
                 # --- 原代码（保留，已弃用） ---
                 # hint_payload=feedback_in.rule_candidate,
                 hint_payload=(

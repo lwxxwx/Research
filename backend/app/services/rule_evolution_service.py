@@ -1,10 +1,10 @@
 # backend/app/services/rule_evolution_service.py
 """
-Phase‑I RuleEvolutionService
-Sprint‑0边界：
+Phase-I RuleEvolutionService
+Sprint-0边界：
 1. 仅生成proposed状态rule_candidate YAML草稿；草稿**禁止直接合并正式rules库**；
 2. 草稿必须人工编辑，候选规则benchmark校验逻辑放到Sprint‑1；
-3. 提供CLI：list / export‑yaml / export‑knowledge‑gap
+3. 提供CLI：list / export-yaml / export-knowledge-gap
 
 ⚠️重要：
 1. FeedbackItem没有task_id/defect_id字段！
@@ -31,7 +31,7 @@ from app.persistence.models import RuleCandidate, FeedbackItem, ReviewResult, Re
 
 
 def _make_candidate_id() -> str:
-    """生成候选规则ID RC‑YYYYMMDD‑001"""
+    """生成候选规则ID RC‑YYYYMMDD‑XXXXXX（6 位大写 hex）"""
     ts = datetime.now().strftime("%Y%m%d")
     suffix = uuid.uuid4().hex[:6].upper()
     return f"RC‑{ts}‑{suffix}"
@@ -116,10 +116,17 @@ class RuleEvolutionService:
         # evidence_refs = hint_payload.get("evidence_refs", []) if hint_payload else []
         evidence_refs = _hint.get("evidence_refs") or []
         for idx, e in enumerate(evidence_refs):
-            assert "source" in e, f"evidence_refs[{idx}] 缺失必填字段 source"
-            assert "section" in e, f"evidence_refs[{idx}] 缺失必填字段 section"
-            assert "reason" in e, f"evidence_refs[{idx}] 缺失必填字段 reason"
-
+            # ★ 用 raise 替代 assert，避免 python -O 跳过校验
+            # --- 原代码（保留，已弃用） ---
+            # assert "source" in e, f"evidence_refs[{idx}] 缺失必填字段 source"
+            # assert "section" in e, f"evidence_refs[{idx}] 缺失必填字段 section"
+            # assert "reason" in e, f"evidence_refs[{idx}] 缺失必填字段 reason"
+            if "source" not in e:
+                raise ValueError(f"evidence_refs[{idx}] 缺失必填字段 source")
+            if "section" not in e:
+                raise ValueError(f"evidence_refs[{idx}] 缺失必填字段 section")
+            if "reason" not in e:
+                raise ValueError(f"evidence_refs[{idx}] 缺失必填字段 reason")
         # 关键修复：彻底移除 task_id 参数！rule_candidates表没有task_id列
         # --- 原代码（保留，已弃用） ---
         # rc = RuleCandidate(
@@ -171,7 +178,14 @@ class RuleEvolutionService:
         rc: Optional[RuleCandidate] = db.query(RuleCandidate).filter(RuleCandidate.candidate_id == candidate_id).first()
         if rc is None:
             raise ValueError(f"rule_candidate candidate_id={candidate_id} not found")
-        Path(out_path).write_text(rc.proposed_yaml, encoding="utf‑8")
+        p = Path(out_path)
+        # 自动创建父文件夹
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # 可选：禁止覆盖已有文件
+        if p.exists():
+            raise FileExistsError(f"File {out_path} already exists, refuse overwrite.")
+        # 写入文件
+        p.write_text(rc.proposed_yaml, encoding="utf-8")
 
     def export_knowledge_gap_backlog(self, db: Session, out_path: str | Path) -> None:
         """导出feedback_item中feedback_type=knowledge_gap全部记录作为知识缺口backlog"""
@@ -192,41 +206,55 @@ class RuleEvolutionService:
                 "expert_suggestion": fb.expert_suggestion,
                 "created_at": fb.created_at.isoformat() if fb.created_at else None
             })
-        Path(out_path).write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf‑8")
-
+        p = Path(out_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists():
+            raise FileExistsError(f"File {out_path} already exists, refuse overwrite.")
+        p.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 if __name__ == "__main__":
-    """CLI入口，供demo脚本调用"""
+    # CLI入口，供demo脚本调用
     import argparse
+    import sys
     from app.persistence.db import get_db_session
+
     svc = RuleEvolutionService()
-    parser = argparse.ArgumentParser(description="RuleEvolutionService CLI Sprint‑0")
-    parser.add_argument("--list", action="store_true", help="list rule_candidate，默认status=proposed")
+    parser = argparse.ArgumentParser(description="RuleEvolutionService CLI Sprint-0")
+
+    # ★ 主操作互斥：--list / --export-yaml / --export-knowledge-gap 三选一
+    group = parser.add_mutually_exclusive_group(required=False)
+    group.add_argument("--list", action="store_true", help="list rule_candidate，默认status=proposed")
+    group.add_argument("--export-yaml", help="export candidate yaml, require --candidate-id", metavar="OUT_YAML_PATH")
+    group.add_argument("--export-knowledge-gap", help="export knowledge_gap backlog json output path")
+
+    # ★ 修饰参数（不属于互斥组）
     parser.add_argument("--status", default="proposed")
     parser.add_argument("--output-json", help="list结果写入指定json文件（容器内路径，避免docker stdout管道乱码）")
-    parser.add_argument("--export-yaml", help="export candidate yaml, require candidate-id")
-    parser.add_argument("--candidate-id")
-    parser.add_argument("--export-knowledge-gap", help="export knowledge_gap backlog json output path")
-    args = parser.parse_args()
+    parser.add_argument("--candidate-id", help="rule candidate id，配合--export-yaml使用")
 
-    with get_db_session() as db:
-        if args.list:
-            data = svc.list_candidates(db, status=args.status)
-            if args.output_json:
-                # ✅容器内部直接写文件，不打印stdout！规避Windows docker exec管道编码损坏
-                import json
-                with open(args.output_json, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                print(f"✅ list candidate写入文件: {args.output_json}")
+    args = parser.parse_args()
+    try:
+        with get_db_session() as db:
+            if args.list:
+                data = svc.list_candidates(db, status=args.status)
+                if args.output_json:
+                    import json
+                    with open(args.output_json, "w", encoding="utf-8") as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2)
+                    print(f"✅ list candidate写入文件: {args.output_json}")
+                else:
+                    print(json.dumps(data, indent=2, ensure_ascii=False))
+            elif args.export_yaml:
+                if not args.candidate_id:
+                    raise RuntimeError("--export-yaml必须传--candidate-id")
+                svc.export_candidate_yaml(db, args.candidate_id, args.export_yaml)
+                print(f"✅ export candidate yaml → {args.export_yaml}")
+            elif args.export_knowledge_gap:
+                svc.export_knowledge_gap_backlog(db, args.export_knowledge_gap)
+                print(f"✅ export knowledge-gap backlog → {args.export_knowledge_gap}")
             else:
-                print(json.dumps(data, indent=2, ensure_ascii=False))
-        elif args.export_yaml:
-            if not args.candidate_id:
-                raise RuntimeError("--export-yaml必须传--candidate-id")
-            svc.export_candidate_yaml(db, args.candidate_id, args.export_yaml)
-            print(f"✅ export candidate yaml → {args.export_yaml}")
-        elif args.export_knowledge_gap:
-            svc.export_knowledge_gap_backlog(db, args.export_knowledge_gap)
-            print(f"✅ export knowledge-gap backlog → {args.export_knowledge_gap}")
-        else:
-            parser.print_help()
+                parser.print_help()
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        # ★ sys.exit 而非 exit
+        sys.exit(1)

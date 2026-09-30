@@ -244,6 +244,7 @@ class KnowledgeChunk(Base):
 # ============================================================
 # 12. RuleCandidate（P1，Sprint‑1业务使用）
 # ===== ✅ MODIFIED Sprint0 Phase‑I：对齐002_schema.sql触发器、时区字段 =====
+# ===== ✅注意：数据库表名是复数 rule_candidates，不是 rule_candidate =====
 class RuleCandidate(Base):
     __tablename__ = "rule_candidates"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)

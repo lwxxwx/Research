@@ -1,0 +1,56 @@
+chore(rag,scripts): Sprint-0 Phase-I polish + add init_db.ps1 wrapper
+
+## services/rule_evolution_service.py (v1.3)
+- Replace all hint.get(k, default) with hint.get(k) or default
+  * Handles "key exists but value is None" (RuleCandidate optional fields)
+  * Fixes TypeError: 'NoneType' object is not iterable when evidence_refs=None
+- Replace evidence_refs assert checks with explicit if/raise ValueError
+  * assert is skipped under `python -O`; validation must not be silent-skipped
+- Fix encoding="utf‑8" -> "utf-8"
+  * U+2011 (non-breaking hyphen) caused LookupError: unknown encoding
+  * Affected: export_candidate_yaml, export_knowledge_gap_backlog
+- CLI (__main__): restructure with mutually_exclusive_group and try/except
+  * --list / --export-yaml / --export-knowledge-gap are mutually exclusive
+  * --candidate-id moved to modifiers with help text
+  * use sys.exit(1) instead of exit(1)
+  * """...""" -> # comment
+  * description: "Sprint-0" ASCII hyphen
+
+## services/feedback_service.py (comment-only)
+- Update "v1.1 变更" note: 改进 2 now correctly describes
+  db.execute(select(...)).scalar_one_or_none() (Session has no such method)
+- _validate_refs docstring: same clarification; keep intermediate v1.1 version
+  in comments marked as deprecated
+- File footer: replace "待解决问题" with "已解决 (v1.2 / v1.3)" summary
+- No behavior change; code body untouched
+
+## schemas/feedback.py
+- RuleCandidate.evidence_refs defaults to Field(default_factory=list)
+  * Aligns with ORM server_default="[]"
+  * Avoids downstream None iteration
+
+## tests/test_feedback_rule.py (v1.2)
+- Update RuleCandidate construction in two tests to 11-field schema
+  * rule_text -> rule_name; rationale -> rule_basis
+  * add suggestion / applicable_condition / check_logic / evidence_refs
+    / title / description
+- Add assertions verifying field propagation into proposed_yaml and
+  ORM columns (title / description / evidence_refs)
+
+## scripts/init_db.ps1 (new)
+- One-command wrapper around:
+    docker compose exec backend uv run python -m scripts.init_db
+- Responsibilities:
+  * Locate project root via $PSScriptRoot
+  * Build absolute -f paths for docker-compose.yml / docker-compose.dev.yml
+  * Check backend container is running (friendly error if not)
+  * Wrap docker compose in `cmd /c` (Sprint-0 A5 convention)
+  * Use `exec -T` (no TTY) for script/CI safety
+  * Propagate real exit code
+- Does NOT modify scripts/init_db.py; no -DryRun support; supports -Help
+- Saved as UTF-8 with BOM (PowerShell 5.1 requirement for Chinese text)
+
+## Verification
+- pytest tests/test_feedback_rule.py -v  -> 9 PASSED
+- .\scripts\init_db.ps1                  -> idempotent OK, schema re-validated
+- No changes to app/schemas/feedback.py semantics beyond evidence_refs default
