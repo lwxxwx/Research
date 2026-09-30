@@ -196,7 +196,6 @@ class ReviewDefect(Base):
 #   - 待 Sprint 1 明确业务语义后决定
 # ============================================================
 class FeedbackItem(Base):
-class FeedbackItem(Base):
     __tablename__ = "feedback_item"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     review_result_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("review_result.id", ondelete="CASCADE"))

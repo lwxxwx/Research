@@ -63,7 +63,7 @@ def _build_proposed_rule_yaml(hint_payload: Optional[Dict[str, Any]]) -> str:
     category = hint.get("category") or "power"
     severity = hint.get("severity") or "high"
     applicable_condition = hint.get("applicable_condition") or {"scope": "schematic"}
-    check_logic = hint.get("check_logic") or {"function": "builtin.power_checks.check_decoupling_cap"}
+    check_logic = hint.get("check_logic") or {"function": "builtin.circuit_checks.check_decoupling"}
     rule_basis = hint.get("rule_basis") or "来自专家反馈自动生成草稿，请补充datasheet/reference依据"
     suggestion = hint.get("suggestion") or "请人工完善修改建议"
 

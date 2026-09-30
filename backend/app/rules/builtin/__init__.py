@@ -1,5 +1,5 @@
 """builtin 检查函数导出。"""
-from app.rules.builtin.power_checks import (
+from app.rules.builtin.circuit_checks import (
     RuleHitItem,
     check_decoupling,
     check_derating,

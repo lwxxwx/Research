@@ -248,12 +248,27 @@ def main():
                 log(f"[Demo‑Payload] 复用已有ReviewDefect id={rd.id}")
 
             # ========= 输出feedback提交载荷json =========
+            # ★ v1.2：rule_candidate 对齐 schema v1.2 的 RuleCandidate 强类型
+            # 必填：rule_id / rule_name / category / severity / rule_basis
+            # --- 原代码（保留，已弃用：dict 缺必填字段，
+            #                          FeedbackCreate(**raw) 时 Pydantic 校验会失败） ---
+            # "rule_candidate": {"title": "VCC去耦缺失候选", "severity": "critical"},
             fb_false_neg = {
                 "review_result_id": rr.id,
                 "review_defect_id": rd.id,
                 "feedback_type": "false_negative",
                 "expert_suggestion": "该场景漏检，需要生成候选规则草稿",
-                "rule_candidate": {"title": "VCC去耦缺失候选", "severity": "critical"},
+                # ★ v1.2：对齐 RuleCandidate 11 字段结构（必填 5 项）
+                "rule_candidate": {
+                    "rule_id": "POWER_DECOUP_DEMO_001",
+                    "rule_name": "VCC去耦缺失候选规则草稿",
+                    "category": "power",
+                    "severity": "critical",
+                    "rule_basis": "Demo：该场景漏检，需新增电源去耦规则",
+                    # 可选字段留空，Pydantic 会使用默认值 None：
+                    # applicable_condition / check_logic / suggestion
+                    # / title / description / evidence_refs
+                },
                 "created_by": None
             }
             fb_gap = {

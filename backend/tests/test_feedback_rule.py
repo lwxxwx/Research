@@ -25,6 +25,15 @@ v1.2 变更（RuleCandidate 字段集对齐）：
 - ★ 更新 test_feedback_new_rule_candidate_generate_candidate 的 RuleCandidate 构造
 - ★ 补字段集完整传递断言（验证 rule_name/rule_basis/suggestion/check_logic/
   evidence_refs 都进 proposed_yaml；验证 ORM 冗余字段 title/description/evidence_refs）
+
+v1.3 变更（rule_evolution_service v1.3 覆盖增强）：
+- ★ 新增 test_feedback_false_negative_evidence_refs_missing_field_rejected
+     覆盖 evidence_refs 缺 section 时抛 ValueError
+     （对应 rule_evolution_service v1.3：assert -> raise 的改动）
+- ★ 新增 test_feedback_false_negative_evidence_refs_missing_source_rejected
+     覆盖 evidence_refs 缺 source 时抛 ValueError
+- ★ 新增 test_export_candidate_yaml_refuses_overwrite
+     覆盖 export_candidate_yaml 的 FileExistsError（拒绝覆盖）
 """
 import json
 import pytest
@@ -375,3 +384,126 @@ def test_feedback_out_created_at_is_datetime(pg_session: Session, feedback_test_
     assert isinstance(out.created_at, datetime), (
         f"created_at 应为 datetime，实际 {type(out.created_at)}"
     )
+
+
+
+# ============================================================
+# ★ v1.3 新增：rule_evolution_service 的负例与防御性逻辑测试
+# 对应 rule_evolution_service.py v1.3 的：
+#   - evidence_refs 三要素校验（assert -> raise 改动）
+#   - export_candidate_yaml 的 FileExistsError（拒绝覆盖）
+# ============================================================
+@pytest.mark.integration
+def test_feedback_false_negative_evidence_refs_missing_field_rejected(
+    pg_session: Session, feedback_test_fixture
+):
+    """
+    V1.2 §3.2：evidence_refs 每条必须含 source / section / reason 三要素
+    缺字段时 rule_evolution_service 应抛 ValueError（v1.3：assert -> raise）
+
+    覆盖点：rule_evolution_service.generate_candidate_from_feedback 的
+            evidence_refs 三要素校验
+    """
+    rr_id, rd_id = feedback_test_fixture
+    svc = FeedbackService()
+
+    # ★ 故意缺 "section"
+    bad_hint = RuleCandidate(
+        rule_id="BAD_EVIDENCE_001",
+        rule_name="缺 section 的候选（测试负例）",
+        category="power",
+        severity="high",
+        rule_basis="测试 evidence_refs 三要素校验",
+        evidence_refs=[
+            {"source": "MP2307.pdf", "reason": "故意缺 section 字段"}
+        ],
+    )
+    fb_in = FeedbackCreate(
+        review_result_id=rr_id,
+        review_defect_id=rd_id,
+        feedback_type=FeedbackType.FALSE_NEGATIVE,
+        expert_suggestion="验证 evidence_refs 缺字段时拒绝",
+        rule_candidate=bad_hint,
+        created_by=None,
+    )
+
+    with pytest.raises(ValueError, match="缺失必填字段 section"):
+        svc.submit_feedback(pg_session, fb_in)
+
+
+@pytest.mark.integration
+def test_feedback_false_negative_evidence_refs_missing_source_rejected(
+    pg_session: Session, feedback_test_fixture
+):
+    """
+    同上：evidence_refs 缺 source 字段时抛 ValueError
+
+    覆盖点：三要素中 source 的校验路径
+    """
+    rr_id, rd_id = feedback_test_fixture
+    svc = FeedbackService()
+
+    bad_hint = RuleCandidate(
+        rule_id="BAD_EVIDENCE_002",
+        rule_name="缺 source 的候选（测试负例）",
+        category="power",
+        severity="high",
+        rule_basis="测试 evidence_refs 三要素校验",
+        evidence_refs=[
+            {"section": "p6", "reason": "故意缺 source 字段"}
+        ],
+    )
+    fb_in = FeedbackCreate(
+        review_result_id=rr_id,
+        review_defect_id=rd_id,
+        feedback_type=FeedbackType.FALSE_NEGATIVE,
+        expert_suggestion="验证 evidence_refs 缺 source 时拒绝",
+        rule_candidate=bad_hint,
+        created_by=None,
+    )
+
+    with pytest.raises(ValueError, match="缺失必填字段 source"):
+        svc.submit_feedback(pg_session, fb_in)
+
+
+@pytest.mark.integration
+def test_export_candidate_yaml_refuses_overwrite(
+    pg_session: Session, feedback_test_fixture, tmp_path
+):
+    """
+    覆盖点：rule_evolution_service.export_candidate_yaml 的
+            「拒绝覆盖已有文件」防御性逻辑（FileExistsError）
+
+    场景：
+      1) 第一次导出：成功（文件不存在）
+      2) 第二次导出：抛 FileExistsError（文件已存在）
+    """
+    rr_id, rd_id = feedback_test_fixture
+    svc = FeedbackService()
+
+    fb_in = FeedbackCreate(
+        review_result_id=rr_id,
+        review_defect_id=rd_id,
+        feedback_type=FeedbackType.FALSE_NEGATIVE,
+        expert_suggestion="测试 export_candidate_yaml 拒绝覆盖",
+        created_by=None,
+    )
+    out = svc.submit_feedback(pg_session, fb_in)
+    assert out.rule_candidate_ref is not None
+
+    rev = RuleEvolutionService()
+    target = tmp_path / "candidate.yaml"
+
+    # 1) 第一次导出：成功
+    rev.export_candidate_yaml(pg_session, out.rule_candidate_ref, str(target))
+    assert target.exists(), "首次导出后文件应存在"
+    content_first = target.read_text(encoding="utf-8")
+    assert "AUTO-GENERATED DRAFT RULE CANDIDATE" in content_first
+
+    # 2) 第二次导出：拒绝覆盖
+    with pytest.raises(FileExistsError, match="already exists"):
+        rev.export_candidate_yaml(pg_session, out.rule_candidate_ref, str(target))
+
+    # 原文件内容未被修改
+    content_second = target.read_text(encoding="utf-8")
+    assert content_first == content_second, "第二次导出失败后原文件不应被修改"

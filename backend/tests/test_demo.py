@@ -7,6 +7,12 @@ Mock IR数据 → Mock规则引擎输出 → Mock-LLM生成ReviewReport → DB�
 → 模拟提交2条反馈 false_negative + knowledge_gap
 → rule_evolution生成rule_candidate草稿、导出knowledge-gap backlog
 只校验链路完整性、产物存在、DB记录；**不校验LLM文本语义正确性、不读取磁盘case文件**
+
+v1.1 变更（对齐 schema v1.2）：
+- ★ rule_candidate 从 dict 改为 RuleCandidate 强类型（schema v1.2 改进 4）
+- ★ fb_out1/fb_out2 的 model_dump() 改为 model_dump(mode="json")，
+     避免 datetime 序列化失败
+- ★ review_output_json 加 ensure_ascii=False，与 report.json 风格统一
 """
 import json
 import os
@@ -15,13 +21,14 @@ from pathlib import Path
 import pytest
 import yaml
 from sqlalchemy.orm import Session
-from app.schemas.feedback import FeedbackCreate, FeedbackType
+from app.schemas.feedback import FeedbackCreate, FeedbackType, RuleCandidate  # ★ v1.1：加 RuleCandidate
 from app.services.feedback_service import FeedbackService
 from app.services.rule_evolution_service import RuleEvolutionService
-from app.persistence.models import ReviewResult, ReviewDefect, RuleCandidate
+from app.persistence.models import ReviewResult, ReviewDefect, RuleCandidate as RuleCandidateORM  # ★ v1.1：ORM 别名
 # ✅容器内固定根目录：容器项目根目录永远 /app
-PROJECT_ROOT = Path("/app")
-OUT_DIR = PROJECT_ROOT / "out/demo_sprint0"
+#PROJECT_ROOT = Path("/app")
+#OUT_DIR = PROJECT_ROOT / "out/demo_sprint0"
+OUT_DIR = Path("/out/demo_sprint0")
 
 @pytest.fixture(scope="module")
 def pg_session():
@@ -55,7 +62,7 @@ def prepare_out_dir():
     # ✅ NEW: DeepSeek-5.2 执行前rmtree清空旧产物，避免历史文件造成断言误通过
     if OUT_DIR.exists():
         shutil.rmtree(OUT_DIR)
-    os.makedirs(OUT_DIR, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     yield
     # yield之后**不删除产物**，CI跑完保留产物用于人工排查问题
 
@@ -75,9 +82,6 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
             {
                 "defect_id":"DEF-MOCK-001",
                 "category":"power",
-                # ===== 旧代码注释掉 =====
-                # "location":{"sheet":"POWER_PAGE1","path":"U1.VCC"},
-                # ✅ NEW: DeepSeek建议补齐V1.2 §3.1 location必填coords字段
                 "location":{
                     "sheet":"POWER_PAGE1",
                     "path":"U1.VCC",
@@ -103,7 +107,10 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
     # 【关键】先写入ReviewResult、ReviewDefect拿到真实外键ID，再提交Feedback
     mock_rr = ReviewResult(
         task_id="R-MOCK-001",
-        review_output_json=json.dumps(mock_report),
+        # ★ v1.1：与 report.json 的中文处理保持一致
+        # --- 原代码（保留，已弃用） ---
+        # review_output_json=json.dumps(mock_report),
+        review_output_json=json.dumps(mock_report, ensure_ascii=False),
         is_rule_only=True,
         category="power",
         risk="critical",
@@ -115,9 +122,6 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
         review_result_id=mock_rr.id,
         defect_id="DEF-MOCK-001",
         category="power",
-        # ===== 旧代码注释掉 =====
-        # location={"sheet":"POWER_PAGE1","path":"U1.VCC"},
-        # ✅ NEW: DeepSeek建议补齐V1.2 §3.1 location必填coords字段
         location={
             "sheet":"POWER_PAGE1",
             "path":"U1.VCC",
@@ -138,12 +142,21 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
     # Step3 模拟提交2条专家反馈
     fb_svc = FeedbackService()
     # 反馈1 false_negative → 生成rule_candidate草稿
+    # ★ v1.1：rule_candidate 从 dict 改为 RuleCandidate 强类型（schema v1.2）
+    # --- 原代码（保留，已弃用：dict 缺必填字段，Pydantic 校验失败） ---
+    # rule_candidate={"title":"VCC去耦缺失候选规则草稿","severity":"critical"},
     fb1 = FeedbackCreate(
         review_result_id=mock_rr.id,
         review_defect_id=mock_rd.id,
         feedback_type=FeedbackType.FALSE_NEGATIVE,
         expert_suggestion="该类场景漏检，需要新增电源去耦规则",
-        rule_candidate={"title":"VCC去耦缺失候选规则草稿","severity":"critical"},
+        rule_candidate=RuleCandidate(
+            rule_id="POWER_DECOUP_MOCK_001",
+            rule_name="VCC去耦缺失候选规则草稿",
+            category="power",
+            severity="critical",
+            rule_basis="Mock E2E：该场景漏检，需新增电源去耦规则",
+        ),
         created_by=None
     )
     fb_out1 = fb_svc.submit_feedback(pg_session, fb1)
@@ -158,7 +171,17 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
     )
     fb_out2 = fb_svc.submit_feedback(pg_session, fb2)
     feedback_log_path = OUT_DIR / "feedback_submit_log.json"
-    feedback_log_path.write_text(json.dumps([fb_out1.model_dump(), fb_out2.model_dump()],indent=2,ensure_ascii=False),encoding="utf-8")
+    # ★ v1.1：model_dump(mode="json")，让 datetime 序列化为 ISO 字符串
+    # --- 原代码（保留，已弃用：model_dump() 默认 python 模式，datetime 无法 json 序列化） ---
+    # feedback_log_path.write_text(json.dumps([fb_out1.model_dump(), fb_out2.model_dump()],indent=2,ensure_ascii=False),encoding="utf-8")
+    feedback_log_path.write_text(
+        json.dumps(
+            [fb_out1.model_dump(mode="json"), fb_out2.model_dump(mode="json")],
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     # Step4 rule_evolution导出产物
     evol_svc = RuleEvolutionService()
     rc_yaml_path = OUT_DIR / "rule_candidate_proposed.yaml"
@@ -171,7 +194,10 @@ def test_demo_sprint0_mock_e2e(pg_session: Session, prepare_out_dir):
     assert rc_yaml_path.exists()
     assert gap_json_path.exists()
     # ✅修复：YAML草稿文件是规则本体，**不含DB元字段status**；status校验去查DB RuleCandidate对象，不要读yaml
-    rc_db: RuleCandidate = pg_session.query(RuleCandidate).filter(RuleCandidate.candidate_id == fb_out1.rule_candidate_ref).first()
+    # ★ v1.1：ORM 用别名 RuleCandidateORM，避免与 Pydantic RuleCandidate 重名
+    # --- 原代码（保留，已弃用：RuleCandidate 现在指 Pydantic，非 ORM） ---
+    # rc_db: RuleCandidate = pg_session.query(RuleCandidate).filter(RuleCandidate.candidate_id == fb_out1.rule_candidate_ref).first()
+    rc_db: RuleCandidateORM = pg_session.query(RuleCandidateORM).filter(RuleCandidateORM.candidate_id == fb_out1.rule_candidate_ref).first()
     assert rc_db is not None
     assert rc_db.status == "proposed"   # status 在数据库记录校验
     # 仅校验YAML语法合法，解析成功即可，不再读取status key
