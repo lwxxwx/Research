@@ -43,7 +43,7 @@
 
 - 原 DeepSeek 交付将 case001 声明为 **B 类**（`ai_expected_count:1`），但 `expected_review.json` 无任何 `origin=ai_discovered` 缺陷，全部可由规则检出，**不符合 V1.2 B 类合格四要素**。
 - 结合 Sprint0 Phase G 将 case001 定位为 **Rule-Only Benchmark 基线**、且 IR 真实缺陷均可被规则稳定检出，**校准为 A 类**：`ai_expected_count:0`，权重 `rule 0.8 / ai 0.2`。
-- **K7 验收（Case001 Rule Hit ≥ 2）**：由 POWER_001（去耦）+ POWER_002（复位 RC）两条命中达成。Phase F 规则库中 POWER_002 名义定义为「反馈分压」（DC-DC 场景），本 case 无反馈分压电路；复位 RC 检查为本 case 语境下的规则命中项，规则清单以 `data/rules` 最终合入为准。
+- **K7 验收（Case001 Rule Hit ≥ 2）**：由 `POWER_001`（去耦电容缺失）+ `POWER_002`（复位 RC 拓扑缺失）两条 defect 级命中达成。Phase F 规则库中 `POWER_002` **为"复位 RC 拓扑"检查**（`circuit_checks.check_reset_rc_topology`，severity=medium），**按代码口径修正**（原方案写"反馈分压"为笔误）。本 case 额外命中 `IO_001`（IO 引脚悬空，severity=low，不计入 K7 defect 级）。
 - **文档-网络一致性修正**：原 `expert_reasoning.md` / `circuit_notes.md` / `expected_review.json`（GP-CASE001-2）描述晶振为「XTAL1/XTAL2 两个独立网络」，与 IR 单一 `XTAL_OSC` 不符；已统一为与 IR 一致。`circuit_notes` 网络清单补上 `EA_GND`。
 
 ## 5. 风险说明

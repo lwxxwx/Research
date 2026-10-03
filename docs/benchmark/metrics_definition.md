@@ -160,6 +160,10 @@ AI_NER = N_ai_effective / (N_rule_effective + N_ai_effective)
 | `Overall_FP_Rate` | `Overall_FP_Rate` | Sprint0 单 case = NaN |
 | `Overall_FN_Rate` | `Overall_FN_Rate` | Sprint0 单 case = NaN |
 | `notes` | —（V1.2 未列，S3 建议升格） | `sprint0_baseline,rule_only` |
+> **V1.3 补充（列名口径澄清）**：本表第 3/4 行的 `N_rule_only` / `N_ai_new_total` 是 **V1.2 §8.2 的语义名**，**实际 CSV 列名以 `benchmark_service.py::write_csv` 为准**：
+> - `total_gt_defects`（语义 = `N_rule_only`）
+> - `total_pred_defects`（语义 = `N_ai_new_total`）
+> 其余列名（`tp` / `fp` / `fn` / `Rule_Precision` / ... / `notes`）与本文档完全一致。
 
 > **未输出字段**：`N_ai_effective / N_ai_fp / N_ai_fn / N_ai_adopted`（Sprint0 无 AI 数据，Sprint1 补）
 

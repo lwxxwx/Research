@@ -3,7 +3,7 @@ source_type: datasheet
 source_title: STC89C55RC datasheet
 source_section: Oscillator Circuit 晶振电路设计
 part_numbers: ["STC89C55RC"]
-related_rule_ids: ["MCU_001"]
+related_rule_ids: []
 ---
 STC89C55RC使用片内振荡器，XTAL1、XTAL2引脚外接石英晶振Y1。
 典型晶振规格11.0592MHz，两侧匹配电容C1、C2取值22pF。

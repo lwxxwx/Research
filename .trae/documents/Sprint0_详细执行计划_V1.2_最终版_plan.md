@@ -1,5 +1,8 @@
 # Sprint 0 开发落地规划
 ## Docker + uv 可复现开发环境 V1.3（方案A 并列挂载）
+
+> **文件命名说明**：本文件名保留 `V1.2_最终版` 为历史命名；**内容版本以 V1.3 为准**（详见 §20 变更记录）。
+
 ---
 ## 0. 文档定位
 本文件是基于「AI 原理图评审 MVP」项目架构设计的 **Sprint 0 顺序落地指南**。
@@ -434,6 +437,14 @@ cmd /c "docker compose -f `"$f1`" -f `"$f2`" up -d --build"
     - `doc = chunk.doc` 后 `assert doc is not None`。
     - 理由：DB 层 FK + NOT NULL 保证 `doc` 必存在；`assert` 用于捕获"FK 被绕过"（如手工删 doc 未级联）的数据完整性异常。
     - 若触发，**检索整体抛 `AssertionError`**，不静默降级（数据完整性不可妥协）。
+- **V1.3 补充（测试污染待办）**：
+    - **问题**：`tests/test_rag_seed.py::test_ingest_uses_embed_documents_not_embed_query`（integration）会调用 `ingest_single_file()` 把临时 md（`/tmp/tmp*.md`）写入 `knowledge_doc` / `knowledge_chunk`，**`tmp.unlink()` 只删临时文件，不删 DB 记录**。
+    - **后果**：每次跑测试 DB 累积 1 条 `source='/tmp/tmp*.md'` 的孤儿记录；`test_knowledge_table_has_seed_data` 的 `doc_count >= 5` 断言被弱化。
+    - **Sprint 0 处置**：测试末尾显式 `DELETE FROM knowledge_chunk WHERE knowledge_doc_id IN (SELECT id FROM knowledge_doc WHERE source LIKE '/tmp/%')` + `DELETE FROM knowledge_doc WHERE source LIKE '/tmp/%'`（仅清测试残留，不动真实种子）。
+    - **⚠️ 清理位置（V1.3 补充）**：cleanup 代码**必须加在 `test_ingest_uses_embed_documents_not_embed_query` 的 `finally` 块**（**唯一**写 DB 的测试）；**不要加到 `test_process_v2_returns_chunks_with_section` 等其他 `finally` 里**（它们不写 DB，cleanup 是无效操作）。
+        - **根因**：`test_rag_seed.py` 有多个 `finally: tmp.unlink(...)` 块，只有 `test_ingest_uses_embed_documents_not_embed_query` 会写 DB；误加到其他测试里会导致"cleanup 看似执行，实际未清任何残留"。
+        - **验证方法**：跑 `pytest tests/test_rag_seed.py -v` 后，`SELECT COUNT(*) FROM knowledge_doc WHERE source LIKE '/tmp/%'` 应为 `0`；若为 `1`，说明 cleanup 位置错误或未生效。
+    - **Sprint 1 加固（可选）**：加 `pg_session_rollback` fixture（事务回滚），或改 `ingest_single_file` 支持 `auto_commit=False`。
 ---
 ## 14. Phase I-J · Feedback & Demo
 - **Phase I**: 验证 6 类反馈（正确/误报/漏检等）的入库与闭环。
@@ -794,6 +805,7 @@ docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/d
 | 32 | 18 | 追加"Case-Review 关联策略 v1.0"行 |
 | 33 | 8 | 追加"`tasks` 表的平替方案"（含平替对照表） |
 | 34 | 8 | 追加"Sprint 1 实现文件清单"（8 处改动映射到具体文件） |
+| 35 | 13 | 测试污染清理位置精确化：cleanup 必须加在 `test_ingest_uses_embed_documents_not_embed_query` 的 `finally` 块 |
 ---
 
 **文档版本**：V1.3

@@ -3,7 +3,7 @@ source_type: application_note
 source_title: 8051最小系统应用笔记 AN‑MCU‑RST‑01
 source_section: 上电复位电路
 part_numbers: ["STC89C55RC"]
-related_rule_ids: ["MCU_003"]
+related_rule_ids: ["POWER_002"]
 ---
 8051系列高电平复位，RST引脚需要维持至少2个机器周期高电平完成复位。
 经典RC上电复位：R1=10kΩ下拉电阻（接RST-GND），C3=10μF上电延时电容（接VCC-RST）。

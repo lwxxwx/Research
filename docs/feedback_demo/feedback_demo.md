@@ -39,15 +39,7 @@
 2. `backend/app/schemas/feedback.py`：FeedbackType枚举、SuggestionDiff、FeedbackCreate、FeedbackOut
 3. `backend/app/schemas/report.py`：ReviewStatus三态枚举（AI_CONFIRMED/NEED_EXPERT_REVIEW/LOW_CONFIDENCE）
 4. `backend/app/services/feedback_service.py`：反馈提交主服务，落库+分发rule演进
-5. `scripts/demo_sprint0.ps1`：扩展Phase‑I反馈提交、rule‑candidate产物导出逻辑；**V1.17加固版本**：
-   - 删除powershell here‑string内嵌大段Python代码，彻底规避Markdown复制引入U+2011全角破折号隐形字符；
-   - 全部JSON/YAML产物改为**容器内部Python直接落盘**，使用`docker compose cp`二进制拷贝文件回宿主机；彻底规避Windows PowerShell5.1 docker‑exec stdout管道GBK破坏性转码乱码；
-   - 修复`docker compose exec -T`换行压扁问题：payload业务日志写入容器`payload_run.log`，ps1执行`cat`读取日志打印控制台，再cp拷贝回宿主机；stdout仅保留单行JSON；
-   - PowerShell异常捕获优化：执行docker子进程临时切换`ErrorActionPreference=Continue`，使用`$LASTEXITCODE`判断退出码，规避docker.exe RemoteException；无论payload成功失败均打印完整`payload_run.log`堆栈；
-   - 增加脚本退出码校验，子脚本失败直接exit终止，不继续执行后续脏逻辑；
-   - **V1.17变更：Step4诊断重构，移除ps1内嵌套bash heredoc/PYEOF；调用`demo_feedback_payload.py --diagnose`做容器环境诊断，不再新增独立diag_env.py文件；Step6手工提示移除黄色Warning，替换英文提示，明确仅复制粘贴参考，脚本不会自动执行；**
-   - 调用独立幂等脚手架脚本`scripts.demo_feedback_payload`生成demo测试数据。
-6. `backend/tests/test_feedback_rule.py`：Phase‑I单元+PG集成测试
+5. `backend/tests/test_feedback_rule.py`：Phase‑I单元+PG集成测试
 
 
 #### 📝存量文件增量修改
@@ -66,6 +58,8 @@
    - 增加脚本退出码校验，子脚本失败直接exit终止，不继续执行后续脏逻辑；
    - **V1.17变更：Step4诊断重构，移除ps1内嵌套bash heredoc/PYEOF；调用`demo_feedback_payload.py --diagnose`做容器环境诊断，不再新增独立diag_env.py文件；Step6手工提示移除黄色Warning，替换英文提示，明确仅复制粘贴参考，脚本不会自动执行；**
    - 调用独立幂等脚手架脚本`scripts.demo_feedback_payload`生成demo测试数据。
+   
+   > **说明**：本条为 `scripts/demo_sprint0.ps1` 的**存量修改**；原 I.2 “全新创建文件”清单中的重复条目已移除。
 
 #### ❌完全不动文件
 Phase‑H RAG全套代码`rag/*.py` + `test_rag_seed.py v1.7`；`app/ir/*`、`app/rules/*`、`app/workflows/*`；上游参考文档`第一阶段工程实施方案_V1.2_增强版_plan.md`只读参考，禁止修改。
@@ -219,7 +213,7 @@ Demo输出产物清单（全部写入`out/demo_sprint0/`）：
 | **Rule YAML Format v1.0** | `docs/rules/rule_yaml_spec_v1.0.md` | 支持 applicable_condition 与 check_logic |
 | **Benchmark Format v1.0** | `docs/benchmark/metrics_definition_v1.0.md` | 明确 Precision/Recall/EAR/EVC 计算公式 |
 | **【新增Phase‑I‑Freeze‑6】Feedback Schema v1.0** | `app/schemas/feedback.py` + `infra/docker/initdb/002_schema.sql` | feedback_item字段、6类FeedbackType枚举、rule_candidates表Schema、FeedbackCreate/FeedbackOut Pydantic模型Sprint‑0冻结；Sprint‑1仅允许向后兼容扩展字段，禁止删除字段、修改枚举语义；FeedbackCreate固定使用review_result_id/review_defect_id外键，废弃task_id/defect_id字符串入参。 |
-| **【新增Phase‑I‑Freeze‑7】Rule‑Candidate草稿输出格式v1.0** | `app/services/rule_evolution_service.py` | 自动生成proposed_yaml草稿YAML结构冻结；**YAML草稿本体仅存规则本体字段，status/candidate_id等DB元字段不写入yaml文件；status只从DB RuleCandidate对象读取**；Sprint‑1用于benchmark加载候选规则。 |
+| **【新增Phase‑I‑Freeze‑7】Rule Evolution 边界 v1.0** | `app/services/rule_evolution_service.py` | 仅生成 `proposed` 草稿，**禁止直接合并正式 rules 库**；草稿 YAML 头部带 `AUTO-GENERATED DRAFT` 警告；`rule_candidates` 表**无 `task_id` 列**；`evidence_refs` 三要素校验（`source` / `section` / `reason`）。**YAML 草稿本体仅存规则本体字段，`status` / `candidate_id` 等 DB 元字段不写入 yaml 文件；`status` 只从 DB RuleCandidate 对象读取**；Sprint 1 用于 benchmark 加载候选规则。 |
 ### Phase‑I‑J完整回归执行命令集合（追加进文档16章节）
 ```powershell
 # 1. 启动容器

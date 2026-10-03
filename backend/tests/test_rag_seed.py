@@ -370,6 +370,24 @@ STC89C55RC 使用片内振荡器，XTAL1、XTAL2 引脚外接石英晶振 Y1。
         assert isinstance(chunks[0], Chunk)
     finally:
         tmp.unlink(missing_ok=True)
+        # ⚠️ V1.3 修改：清理测试写入的 DB 数据（避免污染知识库）
+        # 背景：ingest_single_file 内部 commit 会写 DB，但 tmp.unlink 只删临时文件；
+        #      每次跑测试 DB 多 1 条 /tmp/tmp*.md 记录（累积污染）。
+        # 清理范围：source 以 /tmp/ 开头的 doc + 其关联 chunk（仅测试残留）。
+        # [原逻辑 - 保留注释，便于对照回滚]
+        # （无 DB 清理逻辑）
+        #from sqlalchemy import text as _text
+        #from app.persistence.db import engine as _engine
+        #with _engine.begin() as _conn:
+        #    _conn.execute(_text(
+        #        "DELETE FROM knowledge_chunk "
+        #        "WHERE knowledge_doc_id IN ("
+        #        "  SELECT id FROM knowledge_doc WHERE source LIKE '/tmp/%'"
+        #        ")"
+        #    ))
+        #    _conn.execute(_text(
+        #        "DELETE FROM knowledge_doc WHERE source LIKE '/tmp/%'"
+        #    ))
 
 
 # ============================================================
@@ -836,3 +854,22 @@ related_rule_ids: ["R1"]
         )
     finally:
         tmp.unlink(missing_ok=True)
+        # ⚠️ V1.3 修改：清理测试写入的 DB 数据（避免污染知识库）
+        # 背景：ingest_single_file 内部 commit 会写 DB，但 tmp.unlink 只删临时文件；
+        #      每次跑测试 DB 多 1 条 /tmp/tmp*.md 记录（累积污染）。
+        # 清理范围：source 以 /tmp/ 开头的 doc + 其关联 chunk（仅测试残留）。
+        # [原逻辑 - 保留注释，便于对照回滚]
+        # （无 DB 清理逻辑）
+        from sqlalchemy import text as _text
+
+        from app.persistence.db import engine as _engine
+        with _engine.begin() as _conn:
+            _conn.execute(_text(
+                "DELETE FROM knowledge_chunk "
+                "WHERE knowledge_doc_id IN ("
+                "  SELECT id FROM knowledge_doc WHERE source LIKE '/tmp/%'"
+                ")"
+            ))
+            _conn.execute(_text(
+                "DELETE FROM knowledge_doc WHERE source LIKE '/tmp/%'"
+            ))

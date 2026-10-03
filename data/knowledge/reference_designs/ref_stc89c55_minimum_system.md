@@ -3,7 +3,7 @@ source_type: reference_design
 source_title: STC89C55RC最小系统参考设计
 source_section: Minimum Working Circuit 最小工作条件
 part_numbers: ["STC89C55RC"]
-related_rule_ids: ["MCU_001","MCU_002","MCU_003"]
+related_rule_ids: ["POWER_001","POWER_002"]
 ---
 STC89C55RC可以正常启动运行，必须同时具备三套基础电路：
 1. +5V可靠电源供电VCC/GND；

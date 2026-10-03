@@ -9,10 +9,11 @@
 
 ```yaml
 ---
-source_type: datasheet           # 枚举：datasheet / reference_design / application_note
+source_type: datasheet #枚举：datasheet / reference_design / application_note
 source_title: STC89C55RC datasheet
 source_section: Oscillator Circuit 晶振电路设计
 part_numbers: ["STC89C55RC"]    # 关联器件型号数组
-related_rule_ids: ["MCU_001"]   # 关联规则ID数组
+related_rule_ids: ["POWER_001"]   #  关联规则ID数组；Sprint0 实际规则：POWER_001/002/003 + IO_001/002
+
 ---
 文档片段正文……

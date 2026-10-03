@@ -4,7 +4,8 @@
 > **对齐规范**：`Sprint0_详细执行计划_V1.2_最终版` §13；`第一阶段工程实施方案_V1.2_增强版` §6
 > **冻结版本**：v1.7
 > **冻结日期**：2026-09-17
-> **结论**：PASS · 34 passed（29 单测 + 5 集成）
+> **Sprint0 收官追加**：`test_rag_seed.py` v1.8 新增 3 个并入逻辑集成测试 + 1 个 ingest 回归测试
+> **结论**：PASS · v1.7 基线 34 passed（29 单测 + 5 集成）；v1.8 追加后 RAG 相关测试 ≥ 38 passed
 
 ---
 
@@ -41,11 +42,11 @@
 
 | # | 文件 | source_type | 覆盖规则 | chunk 数 |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | `datasheets/stc89c55rc_oscillator_crystal.md` | datasheet | MCU_001 | 1 |
-| 2 | `datasheets/stc89c55rc_power_supply.md` | datasheet | MCU_002 | 1 |
-| 3 | `application_notes/an_mcu_reset_circuit.md` | application_note | MCU_003 | 1 |
-| 4 | `reference_designs/ref_stc89c55_minimum_system.md` | reference_design | MCU_001/002/003 | 1 |
-| 5 | `reference_designs/an_8051_io_port_feature.md` | application_note | MCU_004 | 1 |
+| 1 | `datasheets/stc89c55rc_oscillator_crystal.md` | datasheet | `[]`（晶振，Sprint0 无对应规则） | 1 |
+| 2 | `datasheets/stc89c55rc_power_supply.md` | datasheet | `["POWER_001"]` | 1 |
+| 3 | `application_notes/an_mcu_reset_circuit.md` | application_note | `["POWER_002"]` | 1 |
+| 4 | `reference_designs/ref_stc89c55_minimum_system.md` | reference_design | `["POWER_001", "POWER_002"]` | 1 |
+| 5 | `reference_designs/an_8051_io_port_feature.md` | application_note | `["IO_001"]` | 1 |
 
 **覆盖三类来源**：
 - datasheet × 2（晶振、电源）
@@ -186,7 +187,7 @@ rule_execution / review_result / review_defect / feedback_item / rule_candidates
 `retriever.retrieve()` 支持两个过滤维度：
 
 - `part_numbers`：器件型号（如 `STC89C55RC`）
-- `rule_ids`：规则 ID（如 `MCU_001`）
+- `rule_ids`：规则 ID（如 `POWER_001` / `IO_001`）
 
 **对齐 V1.2 §6.3 检索策略**：
 
@@ -450,7 +451,7 @@ Sprint1 Node3 可直接调用：
       -f infra/docker/docker-compose.dev.yml `
       exec backend uv run pytest tests/test_rag_seed.py -m "integration" -v
 
-**预期**：`5 passed, 29 deselected`
+**预期**：`6 passed`（新增 `test_ingest_uses_embed_documents_not_embed_query`）
 
 | 用例 | 验证点 |
 | :--- | :--- |
@@ -486,7 +487,7 @@ Sprint1 Node3 可直接调用：
 | `knowledge_doc` 行数 | 5 |
 | `knowledge_chunk` 行数 | 5 |
 | `embedding_provider` | `fake`（无外网） |
-| 全测试套件 | **34 passed** |
+| 全测试套件 | **44 passed**（RAG 相关；截至 Sprint 0 收官，整体套件 263 passed） |
 | 单元测试耗时 | ~1.2s |
 | 集成测试耗时 | ~1.2s |
 
@@ -555,6 +556,8 @@ Sprint1 Node3 可直接调用：
 | 9 | `check_feedback_item_type` 用 `DO $$` 块包裹保证幂等（S8） |
 | 10 | 硬编码 1536 → `settings.embedding_dim`（S1） |
 | 11 | 全局 warning 治理 `filterwarnings = ["error"]`（S6） |
+| 12 | 加 `pg_session_rollback` fixture（事务回滚），隔离 `test_ingest_uses_embed_documents_not_embed_query` 的 DB 污染 |
+| 13 | 可选：`sources.py` 支持 `MCU_xxx → POWER_xxx` 别名（若 Sprint 1 需要保留旧规则标识） |
 
 ---
 
@@ -664,7 +667,7 @@ Sprint1 Node3 可直接调用：
 | Phase H 版本 | v1.7 |
 | 冻结日期 | 2026-09-17 |
 | 冻结结论 | **PASS** |
-| 测试证据 | 34 passed（29 单测 + 5 集成） |
+| 测试证据 | Phase H 冻结时 **34 passed**（29 单测 + 5 集成）；Sprint 0 收官时 RAG 相关 **44 passed**（整体套件 263 passed） |
 | DB 证据 | 5 doc + 5 chunk，chunk 级 section 各不相同 |
 | 交付物完整性 | 5 种子 + 5 模块 + 2 表 + 1 配置 + 1 测试文件 |
 | 优化批次 | v1.1（M1~M5+M3.1）+ v1.2（优化 1~6）+ v1.3（BUG1~3）+ v1.4（优化 1~7）+ v1.5（优化 1~5）+ v1.6（缺陷 1~2）+ v1.7（方案 A.1~A.3） |

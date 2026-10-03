@@ -3,7 +3,7 @@ source_type: datasheet
 source_title: STC89C55RC datasheet
 source_section: Power Supply 电源供电
 part_numbers: ["STC89C55RC"]
-related_rule_ids: ["MCU_002"]
+related_rule_ids: ["POWER_001"]
 ---
 STC89C55RC DIP‑40封装内核供电电压为+5V。
 VCC引脚必须可靠接入+5V电源，GND引脚必须可靠连接系统地。
