@@ -1,9 +1,10 @@
 # app/main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.core.config import settings
-from app.core.logging import setup_logging
 from app.core.errors import register_exception_handlers
+from app.core.logging import setup_logging
 
 # 初始化日志
 setup_logging()

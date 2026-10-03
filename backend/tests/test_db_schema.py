@@ -7,12 +7,12 @@ Phase-C Database Schema 冒烟测试（含 Sprint0 Phase-I 扩展）
 
 ⚠️ 重要：本测试只做读校验，建表必须通过 scripts.init_db 执行，禁止 Base.metadata.create_all()
 """
-import os
+import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
+
 from app.core.config import settings
 from app.persistence.models import Base
-import pytest
 
 
 # ============================================================
@@ -454,12 +454,22 @@ def test_orm_can_query_every_table(db_engine):
 # - 若某张表 NOT NULL 字段没给，测试会在 setup 阶段报错，说明 models.py
 #   与 SQL 不一致，属于有效失败。
 
-from sqlalchemy.orm import Session
+# ⚠️ V1.3 修改：删除重复 import（第 12 行已 import Session）
+# [原逻辑 - 保留注释，便于对照回滚]
+# from sqlalchemy.orm import Session
+
 from app.persistence.models import (
-    User, Project, SchematicCase, IRDocument,
-    ReviewResult, ReviewDefect, FeedbackItem,
-    KnowledgeDoc, KnowledgeChunk,
-    RuleDefinition, RuleCandidate,   # ✅ 新增：约束测试用
+    FeedbackItem,
+    IRDocument,
+    KnowledgeChunk,
+    KnowledgeDoc,
+    Project,
+    ReviewDefect,
+    ReviewResult,
+    RuleCandidate,
+    RuleDefinition,  # ✅ 新增：约束测试用
+    SchematicCase,
+    User,
 )
 
 
@@ -874,7 +884,7 @@ def test_orm_nullifies_project_owner_when_deleting_user(db_session):
     proj_after = db_session.get(Project, proj_id)
     assert proj_after is not None, "Project 不应被 ORM 删除"
     assert proj_after.owner_id is None, \
-        "ORM 删 User 后应把 project.owner_id 置 NULL（默认行为）" 
+        "ORM 删 User 后应把 project.owner_id 置 NULL（默认行为）"
 
 
 
@@ -904,7 +914,6 @@ def test_orm_nullifies_project_owner_when_deleting_user(db_session):
 
 from sqlalchemy import text as _sql_text
 from sqlalchemy.exc import IntegrityError as _IntegrityError
-
 
 # ---------- 13.1 CHECK：feedback_type 六选一 ----------
 
@@ -1921,4 +1930,4 @@ def test_crud_relationship_navigation(db_session):
     # 从 user 导航到 projects
     db_session.expire(user)
     user2 = db_session.get(User, user.id)
-    assert any(p.id == proj.id for p in user2.projects)   
+    assert any(p.id == proj.id for p in user2.projects)

@@ -1,13 +1,26 @@
 # app/persistence/models.py
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    Column, BigInteger, String, Text, Boolean, Float, Integer,
-    ForeignKey, TIMESTAMP, Index, UniqueConstraint, CheckConstraint, text
+    TIMESTAMP,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, relationship, Mapped, mapped_column
-from pgvector.sqlalchemy import Vector
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
 class Base(DeclarativeBase):
     """注意：Sprint0禁止 Base.metadata.create_all()，schema唯一来源：infra/docker/initdb/002_schema.sql"""
     pass
@@ -57,7 +70,7 @@ class SchematicCase(Base):
     # ✅ 对齐 SQL：UNIQUE(project_id, case_id)
     __table_args__ = (
         UniqueConstraint("project_id", "case_id", name="uq_schematic_case_project_case"),
-    )    
+    )
 # ============================================================
 # 4. IRDocument
 # ============================================================
@@ -100,7 +113,10 @@ class RuleExecution(Base):
     evidence_json: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB)
     execution_log: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
-#    ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="ir_document")
+    # ⚠️ V1.3 修改：删除下方错误注释行（back_populates="ir_document" 是笔误，
+    # IRDocument 侧是 rule_executions，恢复该注释会导致 relationship 配置错误）。
+    # [原逻辑 - 保留注释，便于对照回滚]
+    # #    ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="ir_document")
     ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="rule_executions")
     rule_def: Mapped[Optional["RuleDefinition"]] = relationship(back_populates="executions")
 # ============================================================
@@ -207,7 +223,11 @@ class FeedbackItem(Base):
     suggestion_adopted: Mapped[Optional[str]] = mapped_column(String(16))
     suggestion_diff_json: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     rule_candidate_ref: Mapped[Optional[str]] = mapped_column(String(64))
-    attached_refs: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, server_default="[]")
+    # ⚠️ V1.3 修改：补 nullable=False，对齐 002_schema.sql（attached_refs JSONB NOT NULL DEFAULT '[]'::jsonb）。
+    # 原代码允许 NULL，与 DB NOT NULL 冲突，显式传 None 会报错。
+    # [原逻辑 - 保留注释，便于对照回滚]
+    # attached_refs: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, server_default="[]")
+    attached_refs: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     # 关系
@@ -270,6 +290,10 @@ class RuleCandidate(Base):
     from_feedback_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("feedback_item.id"))
     case_id: Mapped[Optional[str]] = mapped_column(String(64))
     # ✅ Sprint0：普通字段，无外键；Sprint-1 tasks 表创建后再补 ForeignKey
+    # ⚠️ V1.3 修改：补 TODO 显式标注，避免 Sprint1 漏改。
+    # Sprint1 待办：
+    #   1. SQL 侧：task_id BIGINT REFERENCES tasks(id)（002_schema.sql 加 FK）
+    #   2. ORM 侧：mapped_column(BigInteger, ForeignKey("tasks.id"))
     task_id: Mapped[Optional[int]] = mapped_column(BigInteger)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -284,5 +308,5 @@ class RuleCandidate(Base):
         Index("idx_rule_candidates_status", "status"),
         Index("idx_rule_candidates_case_id", "case_id"),
          # ✅ 对齐 SQL
-        Index("idx_rule_candidates_from_feedback_id", "from_feedback_id"), 
+        Index("idx_rule_candidates_from_feedback_id", "from_feedback_id"),
     )

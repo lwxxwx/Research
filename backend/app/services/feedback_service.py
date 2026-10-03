@@ -99,17 +99,16 @@ return FeedbackOut
       （修复 evidence_refs=None 导致 enumerate(None) / ORM NOT NULL 违反）
     - feedback_service._dispatch_evolution 已传 rule_candidate.model_dump()
 """
-from typing import Optional  # noqa: F401  # ★ 改进 7：保留旧 import 兼容，新代码用 X | None
-
 # ★ 改进 4：新增 logging
 import logging
+from typing import Optional  # noqa: F401  # ★ 改进 7：保留旧 import 兼容，新代码用 X | None
 
-from sqlalchemy.orm import Session
 from sqlalchemy import select
-from app.schemas.feedback import FeedbackCreate, FeedbackOut, FeedbackType, SuggestionDiff
-from app.persistence.models import FeedbackItem, ReviewResult, ReviewDefect
-from app.services.rule_evolution_service import RuleEvolutionService
+from sqlalchemy.orm import Session
 
+from app.persistence.models import FeedbackItem, ReviewDefect, ReviewResult
+from app.schemas.feedback import FeedbackCreate, FeedbackOut, FeedbackType, SuggestionDiff
+from app.services.rule_evolution_service import RuleEvolutionService
 
 # ★ 改进 4：模块级 logger
 logger = logging.getLogger(__name__)
@@ -155,7 +154,7 @@ class FeedbackService:
     #     - 新代码允许外部传入（便于 mock、复用、控制生命周期）
     #     - 不传时行为完全一致
     # ------------------------------------------------------------
-    
+
     def __init__(self, rule_evolution: "RuleEvolutionService | None" = None):
         # --- 原代码（保留，已弃用） ---
         # self.rule_evolution = RuleEvolutionService()
@@ -484,8 +483,9 @@ if __name__ == "__main__":
     # import json
     # from app.persistence.db import get_db_session
     # ------------------------------------------------------------
-    import sys
     import json
+    import sys
+
     from app.persistence.db import get_db_session
 
     service = FeedbackService()

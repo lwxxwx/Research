@@ -6,15 +6,16 @@ RAG 模块内部 Pydantic 模型
 注意：数据库 ORM 模型仍然在 app/persistence/models.py，此处仅为内存 schema，不操作 DB
 
 用三个 Pydantic 模型把 RAG 模块的"配置输入"（IngestConfig / IngestConfigEntry）
-和"检索输出"（RetrievalResult）固化成类型安全的 schema，核心语法点是 default_factory 
+和"检索输出"（RetrievalResult）固化成类型安全的 schema，核心语法点是 default_factory
 规避可变默认值陷阱、Optional 表达可空语义、嵌套模型 vs dict 的强弱类型权衡，
 以及 is_continuation 这个为 Sprint1 重排预留的血缘字段。
 
 v1.2 变更（豆包优化 5）：
 - 优化 5：RetrievalResult 增加 is_continuation 字段，供 Sprint1 重排时降权续块
 """
-from pydantic import BaseModel, Field
 from typing import List, Optional
+
+from pydantic import BaseModel, Field
 
 
 class RetrievalResult(BaseModel):

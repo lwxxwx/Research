@@ -1,11 +1,13 @@
-# ============================================================================
-# docker-compose.tools.yml
-# 开发辅助工具集合，使用compose profiles隔离，Sprint0非必选
-# 启动示例：
-# docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.tools.yml --profile dev-tools up -d
-#
-# 注意：pgadmin启动后需要手动添加postgres连接，host填 postgres，端口5432
-# ============================================================================
+#============================================================================
+#docker-compose.tools.yml
+#开发辅助工具集合，使用compose profiles隔离，Sprint0非必选
+#⚠️ 必须与基座 docker-compose.yml 叠加使用，不可单独启动。
+#原因：pgadmin 引用逻辑网络名 backend_net，实际名称由基座
+#${NETWORK_SUFFIX} 决定；单独运行会因网络未定义报错。
+#启动示例（PowerShell 下用 cmd /c 包装）：
+#cmd /c "docker compose -f \"$PWD/infra/docker/docker-compose.yml\" -f \"$PWD/infra/docker/docker-compose.tools.yml\" --profile dev-tools up -d"
+#注意：pgadmin启动后需要手动添加postgres连接，host填 postgres，端口5432
+#============================================================================
 version: "3.8"
 services:
   pgadmin:

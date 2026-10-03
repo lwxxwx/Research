@@ -41,11 +41,11 @@ v1.5 变更：
 - Sprint0 V1.2 §13 Phase H
 - 第一阶段 V1.2 §6.2 知识来源标签
 """
-import re
 import pathlib
+import re
 import warnings
 from dataclasses import dataclass
-from typing import Dict, Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 # ★ 优化 1：import yaml 移到文件头部
 import yaml
@@ -265,7 +265,7 @@ def _hard_split(text: str, limit: int) -> List[str]:
 
 def _split_long_section(section: str, section_body: str, limit: int) -> List[Chunk]:
     """
-    
+
     输入 section、section_body、limit
     ↓ if len (section_body) <= limit → return [Chunk (...,False)]
     ↓ has_code /has_table ?
@@ -283,7 +283,7 @@ def _split_long_section(section: str, section_body: str, limit: int) -> List[Chu
     └─ else: 刷 buf 输出 Chunk；buf=p
     ↓ for 结束，如果 buf 不为空输出最后一块 Chunk
     ↓ return chunks
-    
+
     单章节超过 limit 时，按段落聚合拆分（M2 核心）
     - 段落边界：\\n\\n
     - 保护代码块与表格：如整体包含 ``` 或表格行，则整段不切（宁可超长）
@@ -342,7 +342,7 @@ def _split_long_section(section: str, section_body: str, limit: int) -> List[Chu
             text=buf,
             is_continuation=bool(chunks),
         ))
-    
+
     # ★ 新增：末尾短尾块并入前一块，避免丢信息
     # 逻辑：如果最后一块长度 < EVIDENCE_MIN_LEN 且前面还有块，
     #      把最后一块并入前一块（可能超 chunk_size，但保证语义完整）

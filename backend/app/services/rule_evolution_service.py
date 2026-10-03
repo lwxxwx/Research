@@ -20,14 +20,17 @@ v1.3 变更（None 值兜底）：
 - ★ 影响函数：_build_proposed_rule_yaml / generate_candidate_from_feedback
 """
 from __future__ import annotations
+
 import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any
-from sqlalchemy.orm import Session
+from typing import Any, Dict, List, Optional
+
 from sqlalchemy import select
-from app.persistence.models import RuleCandidate, FeedbackItem, ReviewResult, ReviewDefect
+from sqlalchemy.orm import Session
+
+from app.persistence.models import FeedbackItem, ReviewDefect, ReviewResult, RuleCandidate
 
 
 def _make_candidate_id() -> str:
@@ -232,6 +235,7 @@ if __name__ == "__main__":
     # CLI入口，供demo脚本调用
     import argparse
     import sys
+
     from app.persistence.db import get_db_session
 
     svc = RuleEvolutionService()
@@ -254,7 +258,9 @@ if __name__ == "__main__":
             if args.list:
                 data = svc.list_candidates(db, status=args.status)
                 if args.output_json:
-                    import json
+                    # ⚠️ V1.3 修改：删除重复 import（第 24 行已 import json）
+                    # [原逻辑 - 保留注释，便于对照回滚]
+                    # import json
                     with open(args.output_json, "w", encoding="utf-8") as f:
                         json.dump(data, f, ensure_ascii=False, indent=2)
                     print(f"✅ list candidate写入文件: {args.output_json}")

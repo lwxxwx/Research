@@ -1,7 +1,10 @@
 # app/core/config.py
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator, Field
 from typing import List, Optional
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file="/app/.env",
@@ -17,10 +20,10 @@ class Settings(BaseSettings):
     data_dir: str
     llm_provider: str
     llm_api_key: str
-    
+
     # ========== 新增：支持CORS ==========
     cors_origins: List[str] = ["http://localhost:3000", "http://localhost:8000"]
-    
+
     # ========== 新增：支持LLM扩展 ==========
     llm_model: Optional[str] = None
     llm_base_url: Optional[str] = None
@@ -28,10 +31,13 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_api_key: Optional[str] = None
     #rag_embedding_backend: str = Field(default="fake", env="RAG_EMBEDDING_BACKEND")
-    rag_embedding_backend: str = Field(
-    default="fake",
-    json_schema_extra={"env": "RAG_EMBEDDING_BACKEND"}
-    )
+    #rag_embedding_backend: str = Field(
+    #default="fake",
+    #json_schema_extra={"env": "RAG_EMBEDDING_BACKEND"}
+    #)
+    # ⚠️ V1.3：Pydantic v2 已废弃 v1 的 env= 写法；字段名默认映射
+    # 环境变量 RAG_EMBEDDING_BACKEND（大小写不敏感）
+    rag_embedding_backend: str = "fake"
 
 
     @property

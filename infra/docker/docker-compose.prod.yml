@@ -7,23 +7,34 @@ version: "3.8"
 services:
   postgres:
     extends:
+      file: docker-compose.yml
       service: postgres
     restart: unless-stopped
-    # ⚠️生产禁止暴露数据库端口，仅使用容器内部网络访问
+    # ⚠️ 生产禁止暴露数据库端口，仅使用容器内部网络访问
+
   backend:
     extends:
+      file: docker-compose.yml
       service: backend
-    # ⚠️生产建议注释ports，使用外部反向代理接入；仅内网环境才可打开
+    # ⚠️ 生产建议注释ports，使用外部反向代理接入；仅内网环境才可打开
     # ports:
     #   - "${BACKEND_PORT:-8000}:8000"
     volumes:
       # 仅只读挂载外部数据资产，严禁挂载backend源码
-      - ../../data:/app/data:ro
+      # ⚠️ V1.3：与方案A 并列挂载对齐，target 从 /app/data 提升为 /data
+      - ../../data:/data:ro
+    environment:
+      # ⚠️ V1.3：prod 显式覆盖，避免 .env 读到旧值
+      - DATA_DIR=/data
+      - PYTHONPATH=/app:/
     restart: unless-stopped
+
   frontend:
     extends:
+      file: docker-compose.yml
       service: frontend
-    # ⚠️生产建议注释ports，使用外部反向代理接入
+    # ⚠️ 生产建议注释ports，使用外部反向代理接入
     # ports:
     #   - "${FRONTEND_PORT:-3000}:80"
+    # ⚠️ Sprint0：沿用基座 placeholder 挂载，生产真实 Vue dist 挂载留至 Sprint 1 处理
     restart: unless-stopped

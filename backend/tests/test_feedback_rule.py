@@ -36,21 +36,25 @@ v1.3 变更（rule_evolution_service v1.3 覆盖增强）：
      覆盖 export_candidate_yaml 的 FileExistsError（拒绝覆盖）
 """
 import json
+
 import pytest
 import yaml
 from sqlalchemy.orm import Session
-from app.schemas.feedback import FeedbackCreate, FeedbackType, SuggestionDiff, RuleCandidate
+
+from app.persistence.models import ReviewDefect, ReviewResult
+from app.persistence.models import RuleCandidate as RuleCandidateORM
+from app.schemas.feedback import FeedbackCreate, FeedbackType, RuleCandidate, SuggestionDiff
 from app.services.feedback_service import FeedbackService
 from app.services.rule_evolution_service import RuleEvolutionService
-from app.persistence.models import FeedbackItem, RuleCandidate as RuleCandidateORM, ReviewResult, ReviewDefect
 
 
 @pytest.fixture(scope="function")
 def pg_session():
     """每个测试函数独立事务，测试结束rollback，不污染DB"""
-    from app.core.config import settings
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
+
+    from app.core.config import settings
     engine = create_engine(settings.database_url, echo=False)
     conn = engine.connect()
     trans = conn.begin()

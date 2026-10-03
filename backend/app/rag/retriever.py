@@ -32,18 +32,19 @@ Sprint-0 限制：仅内部 Python API，无重排，不对外暴露 HTTP 接口
 import logging
 import threading
 from typing import List, Optional
-# ★ 优化 1：删除未使用 import
-# --- 原 import（保留，已删） ---
-# from typing import List, Optional, Union
 
-from sqlalchemy import select
-from sqlalchemy.orm import joinedload
+from langchain_core.embeddings.fake import DeterministicFakeEmbedding
+
 # ★ 优化 1：删除未使用 import Session
 # --- 原 import（保留，已删） ---
 # from sqlalchemy.orm import joinedload, Session
-
 from langchain_openai import OpenAIEmbeddings
-from langchain_core.embeddings.fake import DeterministicFakeEmbedding
+
+# ★ 优化 1：删除未使用 import
+# --- 原 import（保留，已删） ---
+# from typing import List, Optional, Union
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from app.core.config import settings
 from app.persistence.db import get_db_session

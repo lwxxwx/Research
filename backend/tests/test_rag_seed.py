@@ -50,24 +50,23 @@ import tempfile
 
 import pytest
 
-from app.services.benchmark_service import _evidence_is_complete, EVIDENCE_MIN_LEN
-from app.rag.knowledge import RetrievalResult
+from app.persistence.db import get_db_session
+from app.persistence.models import KnowledgeChunk, KnowledgeDoc
 from app.rag.chunking import (
-    parse_markdown_frontmatter,
-    validate_frontmatter,
-    split_text_chunk,
-    split_text_chunk_v2,
-    process_markdown_file,
-    process_markdown_file_v2,
     Chunk,
     _hard_split,
+    parse_markdown_frontmatter,
+    process_markdown_file,
+    process_markdown_file_v2,
+    split_text_chunk,
+    split_text_chunk_v2,
+    validate_frontmatter,
 )
-from app.rag.sources import DocumentType
 from app.rag.ingest import get_embedding_client
+from app.rag.knowledge import RetrievalResult
 from app.rag.retriever import Retriever, _as_dict
-from app.persistence.db import get_db_session
-from app.persistence.models import KnowledgeDoc, KnowledgeChunk
-
+from app.rag.sources import DocumentType
+from app.services.benchmark_service import EVIDENCE_MIN_LEN, _evidence_is_complete
 
 # ============================================================
 # ★ 方案 A.2（v1.7）：测试用容差常量
@@ -523,7 +522,7 @@ def test_split_v2_single_long_paragraph(monkeypatch):
         assert len(c.text) <= 400 + HARD_SPLIT_TOLERANCE, f"chunk 超长: {len(c.text)}"
     assert chunks[0].is_continuation is False
     for c in chunks[1:]:
-        assert c.is_continuation is True, f"续块 is_continuation 应为 True"
+        assert c.is_continuation is True, "续块 is_continuation 应为 True"
 
 
 def test_split_v2_hard_split_section_preserved(monkeypatch):

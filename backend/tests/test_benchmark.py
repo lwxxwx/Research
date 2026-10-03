@@ -17,10 +17,10 @@ import sys
 sys.path.insert(0, "/app")
 
 from app.services.benchmark_service import (
+    BENCH_OUT_DIR,
+    print_console_summary,
     run_single_case,
     write_csv,
-    print_console_summary,
-    BENCH_OUT_DIR,
 )
 
 

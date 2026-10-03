@@ -47,10 +47,12 @@ IRValidationSummary 结构化模型（extra="forbid"），本文件在 validate(
 ===== [/NEW] =====
 """
 
-from typing import List, Dict, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
+from typing import List, Optional, Set, Tuple
+
 # ===== [NEW] 导入结构化 Summary 模型 =====
-from app.ir.schema import SchematicIRDocument, IRValidationResult, IRValidationSummary
+from app.ir.schema import IRValidationResult, IRValidationSummary, SchematicIRDocument
+
 # ===== [/NEW] =====
 # from app.ir.schema import SchematicIRDocument, IRValidationResult  # 原代码
 
@@ -59,7 +61,7 @@ from app.ir.schema import SchematicIRDocument, IRValidationResult, IRValidationS
 class FloatingCheckResult:
     """
     悬浮元件检查结果
-    
+
     Attributes:
         warnings: 悬浮元件相关的警告列表
         floating_component_refs: 完全悬浮的元件 ref 集合（所有引脚均未连接）
@@ -72,45 +74,45 @@ class FloatingCheckResult:
 
 class IRSchemaValidator:
     """IR Schema 验证器 - DeepSeek 完整验证逻辑"""
-    
+
     @staticmethod
     def validate_components(
-        ir: SchematicIRDocument, 
+        ir: SchematicIRDocument,
         strict_mode: bool = False
     ) -> Tuple[List[str], List[str]]:
         """
         验证元件数据完整性
-        
+
         Args:
             ir: IR 文档
             strict_mode: 严格模式，用于 Golden Case 验收
-        
+
         Returns:
             (errors, warnings) 元组
         """
         errors = []
         warnings = []
-        
+
         for comp in ir.components:
             if not comp.ref:
                 errors.append("元件缺少 ref")
                 continue
-            
+
             # ===== lib_name 缺失：Error（规则引擎匹配核心字段） =====
             if not comp.lib_name:
                 errors.append(f"元件 {comp.ref} 缺少 lib_name（规则引擎匹配核心字段，必须填写）")
-            
+
             # ===== 三语义字段验证 (修正：缺失降级为 Warning) =====
             if not comp.intent:
                 warnings.append(f"元件 {comp.ref} 缺少 intent (三语义字段，建议 Golden Case 补充)")
             if not comp.context:
                 warnings.append(f"元件 {comp.ref} 缺少 context (三语义字段，建议 Golden Case 补充)")
             # constraint 为可选，不做任何提示
-            
+
             # 检查引脚
             if not comp.pins:
                 warnings.append(f"元件 {comp.ref} 没有引脚定义（可能为预留位）")
-            
+
             # 检查引脚完整性
             for pin in comp.pins:
                 if not pin.pin_id:
@@ -119,7 +121,7 @@ class IRSchemaValidator:
                     warnings.append(f"元件 {comp.ref} 引脚 {pin.pin_id} 缺少 name")
                 if not pin.direction:
                     errors.append(f"元件 {comp.ref} 引脚 {pin.pin_id} 缺少 direction")
-        
+
         # strict_mode 下将三语义字段缺失升级为 Error
         if strict_mode:
             for comp in ir.components:
@@ -127,9 +129,9 @@ class IRSchemaValidator:
                     errors.append(f"[strict_mode] 元件 {comp.ref} 缺少 intent（Golden Case 要求 100% 覆盖）")
                 if not comp.context:
                     errors.append(f"[strict_mode] 元件 {comp.ref} 缺少 context（Golden Case 要求 100% 覆盖）")
-        
+
         return errors, warnings
-    
+
     @staticmethod
     def validate_nets(
         ir: SchematicIRDocument,
@@ -137,29 +139,29 @@ class IRSchemaValidator:
     ) -> Tuple[List[str], List[str]]:
         """
         验证网络数据完整性
-        
+
         Args:
             ir: IR 文档
             strict_mode: 严格模式（预留，当前与普通模式行为一致）
-        
+
         Returns:
             (errors, warnings) 元组
         """
         errors = []
         warnings = []
-        
+
         # 构建索引
         all_refs = {comp.ref for comp in ir.components}
         ref_to_pin_ids = {
             comp.ref: {pin.pin_id for pin in comp.pins}
             for comp in ir.components
         }
-        
+
         for net in ir.nets:
             if not net.net_name:
                 errors.append("网络缺少 net_name")
                 continue
-            
+
             for pin_ref in net.connected_pins:
                 # ===== 格式验证 =====
                 if '.' not in pin_ref:
@@ -169,57 +171,57 @@ class IRSchemaValidator:
                         f"  示例: 'U1.VCC'"
                     )
                     continue
-                
+
                 comp_ref, pin_id = pin_ref.split('.', 1)
-                
+
                 # ===== 验证 ref 是否存在 =====
                 if comp_ref not in all_refs:
                     errors.append(
                         f"网络 {net.net_name} 引用了不存在的元件 '{comp_ref}'"
                     )
                     continue
-                
+
                 # ===== 验证 pin_id 是否存在 =====
                 if pin_id not in ref_to_pin_ids.get(comp_ref, set()):
                     warnings.append(
                         f"网络 {net.net_name} 引用了元件 {comp_ref} 中不存在的引脚 '{pin_id}'"
                     )
-        
+
         return errors, warnings
-    
+
     @staticmethod
     def check_floating_components(ir: SchematicIRDocument) -> FloatingCheckResult:
         """
         检查悬浮元件（元件被定义但未连接任何网络）
-        
+
         注意：仅作为 Warning，不阻断验证。
         有些元件可能是预留位（DNP），允许悬浮。
-        
+
         Returns:
             FloatingCheckResult 包含警告列表和悬浮元件统计
         """
         warnings = []
-        
+
         # 收集所有被网络引用的引脚
         referenced_pins: Set[str] = set()
         for net in ir.nets:
             for pin_ref in net.connected_pins:
                 if '.' in pin_ref:
                     referenced_pins.add(pin_ref)
-        
+
         floating_component_refs: Set[str] = set()
         floating_pin_refs: Set[str] = set()
-        
+
         # 检查每个元件的每个引脚
         for comp in ir.components:
             floating_pins: List[str] = []
-            
+
             for pin in comp.pins:
                 pin_ref = f"{comp.ref}.{pin.pin_id}"
                 if pin_ref not in referenced_pins:
                     floating_pins.append(pin.pin_id)
                     floating_pin_refs.add(pin_ref)
-            
+
             if floating_pins and len(floating_pins) == len(comp.pins):
                 # 所有引脚都悬浮
                 floating_component_refs.add(comp.ref)
@@ -230,60 +232,60 @@ class IRSchemaValidator:
                 warnings.append(
                     f"元件 {comp.ref} 的引脚 {', '.join(floating_pins)} 未连接任何网络"
                 )
-        
+
         return FloatingCheckResult(
             warnings=warnings,
             floating_component_refs=floating_component_refs,
             floating_pin_refs=floating_pin_refs,
         )
-    
+
     @staticmethod
     def validate(ir: SchematicIRDocument, strict_mode: bool = False) -> IRValidationResult:
         """
         完整验证原理图 IR
-        
+
         Args:
             ir: IR 文档
             strict_mode: 严格模式
                 - False（默认）：intent/context 缺失仅为 Warning
                 - True：intent/context 缺失为 Error（用于 Golden Case 验收）
-        
+
         Returns:
             IRValidationResult 包含验证结果、错误、警告和统计摘要
         """
         errors = []
         warnings = []
-        
+
         # ===== 1. 验证元件 =====
         comp_errors, comp_warnings = IRSchemaValidator.validate_components(ir, strict_mode)
         errors.extend(comp_errors)
         warnings.extend(comp_warnings)
-        
+
         # ===== 2. 验证网络 =====
         net_errors, net_warnings = IRSchemaValidator.validate_nets(ir, strict_mode)
         errors.extend(net_errors)
         warnings.extend(net_warnings)
-        
+
         # ===== 3. 检查悬浮元件（使用结构化返回，复用计算结果） =====
         floating_result = IRSchemaValidator.check_floating_components(ir)
         warnings.extend(floating_result.warnings)
-        
+
         # ===== 4. 生成摘要统计 =====
         total_pins = sum(len(comp.pins) for comp in ir.components)
-        
+
         # 统计各类型元件
         component_types = {}
         for comp in ir.components:
             lib_name = comp.lib_name or "unknown"
             component_types[lib_name] = component_types.get(lib_name, 0) + 1
-        
+
         # 统计网络类型
         net_types = {
             "power": sum(1 for n in ir.nets if n.is_power),
             "ground": sum(1 for n in ir.nets if n.is_ground),
             "signal": sum(1 for n in ir.nets if not n.is_power and not n.is_ground),
         }
-        
+
         # 三语义字段覆盖率
         total_components = len(ir.components)
         semantic_coverage = {
@@ -292,7 +294,7 @@ class IRSchemaValidator:
             "has_constraint": sum(1 for c in ir.components if c.constraint),
             "total_components": total_components,
         }
-        
+
         # ===== [NEW] summary 改为构造 IRValidationSummary 实例 =====
         # 原代码（构造 Dict[str, Any]，已不兼容新的结构化 summary）：
         # summary = {
@@ -317,9 +319,11 @@ class IRSchemaValidator:
         #     semantic_coverage 分项统计 → 收敛进 extra 字典，保证信息不丢失
         if total_components > 0:
             # 综合覆盖率：intent、context、constraint 三项都填才算"完全覆盖"
-            has_intent = semantic_coverage["has_intent"]
-            has_context = semantic_coverage["has_context"]
-            has_constraint = semantic_coverage["has_constraint"]
+            # ⚠️ V1.3 修改：删除 3 个冗余变量（赋值后未用，保留原行号 320~324 的语义）
+            # [原逻辑 - 保留注释，便于对照回滚]
+            # has_intent = semantic_coverage["has_intent"]
+            # has_context = semantic_coverage["has_context"]
+            # has_constraint = semantic_coverage["has_constraint"]
             fully_covered = sum(
                 1 for c in ir.components
                 if c.intent and c.context and c.constraint
@@ -327,7 +331,7 @@ class IRSchemaValidator:
             semantic_coverage_float: Optional[float] = fully_covered / total_components
         else:
             semantic_coverage_float = None
-        
+
         summary = IRValidationSummary(
             total_components=total_components,
             total_nets=len(ir.nets),
@@ -345,7 +349,7 @@ class IRSchemaValidator:
             },
         )
         # ===== [/NEW] =====
-        
+
         return IRValidationResult(
             is_valid=len(errors) == 0,
             errors=errors,

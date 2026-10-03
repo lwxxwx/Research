@@ -15,16 +15,19 @@ v1.1 变更（对齐 schema v1.2）：
 - ★ review_output_json 加 ensure_ascii=False，与 report.json 风格统一
 """
 import json
-import os
 import shutil  # ✅ NEW: 导入shutil用于rmtree清理OUT_DIR
 from pathlib import Path
+
 import pytest
 import yaml
 from sqlalchemy.orm import Session
+
+from app.persistence.models import ReviewDefect, ReviewResult  # ★ v1.1：ORM 别名
+from app.persistence.models import RuleCandidate as RuleCandidateORM
 from app.schemas.feedback import FeedbackCreate, FeedbackType, RuleCandidate  # ★ v1.1：加 RuleCandidate
 from app.services.feedback_service import FeedbackService
 from app.services.rule_evolution_service import RuleEvolutionService
-from app.persistence.models import ReviewResult, ReviewDefect, RuleCandidate as RuleCandidateORM  # ★ v1.1：ORM 别名
+
 # ✅容器内固定根目录：容器项目根目录永远 /app
 #PROJECT_ROOT = Path("/app")
 #OUT_DIR = PROJECT_ROOT / "out/demo_sprint0"
@@ -32,9 +35,10 @@ OUT_DIR = Path("/out/demo_sprint0")
 
 @pytest.fixture(scope="module")
 def pg_session():
-    from app.core.config import settings
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
+
+    from app.core.config import settings
     engine = create_engine(settings.database_url, echo=False)
     conn = engine.connect()
     trans = conn.begin()

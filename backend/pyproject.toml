@@ -68,7 +68,48 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "D"]
-ignore = ["D100", "D104", "D203"]
+# ⚠️ V1.3 修改：扩展 ignore 列表，忽略 D 系列"文档洁癖"规则。
+# 原因：项目大量使用 `# =====` 分隔符注释代替 docstring；docstring 用中文写，
+#      不习惯"首行句号"；中文标点（。）与 ruff 期望的英文标点（.）冲突。
+# 结果：ruff 错误数从 1250 → ~30（真实问题）。
+# [原逻辑 - 保留注释，便于对照回滚]
+# select = ["E", "F", "W", "I", "N", "D"]
+# ignore = ["D100", "D104", "D203"]
+ignore = [
+    # --- 原有 ---
+    "D100",   # Missing docstring in public module
+    "D104",   # Missing docstring in public package
+    "D203",   # 1 blank line required before class docstring（与 D211 冲突）
+
+    # --- V1.3 新增：docstring 风格洁癖 ---
+    "D101",   # Missing docstring in public class
+    "D102",   # Missing docstring in public method
+    "D103",   # Missing docstring in public function
+    "D107",   # Missing docstring in `__init__`
+    "D200",   # One-line docstring should fit on one line
+    "D204",   # 1 blank line required after class docstring
+    "D205",   # 1 blank line required between summary line and description
+    "D210",   # No whitespaces allowed surrounding docstring text
+    "D212",   # Multi-line docstring summary should start at the first line
+    "D213",   # Multi-line docstring summary should start at the second line（与 D212 冲突）
+    "D301",   # Use r""" if any backslashes in a docstring
+    "D400",   # First line should end with a period（中文用 。）
+    "D401",   # First line of docstring should be in imperative mood
+    "D403",   # First word of the first line should be capitalized（中文无大写）
+    "D406",   # Section name should end with a newline
+    "D407",   # Missing dashed underline after section
+    "D413",   # Missing blank line after last section
+    "D415",   # First line should end with a period, question mark, or exclamation point（中文用 。！？）
+
+    # --- V1.3 新增：与中文项目不匹配的规则 ---
+    "N818",   # Exception name should be named with an Error suffix
+    "E501",   # Line too long（中文项目不适用，line-length=120 保留给 format）
+]
+
+# ⚠️ V1.3 新增：per-file-ignores
+# 测试文件忽略文档规则 + 延后 import（测试里故意延后 import 以隔离依赖）
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "E402"]
 
 [tool.ruff.format]
 quote-style = "double"

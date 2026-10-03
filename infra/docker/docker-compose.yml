@@ -3,7 +3,7 @@
 # 文件：infra/docker/docker-compose.yml
 #
 # 职责：
-#   1. 定义 Backend / PostgreSQL / Frontend‑Placeholder 公共服务
+#   1. 定义 Backend / PostgreSQL / Frontend-Placeholder 公共服务
 #   2. PostgreSQL Named Volume（支持 VOLUME_SUFFIX 多实例隔离）
 #   3. 定义 Docker Network（支持 NETWORK_SUFFIX 多实例隔离）
 #   4. Dev / Prod 通过 overlay 文件扩展
@@ -23,29 +23,26 @@
 #   - volumes: 源码挂载（热重载）、数据目录挂载
 #
 # docker-compose.prod.yml（生产环境）：
-#   - restart: unless‑stopped # 高可用自动恢复
+#   - restart: unless-stopped # 高可用自动恢复
 #   - 数据库端口禁止直接暴露宿主机，通过内部网络访问
 #   - 单机docker compose不支持deploy.resources；资源限制依靠Docker Desktop设置 / K8s / Docker Swarm
 #
 # ============================================================================
-# 扩展说明‑Profiles可选工具服务
+# 扩展说明-Profiles可选工具服务
 # ============================================================================
 # 数据库管理工具(pgadmin)等辅助工具不纳入本基座；
-# 放置于独立 overlay 文件 docker‑compose.tools.yml，使用 compose profiles 按需启用，
-# 示例启动命令：
-#   docker compose -f infra/docker/docker-compose.yml -f infra/docker/docker-compose.tools.yml --profile dev-tools up -d
+# 放置于独立 overlay 文件 docker-compose.tools.yml，使用 compose profiles 按需启用，
+# ⚠️ tools 必须与基座叠加使用，不可单独启动。
+# 示例启动命令（PowerShell 下用 cmd /c 包装，-f 用 $PWD 绝对路径）：
+#   cmd /c "docker compose -f \"$PWD/infra/docker/docker-compose.yml\" -f \"$PWD/infra/docker/docker-compose.tools.yml\" --profile dev-tools up -d"
 # ============================================================================
 #
-# Sprint0 开发启动命令：
-#   docker compose -f infra/docker/docker-compose.yml \
-#                  -f infra/docker/docker-compose.dev.yml \
-#                  up -d --build
+# Sprint0 开发启动命令（PowerShell 下用 cmd /c 包装，-f 用 $PWD 绝对路径）：
+#   cmd /c "docker compose -f \"$PWD/infra/docker/docker-compose.yml\" -f \"$PWD/infra/docker/docker-compose.dev.yml\" up -d --build"
 #
 # 多实例并行开发（Compose原生方式，设置COMPOSE_PROJECT_NAME）：
 #   $env:COMPOSE_PROJECT_NAME="dev01"
-#   docker compose -f infra/docker/docker-compose.yml \
-#                  -f infra/docker/docker-compose.dev.yml \
-#                  up -d --build
+#   cmd /c "docker compose -f \"$PWD/infra/docker/docker-compose.yml\" -f \"$PWD/infra/docker/docker-compose.dev.yml\" up -d --build"
 #
 # 文档约束：Backend访问数据库必须使用服务名 postgres:5432，禁止 localhost
 # ============================================================================
@@ -125,11 +122,13 @@ services:
       APP_ENV: ${APP_ENV:-dev}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       SECRET_KEY: ${SECRET_KEY:-change_me_in_production_env}
-      PYTHONPATH: /app
+      # ⚠️ V1.3：追加根目录 /，使 import scripts.xxx 命中 /scripts 挂载点
+      PYTHONPATH: ${PYTHONPATH:-/app:/}
       # AI服务相关环境变量，对齐.env.example
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       LLM_API_KEY: ${LLM_API_KEY:-your_api_key_here}
-      DATA_DIR: ${DATA_DIR:-/app/data}
+      # ⚠️ V1.3：与方案A 并列挂载 /data 对齐
+      DATA_DIR: ${DATA_DIR:-/data}
     depends_on:
       postgres:
         condition: service_healthy

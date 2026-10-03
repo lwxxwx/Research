@@ -55,14 +55,36 @@ def run_init_sql(engine, sql_file: pathlib.Path) -> bool:
         # 检查是否为"对象已存在"类错误（幂等冲突）
         orig = getattr(e, "orig", None)
         if orig is not None and isinstance(orig, (DuplicateObject, DuplicateTable)):
+            # ⚠️ V1.3 修改：明确"整文件跳过"语义 + 指出单表丢失无法重跑补建，
+            # 并将重建步骤从 dropdb/createdb 改为 down -v/up（后者才会触发 initdb 全量执行）。
+            # 根因：002_schema.sql 为整体脚本，遇首个 DuplicateObject 即整体跳过，
+            #      不会继续执行后续 CREATE TABLE IF NOT EXISTS。
+            # 详见方案 §19.7。
+            # [原逻辑 - 保留注释，便于对照回滚]
+            # logger.warning(
+            #     f"⚠️ {sql_file.name} 检测到数据库已初始化"
+            #     f"（对象已存在: {orig}），跳过执行。"
+            #     f"\n    💡 如需重新初始化，请先清空数据库："
+            #     f"\n       1. 停 backend: docker compose ... stop backend"
+            #     f"\n       2. 删库重建: docker compose ... exec postgres dropdb -U postgres --if-exists schematic_review"
+            #     f"\n                   docker compose ... exec postgres createdb -U postgres schematic_review"
+            #     f"\n       3. 重新启动: docker compose ... start backend"
+            # )
             logger.warning(
                 f"⚠️ {sql_file.name} 检测到数据库已初始化"
-                f"（对象已存在: {orig}），跳过执行。"
-                f"\n    💡 如需重新初始化，请先清空数据库："
-                f"\n       1. 停 backend: docker compose ... stop backend"
-                f"\n       2. 删库重建: docker compose ... exec postgres dropdb -U postgres --if-exists schematic_review"
-                f"\n                   docker compose ... exec postgres createdb -U postgres schematic_review"
-                f"\n       3. 重新启动: docker compose ... start backend"
+                f"（对象已存在: {orig}），"
+                f"**已跳过整个 {sql_file.name} 文件**的后续所有语句。"
+                f"\n    ⚠️ 注意：本脚本为整体执行，遇到首个对象冲突即整体跳过，"
+                f"不会继续执行后续 CREATE TABLE IF NOT EXISTS。"
+                f"\n    因此，**单张表丢失时无法通过重跑本脚本补建**，"
+                f"必须按下方步骤彻底重建（详见方案 §19.7）。"
+                f"\n    💡 彻底重建命令（完整命令见方案 §16）："
+                f"\n       1. 停服务 + 删 volume（触发 initdb 全量执行）:"
+                f"\n          docker compose -f '$PWD/infra/docker/docker-compose.yml' -f '$PWD/infra/docker/docker-compose.dev.yml' down -v"
+                f"\n       2. 重启（postgres 首次初始化 volume 时自动执行 initdb）:"
+                f"\n          docker compose -f '$PWD/infra/docker/docker-compose.yml' -f '$PWD/infra/docker/docker-compose.dev.yml' up -d --build"
+                f"\n       3. 校验（可选，也可由 postgres 容器自动完成）:"
+                f"\n          docker compose -f '$PWD/infra/docker/docker-compose.yml' -f '$PWD/infra/docker/docker-compose.dev.yml' exec backend uv run python -m scripts.init_db"
             )
             return False
         # 其他 ProgrammingError 继续抛出
@@ -188,15 +210,32 @@ def init_database():
         else:
             raise RuntimeError("feedback_item 缺少 check_feedback_item_type 约束！")
 
-        # 8. rule_candidates P1表仅告警，不阻断
+        # 8. rule_candidates P1表校验
+        # ⚠️ V1.3 修改：由 warning 升为 raise。
+        # 原因：Sprint0 Phase‑I 反馈闭环依赖 rule_candidates 表，
+        #       Sprint0 验收项 9（Feedback 6 Categories）需要该表存在。
+        #       P0-1 决策：缺失即阻断，避免 Sprint1 第一步写入时炸。
+        # [原逻辑 - 保留注释，便于对照回滚]
+        # # 8. rule_candidates P1表仅告警，不阻断
+        # p1_rows = conn.execute(text("""
+        #     SELECT table_name FROM information_schema.tables
+        #     WHERE table_schema='public' AND table_name='rule_candidates'
+        # """)).fetchone()
+        # if p1_rows:
+        #     logger.info("✅ P1表 rule_candidates 已存在（Sprint‑1业务使用）")
+        # else:
+        #     logger.warning("⚠️ P1 rule_candidates 缺失，Sprint‑0不阻断，Sprint‑1需要。")
         p1_rows = conn.execute(text("""
             SELECT table_name FROM information_schema.tables
             WHERE table_schema='public' AND table_name='rule_candidates'
         """)).fetchone()
         if p1_rows:
-            logger.info("✅ P1表 rule_candidates 已存在（Sprint‑1业务使用）")
+            logger.info("✅ P1表 rule_candidates 已存在（Phase‑I 反馈闭环依赖）")
         else:
-            logger.warning("⚠️ P1 rule_candidates 缺失，Sprint‑0不阻断，Sprint‑1需要。")
+            raise RuntimeError(
+                "❌ rule_candidates 表缺失！Sprint0 Phase‑I 反馈闭环依赖该表，"
+                "请检查 002_schema.sql 是否包含 rule_candidates 定义。"
+            )
 
     logger.info("🎉 数据库初始化全部校验完成")
 

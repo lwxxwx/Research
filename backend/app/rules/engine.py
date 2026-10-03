@@ -89,7 +89,8 @@ def load_rule_definitions(rules_dir: Path) -> List[RuleDefinition]:
 # ---------------------------------------------------------------------------
 def _cond_matches(cond: Dict[str, Any], ir: SchematicIRDocument) -> bool:
     """单个条件块匹配。支持 component_type_in / component_ref_in / net_name_in
-    / net_is_power / attribute_exists / always。"""
+    / net_is_power / attribute_exists / always。
+    """
     if not cond or cond.get("always") is True:
         return True
 

@@ -21,7 +21,6 @@ from app.rag.chunking import (
 )
 from app.services.benchmark_service import EVIDENCE_MIN_LEN
 
-
 FIXTURE_MD = pathlib.Path(__file__).parent / "fixtures" / "test_sample.md"
 CHUNK_SIZE = 300
 

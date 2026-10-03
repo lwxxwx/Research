@@ -39,8 +39,26 @@ from typing import List
 
 import pytest
 
-from app.ir.schema import SchematicIRDocument
+# ⚠️ V1.3 修改：import 块扩充（新测试 test_io002_bidirectional_counted_when_flag_false 需要）
+# [原逻辑 - 保留注释，便于对照回滚]
+# from app.ir.schema import SchematicIRDocument
+# from app.ir.serializer import load_ir
+# from app.rules.engine import (
+#     RuleResult,
+#     execute_all_rules,
+#     execute_defect_rules,
+#     load_rule_definitions,
+# )
+from app.ir.schema import (
+    Component,
+    Net,
+    Pin,
+    PinDirection,
+    PinType,
+    SchematicIRDocument,
+)
 from app.ir.serializer import load_ir
+from app.rules.builtin.circuit_checks import check_io_direction
 from app.rules.engine import (
     RuleResult,
     execute_all_rules,
@@ -258,6 +276,48 @@ def test_applicable_condition_scope_schematic_passes(case001_ir):
 
 
 # ============================================================
+# IO_002 ignore_bidirectional 参数生效测试（V1.3 新增）
+# ============================================================
+
+def test_io002_bidirectional_counted_when_flag_false():
+    """IO_002 规则：ignore_bidirectional=false 时，BIDIRECTIONAL 引脚也计入输出冲突。"""
+    # ⚠️ V1.3 修改：import 已上移到文件顶部（避免 I001）
+    # [原逻辑 - 保留注释，便于对照回滚]
+    # from app.ir.schema import (
+    #     Component, Pin, Net, SchematicIRDocument,
+    #     PinDirection, PinType,
+    # )
+    # from app.rules.builtin.circuit_checks import check_io_direction
+
+    # 构造：两个 BIDIRECTIONAL IO 引脚同网
+    comp1 = Component(
+        ref="U1", lib_name="TEST",
+        pins=[Pin(pin_id="p1", name="p1",
+                  direction=PinDirection.BIDIRECTIONAL, pin_type=PinType.IO)],
+        intent="test", context="test",
+    )
+    comp2 = Component(
+        ref="U2", lib_name="TEST",
+        pins=[Pin(pin_id="p1", name="p1",
+                  direction=PinDirection.BIDIRECTIONAL, pin_type=PinType.IO)],
+        intent="test", context="test",
+    )
+    doc = SchematicIRDocument(
+        case_id="test", title="T", description="T",
+        components=[comp1, comp2],
+        nets=[Net(net_name="BUS", connected_pins=["U1.p1", "U2.p1"])],
+    )
+
+    # ignore_bidirectional=false → 应命中
+    hits_lenient = check_io_direction(doc, {"ignore_bidirectional": False})
+    assert len(hits_lenient) == 1, "false 模式下应检出 2 个 BIDIRECTIONAL 冲突"
+
+    # ignore_bidirectional=true（默认）→ 不应命中
+    hits_strict = check_io_direction(doc, {"ignore_bidirectional": True})
+    assert len(hits_strict) == 0, "true 模式下 BIDIRECTIONAL 应被忽略"
+
+
+# ============================================================
 # CLI 入口（demo / 手动验证）
 # ============================================================
 
@@ -333,6 +393,45 @@ def main() -> int:
 
     print(f"[OK] case={args.case} Rule Hit (defects) = {len(defects)}")
     return 0
+
+
+# ⚠️ V1.3 修改：删除重复的 test_io002_bidirectional_counted_when_flag_false
+# （该测试已上移到 _build_arg_parser() 之前，此处重复定义触发 F811）
+# [原逻辑 - 保留注释，便于对照回滚]
+# def test_io002_bidirectional_counted_when_flag_false():
+#     """IO_002 规则：ignore_bidirectional=false 时，BIDIRECTIONAL 引脚也计入输出冲突"""
+#     from app.ir.schema import (
+#         Component, Pin, Net, SchematicIRDocument,
+#         PinDirection, PinType,
+#     )
+#     from app.rules.builtin.circuit_checks import check_io_direction
+#
+#     # 构造：两个 BIDIRECTIONAL IO 引脚同网
+#     comp1 = Component(
+#         ref="U1", lib_name="TEST",
+#         pins=[Pin(pin_id="p1", name="p1",
+#                   direction=PinDirection.BIDIRECTIONAL, pin_type=PinType.IO)],
+#         intent="test", context="test",
+#     )
+#     comp2 = Component(
+#         ref="U2", lib_name="TEST",
+#         pins=[Pin(pin_id="p1", name="p1",
+#                   direction=PinDirection.BIDIRECTIONAL, pin_type=PinType.IO)],
+#         intent="test", context="test",
+#     )
+#     doc = SchematicIRDocument(
+#         case_id="test", title="T", description="T",
+#         components=[comp1, comp2],
+#         nets=[Net(net_name="BUS", connected_pins=["U1.p1", "U2.p1"])],
+#     )
+#
+#     # ignore_bidirectional=false → 应命中
+#     hits_lenient = check_io_direction(doc, {"ignore_bidirectional": False})
+#     assert len(hits_lenient) == 1, "false 模式下应检出 2 个 BIDIRECTIONAL 冲突"
+#
+#     # ignore_bidirectional=true（默认）→ 不应命中
+#     hits_strict = check_io_direction(doc, {"ignore_bidirectional": True})
+#     assert len(hits_strict) == 0, "true 模式下 BIDIRECTIONAL 应被忽略"
 
 
 if __name__ == "__main__":

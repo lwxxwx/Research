@@ -8,6 +8,8 @@ Metrics: Rule Precision / Recall / FP Rate / FN Rate / EVC
 
 Note:
     - Phase-F 规则引擎为函数式 API: execute_all_rules，无 RuleEngine 类
+    - V1.3：Benchmark 只取 defect 级命中（severity ∈ {medium, high, critical}），
+      low 级提示（如 IO_001）不参与 Precision / Recall 计算。
     - GT expected_review.json 的 defect 顶层**无 rule_id**，
       rule_id 埋在 evidence[type=rule_hit].rule_id；匹配时做「弱校验」
     - ir_ref 是否豁免三要素由 IR_REF_EXEMPT 控制，默认 False（严格对齐 V1.2 §3.2）
@@ -23,9 +25,9 @@ import json
 import os
 import pathlib
 from dataclasses import dataclass
-from typing import Any, Optional, List
+from typing import Any, List, Optional
 
-from app.ir import load_ir, SchematicIRDocument, IRSchemaValidator
+from app.ir import IRSchemaValidator, SchematicIRDocument, load_ir
 
 #BENCH_OUT_DIR = "/app/out"
 #RULES_DIR = pathlib.Path("/app/data/rules")
@@ -226,15 +228,28 @@ def run_single_case(case_root: str) -> CaseBenchResult:
     if not validate_result.is_valid:
         raise RuntimeError(f"IR校验失败 case={case_id}, errors={validate_result.errors}")
 
-    # 调用 Phase-F 函数式规则引擎
+        # 调用 Phase-F 函数式规则引擎
+    # ⚠️ V1.3 修改：改用 execute_defect_rules（只返回 severity ∈ {medium, high, critical}）。
+    # 原因：Rule_Precision 定义是"缺陷检出准确率"，low 级提示（如 IO_001）不是缺陷，
+    #      不应计入 FP 拉低 Precision。与方案 §11 V1.3 补充"Benchmark / Report 必须用
+    #      execute_defect_rules()"对齐。
+    # [原逻辑 - 保留注释，便于对照回滚]
+    # try:
+    #     from app.rules.engine import execute_all_rules, RuleResult
+    # except ImportError as e:
+    #     raise NotImplementedError(
+    #         f"[Phase-F规则引擎导入失败] 原始异常: {e}"
+    #     ) from e
+    # rule_results: List[RuleResult] = execute_all_rules(ir_doc, RULES_DIR)
     try:
-        from app.rules.engine import execute_all_rules, RuleResult
+        from app.rules.engine import RuleResult, execute_defect_rules
     except ImportError as e:
         raise NotImplementedError(
             f"[Phase-F规则引擎导入失败] 原始异常: {e}"
         ) from e
 
-    rule_results: List[RuleResult] = execute_all_rules(ir_doc, RULES_DIR)
+    rule_results: List[RuleResult] = execute_defect_rules(ir_doc, RULES_DIR)
+    # =====以上是 [/V1.3 修改] =====
     pred_defects: List[dict[str, Any]] = [r.model_dump() for r in rule_results]
 
     case_class = "A"

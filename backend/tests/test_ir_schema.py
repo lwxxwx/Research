@@ -27,9 +27,8 @@ Phase-D Schematic IR 测试（单元测试 + PostgreSQL 集成测试）
     4. 示例常量改为 lru_cache 懒加载（get_8051_example）
     5. IRValidationResult.summary 结构化（IRValidationSummary）
 
-⚠️ 影响：EXAMPLE_8031_CASE001 现在指向"函数"而非"文档对象"，
-   原有 `doc = EXAMPLE_8031_CASE001` 直接访问属性的写法全部改为
-   `doc = get_8051_example()`（函数调用）。
+⚠️ 影响（V1.3 更新）：EXAMPLE_8031_CASE001 别名已从 schema.py **移除**，
+   统一使用 `doc = get_8051_example()`（函数调用，lru_cache 缓存）。
 ===== [/NEW] =====
 
 ===== [NEW] v1.0.1 二次适配说明 =====
@@ -46,52 +45,53 @@ IRValidationSummary 实例（不再是 dict），因此：
 
 import pathlib
 import tempfile
-import uuid
 import time
-# ===== [NEW] 新增导入 =====
-from datetime import datetime, timedelta, date
-from typing import get_args
-# ===== [/NEW] =====
+import uuid
 
+# ===== [NEW] 新增导入 =====
+from datetime import datetime, timedelta
+from typing import get_args
+
+# ===== [/NEW] =====
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.persistence.models import (
-    IRDocument,
-    SchematicCase,
-    Project,
-    User,
-)
 from app.ir.schema import (
+    # ===== [NEW] 新增导入：本次改动涉及的新模型/字段 =====
+    Attribute,
+    Component,
+    IRValidationResult,
+    IRValidationSummary,
+    Net,
+    Pin,
+    #EXAMPLE_8031_CASE001,  # 向后兼容别名（现在是函数，需调用）
+    # ===== [/V1.3 修改] =====
+    PinDirection,
+    PinType,
     SchematicIRDocument,
+    create_8051_example,
     # EXAMPLE_8031_CASE001,  # 原代码：仍可导入（向后兼容别名），但用法变了
     # ===== [NEW] 新增导入：推荐的示例获取方式 =====
     get_8051_example,
-    create_8051_example,
-    EXAMPLE_8031_CASE001,  # 向后兼容别名（现在是函数，需调用）
-    # ===== [/NEW] =====
-    PinDirection,
-    PinType,
-    Component,
-    Pin,
-    Net,
-    # ===== [NEW] 新增导入：本次改动涉及的新模型/字段 =====
-    Attribute,
-    IRValidationResult,
-    IRValidationSummary,
-    # ===== [/NEW] =====
-)
-from app.ir.serializer import dump_ir, load_ir
-from app.ir.validator import IRSchemaValidator, FloatingCheckResult
-from app.ir.service import (
-    store_schematic_ir,
-    load_schematic_ir,
-    load_schematic_ir_by_case,
 )
 
+# ===== [/NEW] =====
+from app.ir.serializer import dump_ir, load_ir
+from app.ir.service import (
+    load_schematic_ir,
+    load_schematic_ir_by_case,
+    store_schematic_ir,
+)
+from app.ir.validator import FloatingCheckResult, IRSchemaValidator
+from app.persistence.models import (
+    IRDocument,
+    Project,
+    SchematicCase,
+    User,
+)
 
 # ============================================================
 # Fixtures - 单元测试（无数据库依赖）
@@ -803,11 +803,14 @@ class TestExampleLazyLoading:
         assert doc1.case_id == doc2.case_id
         assert len(doc1.components) == len(doc2.components)
 
-    def test_backward_compat_alias_is_callable(self):
-        """向后兼容别名 EXAMPLE_8031_CASE001 现在是可调用的函数"""
-        assert callable(EXAMPLE_8031_CASE001)
-        doc = EXAMPLE_8031_CASE001()
-        assert isinstance(doc, SchematicIRDocument)
+    # ===== [V1.3 修改] 删除别名测试（别名已移除） =====
+    # [原逻辑 - 保留注释，便于对照回滚]
+    # def test_backward_compat_alias_is_callable(self):
+    #     """向后兼容别名 EXAMPLE_8031_CASE001 现在是可调用的函数"""
+    #     assert callable(EXAMPLE_8031_CASE001)
+    #     doc = EXAMPLE_8031_CASE001()
+    #     assert isinstance(doc, SchematicIRDocument)
+    # ===== [/V1.3 修改] =====
 
     def test_lru_cache_info(self):
         """验证 lru_cache 命中统计"""
@@ -1174,7 +1177,7 @@ def test_ir_jsonb_query_by_component_count(pg_session, test_schematic_case):
 
 def test_multiple_ir_versions_same_case(pg_session, test_schematic_case):
     """同一 case_id 多个 IR 版本，按时间排序取最新"""
-    # doc_v1 = EXAMPLE_8031_CASE001  # 原代码
+    # doc_v1 = EXAMPLE_8031_CASE001  # 原代码（旧版曾用 EXAMPLE_8031_CASE001）
     # ===== [NEW] 改为函数调用，并显式构造两个独立版本 =====
     doc_v1 = get_8051_example()
     # ===== [/NEW] =====
@@ -1491,3 +1494,184 @@ def test_ir_jsonb_connected_pins_validated_on_load(pg_session, test_schematic_ca
             ref, pin_id = pin_ref.split(".", 1)
             assert ref, f"ref 为空: {pin_ref}"
             assert pin_id, f"pin_id 为空: {pin_ref}"
+
+# ============================================================
+# [V1.3 NEW] Phase D 定向测试
+# ============================================================
+
+# ============ 1. serializer 目录输入支持（P0-2） ============
+class TestSerializerDirectoryInput:
+    """测试 serializer 的 --validate 支持目录输入"""
+
+    def test_resolve_ir_path_with_directory(self, tmp_path):
+        """_resolve_ir_path：目录 → 拼接 schematic_ir.json"""
+        from app.ir.serializer import _resolve_ir_path
+        result = _resolve_ir_path(str(tmp_path))
+        assert result == tmp_path / "schematic_ir.json"
+
+    def test_resolve_ir_path_with_file(self, tmp_path):
+        """_resolve_ir_path：文件 → 原样返回"""
+        from app.ir.serializer import _resolve_ir_path
+        f = tmp_path / "custom.json"
+        f.write_text("{}", encoding="utf-8")
+        result = _resolve_ir_path(str(f))
+        assert result == f
+
+    def test_validate_ir_file_with_directory(self, tmp_path):
+        """validate_ir_file：传目录，自动找 schematic_ir.json"""
+        from app.ir.serializer import dump_ir, validate_ir_file
+        doc = get_8051_example()
+        dump_ir(doc, tmp_path / "schematic_ir.json")
+
+        ok = validate_ir_file(str(tmp_path), strict_mode=False)
+        assert ok is True
+
+    def test_validate_ir_file_with_file(self, tmp_path):
+        """validate_ir_file：传文件，正常工作"""
+        from app.ir.serializer import dump_ir, validate_ir_file
+        doc = get_8051_example()
+        f = tmp_path / "schematic_ir.json"
+        dump_ir(doc, f)
+
+        ok = validate_ir_file(str(f), strict_mode=False)
+        assert ok is True
+
+    def test_validate_ir_file_with_strict_mode(self, tmp_path):
+        """validate_ir_file：--strict 模式对 8051 示例应 PASS"""
+        from app.ir.serializer import dump_ir, validate_ir_file
+        doc = get_8051_example()
+        dump_ir(doc, tmp_path / "schematic_ir.json")
+
+        ok = validate_ir_file(str(tmp_path), strict_mode=True)
+        assert ok is True
+
+
+# ============ 2. validator floating_pin_refs 语义（P2-2） ============
+class TestFloatingPinRefsSemantics:
+    """测试 floating_pin_refs 对完全悬浮/部分悬浮元件的收集语义"""
+
+    def test_partial_floating_pin_in_refs(self):
+        """部分悬浮：仅悬浮引脚进 floating_pin_refs"""
+        doc = SchematicIRDocument(
+            case_id="test",
+            title="Test",
+            description="Test",
+            components=[
+                Component(
+                    ref="U1",
+                    lib_name="TEST",
+                    pins=[
+                        Pin(pin_id="pin1", name="pin1", direction=PinDirection.INPUT, pin_type=PinType.OTHER),
+                        Pin(pin_id="pin2", name="pin2", direction=PinDirection.INPUT, pin_type=PinType.OTHER),
+                    ],
+                    intent="test", context="test",
+                ),
+            ],
+            nets=[
+                Net(net_name="NET1", connected_pins=["U1.pin1"]),
+            ],
+        )
+        result = IRSchemaValidator.check_floating_components(doc)
+        assert "U1.pin2" in result.floating_pin_refs
+        assert "U1.pin1" not in result.floating_pin_refs
+        assert "U1" not in result.floating_component_refs
+
+    def test_fully_floating_component_all_pins_in_refs(self):
+        """完全悬浮：所有引脚进 floating_pin_refs，元件进 floating_component_refs"""
+        doc = SchematicIRDocument(
+            case_id="test",
+            title="Test",
+            description="Test",
+            components=[
+                Component(
+                    ref="U2",
+                    lib_name="TEST",
+                    pins=[
+                        Pin(pin_id="pin1", name="pin1", direction=PinDirection.INPUT, pin_type=PinType.OTHER),
+                        Pin(pin_id="pin2", name="pin2", direction=PinDirection.INPUT, pin_type=PinType.OTHER),
+                    ],
+                    intent="test", context="test",
+                ),
+            ],
+            nets=[],
+        )
+        result = IRSchemaValidator.check_floating_components(doc)
+        assert "U2.pin1" in result.floating_pin_refs
+        assert "U2.pin2" in result.floating_pin_refs
+        assert "U2" in result.floating_component_refs
+
+    def test_summary_floating_pins_contains_fully_floating(self):
+        """summary.floating_pins 应同时包含部分/完全悬浮的引脚"""
+        doc = SchematicIRDocument(
+            case_id="test",
+            title="Test",
+            description="Test",
+            components=[
+                Component(
+                    ref="U1",
+                    lib_name="T1",
+                    pins=[Pin(pin_id="pin1", name="pin1", direction=PinDirection.INPUT, pin_type=PinType.OTHER)],
+                    intent="t", context="t",
+                ),
+                Component(
+                    ref="U2",
+                    lib_name="T2",
+                    pins=[Pin(pin_id="pin1", name="pin1", direction=PinDirection.INPUT, pin_type=PinType.OTHER)],
+                    intent="t", context="t",
+                ),
+            ],
+            nets=[Net(net_name="NET1", connected_pins=["U1.pin1"])],
+        )
+        result = IRSchemaValidator.validate(doc, strict_mode=False)
+        floating_pins = result.summary.floating_pins
+        assert "U2.pin1" in floating_pins
+
+
+# ============ 3. service case_id 联动（P0-4 选项 B） ============
+class TestServiceCaseIdLinkage:
+    """测试 store_schematic_ir 的 case_id 联动逻辑（需 PostgreSQL）"""
+
+    def test_case_id_auto_fills_schematic_case_id(
+        self, pg_session, test_schematic_case
+    ):
+        """未传 schematic_case_id 时，用 case_id 自动补全"""
+        # test_schematic_case.case_id 是 UUID 后缀串，先读出来
+        real_case_id = test_schematic_case.case_id
+
+        doc = get_8051_example()
+        # 用 test_schematic_case.case_id 替换 doc.case_id（保持一致）
+        doc.case_id = real_case_id
+
+        db_rec = store_schematic_ir(
+            pg_session,
+            case_id=real_case_id,
+            ir_doc=doc,
+            schematic_case_id=None,   # 不显式传
+        )
+        assert db_rec.schematic_case_id == test_schematic_case.id
+
+    def test_case_id_not_found_keeps_null(
+        self, pg_session, test_schematic_case
+    ):
+        """case_id 查不到时，schematic_case_id 保持 NULL（不阻断）"""
+        doc = get_8051_example()
+        db_rec = store_schematic_ir(
+            pg_session,
+            case_id="nonexistent_case_xxx",
+            ir_doc=doc,
+            schematic_case_id=None,
+        )
+        assert db_rec.schematic_case_id is None
+
+    def test_explicit_schematic_case_id_takes_priority(
+        self, pg_session, test_schematic_case
+    ):
+        """显式传入 schematic_case_id 时，优先使用"""
+        doc = get_8051_example()
+        db_rec = store_schematic_ir(
+            pg_session,
+            case_id="nonexistent_case_xxx",   # 故意查不到
+            ir_doc=doc,
+            schematic_case_id=test_schematic_case.id,   # 显式传入
+        )
+        assert db_rec.schematic_case_id == test_schematic_case.id

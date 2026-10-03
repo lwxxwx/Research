@@ -286,7 +286,6 @@ def check_io_floating(
 
     return hits
 
-
 # ---------------------------------------------------------------------------
 # IO_002：IO 方向冲突检查
 # ---------------------------------------------------------------------------
@@ -295,17 +294,33 @@ def check_io_direction(
     rule_params: Dict[str, Any],
 ) -> List[RuleHitItem]:
     """
-    判定逻辑（仅判"输出冲突"，Sprint0 决策）：
+    判定逻辑（"输出冲突"检查，V1.3 扩展 BIDIRECTIONAL 分支）：
       对每个含 IO 引脚的网络：
-        - 统计 direction == OUTPUT 的引脚数；
+        - 统计"潜在输出引脚"数；
         - 若 ≥ 2 → 命中"输出冲突"。
-      BIDIRECTIONAL 与 INPUT 不参与判定。
+
+    "潜在输出引脚"的判定受 rule_params.ignore_bidirectional 控制：
+      - true（默认）：只统计 direction == OUTPUT；
+      - false：统计 direction == OUTPUT + BIDIRECTIONAL。
+
+    INPUT 引脚永不参与判定（不驱动，不会与其他引脚形成冲突）。
 
     rule_params:
-      ignore_bidirectional: bool   可选，默认 true；true 时忽略 BIDIRECTIONAL
+      ignore_bidirectional: bool   可选，默认 true；
+                                   true = 忽略 BIDIRECTIONAL（普通 GPIO/UART 场景）；
+                                   false = 将 BIDIRECTIONAL 视为潜在输出（I2C/SPI 双向总线场景）。
 
     输出（逐条，per-net）：
       每个冲突网络 → 一条 RuleHitItem。
+
+    V1.3 边界澄清（3 条不变式）：
+      1. 2 OUTPUT：永远算冲突；
+      2. INPUT：永远不算冲突（不驱动）；
+      3. BIDIRECTIONAL：按 ignore_bidirectional 参数走。
+         当 false 时：
+           - 1 OUTPUT + 1 BIDIRECTIONAL → 算冲突；
+           - 2 BIDIRECTIONAL → 算冲突。
+         当 true 时：上述两种均不算。
     """
     hits: List[RuleHitItem] = []
 
@@ -325,11 +340,23 @@ def check_io_direction(
         if not any(p.pin_type == PinType.IO for p in net_pins):
             continue
 
+        # ⚠️ V1.3 修改：ignore_bidirectional=false 时，把 BIDIRECTIONAL 也纳入"潜在输出"
+        # 判定语义：
+        #   - true（默认）：只统计 OUTPUT 引脚，≥2 即冲突
+        #   - false：统计 OUTPUT + BIDIRECTIONAL，≥2 即冲突
+        # 理由：双向总线（I2C/SPI）上多个 BIDIRECTIONAL 主控同网 = 潜在总线冲突
+        # [原逻辑 - 保留注释，便于对照回滚]
+        # outputs = [
+        #     p for p in net_pins
+        #     if p.direction == PinDirection.OUTPUT
+        # ]
         outputs = [
             p for p in net_pins
             if p.direction == PinDirection.OUTPUT
+            or (not ignore_bidirectional and p.direction == PinDirection.BIDIRECTIONAL)
         ]
         if len(outputs) >= 2:
+            # 命中：组装 RuleHitItem
             involved_refs = sorted({
                 pref.split(".")[0] for pref in net.connected_pins
             })

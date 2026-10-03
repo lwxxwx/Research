@@ -1,7 +1,9 @@
 # app/core/logging.py
 import logging
 import sys
+
 from pythonjsonlogger import jsonlogger
+
 from app.core.config import settings
 
 # 保存本模块添加的 handler 引用，便于只清自己加的
@@ -19,7 +21,7 @@ def setup_logging() -> None:
         _configured_handler = None
 
     handler = logging.StreamHandler(stream=sys.stdout)
-    
+
     #formatter = jsonlogger.JsonFormatter(
     #    "%(asctime)s %(levelname)s %(name)s %(message)s"
     #)

@@ -6,10 +6,10 @@ import logging
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
 from app.core.config import Settings, settings
 from app.core.errors import BusinessException
 from app.core.logging import setup_logging
+from app.main import app
 
 client = TestClient(app)
 

@@ -1,6 +1,7 @@
 # backend/app/schemas/report.py
 from enum import StrEnum
 
+
 class ReviewStatus(StrEnum):
     """V1.2 Defect三态评审状态，review_defect.review_status DB字段对齐"""
     AI_CONFIRMED = "AI_CONFIRMED"

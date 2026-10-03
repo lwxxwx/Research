@@ -24,18 +24,24 @@ Schematic IR Schema v1.0
   - IRValidationResult.summary 结构化（新增 IRValidationSummary 模型）
 """
 
-from pydantic import BaseModel, Field, ConfigDict
-# ===== [NEW] 新增导入 =====
-from pydantic import field_validator  # 字段级校验器（Pydantic v2）
-# ===== [/NEW] =====
-from typing import Optional, List, Dict, Any
-# ===== [NEW] 新增导入 =====
-from typing import Union, ClassVar  # ===== [NEW] 新增 ClassVar =====
-from datetime import datetime
-from functools import lru_cache
 import re
+from datetime import datetime
+
 # ===== [/NEW] =====
 from enum import Enum
+from functools import lru_cache
+
+# ===== [/NEW] =====
+# ===== [NEW] 新增导入 =====
+from typing import Any, ClassVar, Dict, List, Optional, Union  # ===== [NEW] 新增 ClassVar =====
+
+# ===== [NEW] 新增导入 =====
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,  # 字段级校验器（Pydantic v2）
+)
 
 
 # ============ 引脚类型枚举 (DeepSeek) ============
@@ -506,19 +512,21 @@ def create_8051_example() -> SchematicIRDocument:
 
 
 # ===== 导出的示例常量 =====
-# EXAMPLE_8031_CASE001 = create_8051_example()  # 原代码：import 时立即构造
 # ===== [NEW] 改为 lru_cache 懒加载函数 =====
-# 优点：
-#   - import 模块时不再立即构造对象（避免 import 期异常）
-#   - 首次调用后缓存，后续调用零成本
-#   - 仍可像常量一样使用：get_8051_example()
 @lru_cache(maxsize=1)
 def get_8051_example() -> SchematicIRDocument:
     """懒加载并缓存 8051 示例文档（首次调用时构造，之后复用同一实例）"""
     return create_8051_example()
 
-
-# 向后兼容别名：老代码若还引用 EXAMPLE_8031_CASE001，可用函数式访问
-# 注意：这不再是"常量"，而是"函数"，需要调用才能拿到对象
-EXAMPLE_8031_CASE001 = get_8051_example  # 别名指向函数本身
+# ===== [V1.3 修改] 删除向后兼容别名 EXAMPLE_8031_CASE001 =====
+# 原因：
+#   1. 该别名指向函数本身，老代码 `doc = EXAMPLE_8031_CASE001` 会拿到函数对象，
+#      访问 .components 等属性时报 AttributeError，容易踩坑。
+#   2. serializer.py / test_ir_schema.py 已全面改用 get_8051_example()，
+#      不再需要别名。
+# [原逻辑 - 保留注释，便于对照回滚]
+# # 向后兼容别名：老代码若还引用 EXAMPLE_8031_CASE001，可用函数式访问
+# # 注意：这不再是"常量"，而是"函数"，需要调用才能拿到对象
+# EXAMPLE_8031_CASE001 = get_8051_example  # 别名指向函数本身
+# ===== [/V1.3 修改] =====
 # ===== [/NEW] =====

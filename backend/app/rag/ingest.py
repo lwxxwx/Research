@@ -34,17 +34,16 @@ import sys
 from typing import List
 
 import yaml
-
 from langchain_core.embeddings import Embeddings
-from langchain_openai import OpenAIEmbeddings
 from langchain_core.embeddings.fake import DeterministicFakeEmbedding
+from langchain_openai import OpenAIEmbeddings
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.persistence.db import get_db_session
-from app.persistence.models import KnowledgeDoc, KnowledgeChunk
-from app.rag.knowledge import IngestConfig
+from app.persistence.models import KnowledgeChunk, KnowledgeDoc
 from app.rag.chunking import process_markdown_file_v2
+from app.rag.knowledge import IngestConfig
 
 logger = logging.getLogger(__name__)
 

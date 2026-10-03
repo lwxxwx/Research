@@ -32,7 +32,7 @@
 ## 2. 基础概念
 
 - **GT**：`expected_review.json["defects"]`，专家标定的真实缺陷集合
-- **Pred**：`execute_all_rules()` 返回的 RuleResult 序列化 dict 列表
+- **Pred**：`execute_defect_rules()` 返回的 RuleResult 序列化 dict 列表（只含 `severity ∈ {medium, high, critical}`，low 级提示不参与指标计算）
 - **TP**：预测缺陷与 GT 缺陷匹配命中真实问题
 - **FP**：预测存在，GT 不存在（误报）
 - **FN**：GT 存在，预测未检出（漏检）
@@ -210,5 +210,5 @@ AI_NER = N_ai_effective / (N_rule_effective + N_ai_effective)
 2. `第一阶段工程实施方案_V1.2_增强版_plan.md` §8 Benchmark
 3. `backend/app/services/benchmark_service.py`（匹配、指标、CSV）
 4. `data/cases/case001/expected_review.json`（GT 真值）
-5. `backend/app/rules/engine.py`（RuleResult 输出模型）
+5. `backend/app/rules/engine.py`（RuleResult 输出模型，`execute_defect_rules` 为 Benchmark 入口）
 6. `data/cases/README_CASE_B_DESIGN.md`（Golden Case 规范）

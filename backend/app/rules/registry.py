@@ -11,10 +11,10 @@ from typing import Callable, Dict
 
 from app.rules.builtin.circuit_checks import (
     check_decoupling,
-    check_reset_rc_topology,
     check_derating,
-    check_io_floating,
     check_io_direction,
+    check_io_floating,
+    check_reset_rc_topology,
 )
 
 # key 与 YAML 中 check_logic.function 字段值一一对应

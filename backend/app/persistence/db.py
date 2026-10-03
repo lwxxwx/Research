@@ -2,9 +2,10 @@
 app/persistence/db.py
 数据库会话工厂
 """
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
 from contextlib import contextmanager
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 
