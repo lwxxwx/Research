@@ -315,6 +315,7 @@ cmd /c "docker compose -f `"$f1`" -f `"$f2`" up -d --build"
     1. 补齐各案例目录：`expert_reasoning.md`, `evidence/`, `evaluation.yaml`。
     2. **Case001 专家校准**：完成 `docs/freeze/case001_expert_calibration.md`。
 - **验收**：案例目录结构完整，`expected_review.json` 满足 10 字段规范。
+- **补充**：case001 IR 统计为元件 7 / 网络 5 / 引脚 52，与 `extra_meta` 一致（详见 `docs/freeze/case001_expert_calibration.md` §2）。
 ---
 ## 11. Phase F · Rule System
 - **目标**：实现确定性规则引擎与 **5 条内置规则**（3 条电源规则 + 2 条 IO 规则）。

@@ -28,7 +28,7 @@
 - ✅ IR strict 模式校验 PASS；三语义字段（intent/context）覆盖率 100%；`lib_name` 全部非空；`connected_pins` 引用全部合法（`{ref}.{pin_id}`）
 - ✅ IR 元件 7 个、网络 5 个、引脚 52，与 `extra_meta` 统计一致
 - ✅ 网络清单与 IR 对齐：VCC / GND / **XTAL_OSC** / RST / EA_GND（晶振为单一合并网络；EA 独立接地）
-- ✅ `expected_review.json` 满足 Defect 10 字段规范 + Evidence 三要素
+- ✅ `expected_review.json` 满足 Defect 10 字段规范；Evidence 结构已定义，`rag_ref` 三要素完整，`ir_ref` 当前缺 `source`/`section`，导致 case001 EVC=0.6667（数据资产现状，非代码缺陷，详见 `docs/benchmark/metrics_definition.md` §4.3）。
 - ✅ 目录结构完整（info.yaml / IR / expert_reasoning / expected_review / evaluation / evidence）
 
 ## 3. 电路确认点
@@ -50,7 +50,8 @@
 
 - case001 为 Sprint0 基准（A 类 / Rule-Only），后续修改 IR / expected_review / evaluation 必须重新执行专家校准并更新本纪要。
 - 复位电路缺陷 DEF-CASE001-2 依赖「STC89C55RC 为高电平复位、C3 应接 VCC-RST」的工程判定；若上游确认原理图本意采用低电平复位系统，需复核本缺陷。
-- 本用例作为 `scripts.run_benchmark` 的 Rule-Only 基线数据源，输出 `out/bench_ruleonly_sprint0.csv`。
+- 本用例作为 `tests.test_benchmark` 的 Rule-Only 基线数据源，输出 `out/bench_ruleonly_sprint0.csv`。
+- `case_class` 当前在 `benchmark_service.CaseBenchResult` 中硬编码为 `"A"`；Sprint1 跑 6A+4B 时改为从 `expected_review.json` 的 `case_class` 字段读取。
 
 ## 6. 验收签字
 

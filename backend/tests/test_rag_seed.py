@@ -388,6 +388,7 @@ STC89C55RC 使用片内振荡器，XTAL1、XTAL2 引脚外接石英晶振 Y1。
         #    _conn.execute(_text(
         #        "DELETE FROM knowledge_doc WHERE source LIKE '/tmp/%'"
         #    ))
+        # 无需 cleanup。DB 污染清理见 test_ingest_uses_embed_documents_not_embed_query。
 
 
 # ============================================================
