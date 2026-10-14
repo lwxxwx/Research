@@ -127,6 +127,11 @@ class ReviewResult(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     ir_document_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("ir_document.id", ondelete="CASCADE"))
     task_id: Mapped[Optional[str]] = mapped_column(String(64))
+    # ===== [S1-CHANGE-3] ReviewResult 新增 schematic_case_id（Sprint1 §8：评审-案例关联，ON DELETE SET NULL）=====
+    schematic_case_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("schematic_case.id", ondelete="SET NULL")
+    )
+    # ===== [S1-CHANGE-3 END] =====
     review_output_json: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False)
     is_rule_only: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     # V1.2 摘要字段
@@ -179,6 +184,11 @@ class ReviewDefect(Base):
     feedback_count: Mapped[int] = mapped_column(Integer, server_default="0")
     latest_feedback_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
+    # ===== [S1-CHANGE-1] ReviewDefect 新增专家最终判定（Sprint1 §23.1：质量状态与专家决定分离）=====
+    expert_decision: Mapped[str] = mapped_column(String(32), nullable=False, server_default="pending")
+    expert_decision_updated_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True))
+    expert_decision_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
+    # ===== [S1-CHANGE-1 END] =====
     # 关系
     review_result: Mapped[Optional["ReviewResult"]] = relationship(back_populates="defects")
     feedbacks: Mapped[List["FeedbackItem"]] = relationship(back_populates="defect", cascade="all, delete-orphan")
@@ -189,6 +199,13 @@ class ReviewDefect(Base):
         Index("idx_review_defect_category", "category"),
         Index("idx_review_defect_origin", "origin"),
         Index("idx_review_defect_rule_id", "rule_id"),
+        # ===== [S1-CHANGE-2] ReviewDefect 新增 expert_decision 约束与索引（Sprint1 §23.1）=====
+        CheckConstraint(
+            "expert_decision IN ('pending','confirmed','rejected','needs_verification')",
+            name="check_review_defect_expert_decision",
+        ),
+        Index("idx_review_defect_expert_decision", "expert_decision"),
+        # ===== [S1-CHANGE-2 END] =====
     )
 # ============================================================
 # 9. FeedbackItem（增强：关联 review_defect）
@@ -289,12 +306,11 @@ class RuleCandidate(Base):
     candidate_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     from_feedback_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("feedback_item.id"))
     case_id: Mapped[Optional[str]] = mapped_column(String(64))
-    # ✅ Sprint0：普通字段，无外键；Sprint-1 tasks 表创建后再补 ForeignKey
-    # ⚠️ V1.3 修改：补 TODO 显式标注，避免 Sprint1 漏改。
-    # Sprint1 待办：
-    #   1. SQL 侧：task_id BIGINT REFERENCES tasks(id)（002_schema.sql 加 FK）
-    #   2. ORM 侧：mapped_column(BigInteger, ForeignKey("tasks.id"))
-    task_id: Mapped[Optional[int]] = mapped_column(BigInteger)
+    # ===== [S1-CHANGE-4/5] RuleCandidate：新增 schematic_case_id，删除 task_id（Sprint1 §8：候选独立于 case，ON DELETE SET NULL）=====
+    schematic_case_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("schematic_case.id", ondelete="SET NULL")
+    )
+    # ===== [S1-CHANGE-4/5 END] =====
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     severity: Mapped[Optional[str]] = mapped_column(String(16))
@@ -307,6 +323,9 @@ class RuleCandidate(Base):
     __table_args__ = (
         Index("idx_rule_candidates_status", "status"),
         Index("idx_rule_candidates_case_id", "case_id"),
-         # ✅ 对齐 SQL
+        # ✅ 对齐 SQL
         Index("idx_rule_candidates_from_feedback_id", "from_feedback_id"),
+        # ===== [S1-CHANGE-6] RuleCandidate 新增 schematic_case_id 索引（Sprint1 §8）=====
+        Index("idx_rule_candidates_schematic_case", "schematic_case_id"),
+        # ===== [S1-CHANGE-6 END] =====
     )
