@@ -1,4 +1,8 @@
 -- ==============================================
+-- [DEPRECATED] Sprint 1 起由 Alembic 管理 Schema
+-- 本文件仅作为历史基线保留，不再自动执行。
+-- Schema 唯一来源：backend/alembic/versions/*
+-- ==============================================
 -- 002_schema.sql Sprint0 DB Schema v1.2‑enhance
 -- Source of Truth：禁止代码自动建表，只能执行本SQL脚本
 --
