@@ -1,0 +1,20 @@
+rule_id: CTRL_002
+rule_name: 上电复位时序检查
+version: "1.0"
+category: timing
+severity: high
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "circuit_checks.check_power_on_sequence"
+  params:
+    reset_net: "RST"
+    vcc_net: "VCC"
+    min_reset_high_ms: 2
+    reset_rc_detection: true
+
+rule_basis: "通用上电复位时序规范；占位：8051 Datasheet §6.3 Reset Circuit"
+suggestion: "核对上电复位时序：RC 时间常数应保证 RST 高电平持续时间 ≥ Datasheet 要求，否则 MCU 可能无法可靠复位。"

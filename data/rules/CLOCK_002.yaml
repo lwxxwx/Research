@@ -1,0 +1,20 @@
+rule_id: CLOCK_002
+rule_name: 晶振电路完整性检查
+version: "1.0"
+category: clock
+severity: high
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "circuit_checks.check_crystal_circuit_complete"
+  params:
+    crystal_lib_names: ["CRYSTAL", "XTAL"]
+    mcu_clock_pin_types: ["clock"]
+    required_load_caps: 2
+    ground_net_names: ["GND", "VSS"]
+
+rule_basis: "通用晶振电路拓扑规范"
+suggestion: "晶振电路应包含：晶振本体 + 两端负载电容 + 到 MCU 时钟引脚的连接；缺项会导致不起振。"

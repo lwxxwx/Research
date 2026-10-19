@@ -1,0 +1,21 @@
+rule_id: CLOCK_001
+rule_name: 晶振负载电容配置检查
+version: "1.0"
+category: clock
+severity: medium
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "circuit_checks.check_crystal_load_cap"
+  params:
+    crystal_lib_names: ["CRYSTAL", "XTAL"]
+    expected_load_cap_pf: 22
+    tolerance_pf: 5
+    min_load_caps: 2
+    ground_net_names: ["GND", "VSS"]
+
+rule_basis: "通用晶振电路设计规范；占位：8051 Datasheet §6.1 Crystal Oscillator"
+suggestion: "检查晶振两端负载电容是否匹配 Datasheet 推荐值（典型 22pF）；不匹配会导致起振失败或频率偏移。"

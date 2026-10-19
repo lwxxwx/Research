@@ -1,0 +1,19 @@
+rule_id: CTRL_001
+rule_name: 使能信号连接检查
+version: "1.0"
+category: interface
+severity: high
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "circuit_checks.check_enable_pin_connection"
+  params:
+    enable_pin_name_patterns: ["EN", "OE", "CE", "CS", "WE"]
+    floating_check: true
+    pull_required: true
+
+rule_basis: "通用数字器件使能脚设计规范：使能脚必须明确上拉/下拉，不应悬空"
+suggestion: "使能脚应明确上拉或下拉，不应悬空。悬空时器件行为不确定。"

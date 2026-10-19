@@ -1,0 +1,19 @@
+rule_id: IO_003
+rule_name: MCU IO 与外部器件输出冲突检查
+version: "1.0"
+category: interface
+severity: critical
+enabled: true
+
+applicable_condition:
+  scope: schematic
+
+check_logic:
+  function: "circuit_checks.check_io_output_conflict"
+  params:
+    mcu_lib_patterns: ["STC89C5", "AT89C5", "MCU_", "PIC", "AVR", "STM32"]
+    exclude_net_names: ["VCC", "GND", "VSS"]
+    output_pin_types: ["io", "analog"]
+
+rule_basis: "通用数字电路设计规范：MCU 推挽输出不应与外部器件推挽输出直连"
+suggestion: "MCU 推挽输出不应与外部器件推挽输出直连；改用开漏 + 上拉，或加缓冲/隔离。"

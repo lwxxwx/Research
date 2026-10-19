@@ -1,6 +1,6 @@
 rule_id: POWER_003
 rule_name: 器件功率降额检查
-version: "1.0"
+version: "1.1"
 category: power
 severity: high
 enabled: true
@@ -9,8 +9,17 @@ applicable_condition:
   scope: schematic
 
 check_logic:
-  function: "circuit_checks.check_derating"   # v1.0.1: 原 power_checks.check_derating
-  params: {}
+  function: "circuit_checks.check_derating"
+  params:
+    default_derating_coefficient: 0.8
+    attr_rated_power: "power_dissipation_rated"
+    attr_actual_power: "power_dissipation_actual"
+    attr_temperature: "operating_temperature"
+    attr_derating_coef: "derating_coefficient"
+    temperature_derating_curve:
+      - {temp_max_c: 25, coefficient: 1.0}
+      - {temp_max_c: 70, coefficient: 0.8}
+      - {temp_max_c: 85, coefficient: 0.6}
 
-rule_basis: "通用硬件降额设计规范（Sprint0 预留，Sprint1 补实现）"
-suggestion: "核对器件功耗与环境温度，确保工作点在降额曲线允许范围内。"
+rule_basis: "通用降额设计准则（占位：GJB/Z 35、IPC-9592）；待项目硬件规范替换"
+suggestion: "核对器件实际功耗是否超过降额后的允许值；超限需更换器件或改善散热。"
