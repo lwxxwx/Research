@@ -113,6 +113,13 @@ def test_orm_metadata_table_names_match_db(db_engine):
 
     orm_only = orm_tables - db_tables
     db_only = db_tables - orm_tables
+
+    # ===== [S1-PATCH] Alembic 版本表由 Alembic 自身维护，不由 ORM 声明 =====
+    # Sprint 1 起 Schema 唯一源为 Alembic，alembic_version 必然存在且不在 Base.metadata。
+    # 若不排除，会导致此测试在 Sprint 1 起永久 FAILED。
+    # ===== [S1-PATCH END] =====
+    db_only = db_only - {"alembic_version"}
+
     assert not orm_only, f"ORM 有但 DB 缺失的表: {sorted(orm_only)}"
     assert not db_only, f"DB 有但 ORM 未声明的表: {sorted(db_only)}"
 
@@ -1789,43 +1796,28 @@ def test_crud_knowledge_chunk_meta_json_mapping(db_session):
 
 # ---------- 15.7 RuleCandidate.task_id 读写 ----------
 
-def test_crud_rule_candidate_task_id(db_session):
-    """
-    RuleCandidate.task_id（Sprint0 预留字段）能读能写。
-    注意：SQL 里 task_id 无外键，允许任意 BIGINT 或 NULL。
-    """
-    # 不填 task_id
-    rc1 = RuleCandidate(
+def test_crud_rule_candidate_basic(db_session):
+    """RuleCandidate 基础 CRUD（Sprint1 已删除 task_id 字段，不再测）"""
+    rc = RuleCandidate(
         candidate_id="RC-CRUD-007A",
-        title="no task",
+        title="basic",
         description="d",
     )
-    db_session.add(rc1)
+    db_session.add(rc)
     db_session.flush()
-    assert rc1.task_id is None, "未填 task_id 应为 None"
 
-    # 填 task_id
-    rc2 = RuleCandidate(
-        candidate_id="RC-CRUD-007B",
-        title="with task",
-        description="d",
-        task_id=12345,
-    )
-    db_session.add(rc2)
+    rc_id = rc.id
+    db_session.expire(rc)
+    rc2 = db_session.get(RuleCandidate, rc_id)
+    assert rc2.candidate_id == "RC-CRUD-007A"
+    assert rc2.status == "proposed", "默认状态应为 proposed"
+    assert rc2.severity is None, "未填 severity 应为 None"
+
+    rc2.status = "designing"
     db_session.flush()
-    rc2_id = rc2.id
-
     db_session.expire(rc2)
-    rc2_reloaded = db_session.get(RuleCandidate, rc2_id)
-    assert rc2_reloaded.task_id == 12345, "task_id 写入后回读失真"
-
-    # 改 task_id
-    rc2_reloaded.task_id = 99999
-    db_session.flush()
-    db_session.expire(rc2_reloaded)
-    rc2_again = db_session.get(RuleCandidate, rc2_id)
-    assert rc2_again.task_id == 99999
-
+    rc3 = db_session.get(RuleCandidate, rc_id)
+    assert rc3.status == "designing"
 
 # ---------- 15.8 server_default 生效：ORM 不赋值也自动填 ----------
 
