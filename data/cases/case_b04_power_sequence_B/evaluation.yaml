@@ -1,0 +1,46 @@
+case_id: case_b04_power_sequence_B
+evaluation_ver: "1.0"
+case_class: B
+ir_path: ./schematic_ir.json
+ground_truth_path: ./expected_review.json
+enabled: true
+strict_ir_validation: true
+
+pass_criteria:
+  rule_checks:
+    - defect_ref: DEF-B04-1
+      origin_must_be: rule
+      rule_id: POWER_001
+      component_refs_intersect: [U2]
+      net_refs_intersect: [VCC_3V3]
+      risk_must_be:
+        one_of: [critical]
+      evidence_must_have_at_least:
+        n: 1
+      suggestion_keywords_any: [0.1μF, 陶瓷, 去耦]
+      root_cause_keywords_any: [去耦, 噪声]
+
+    - defect_ref: DEF-B04-2
+      origin_must_be: ai_discovered
+      rule_id_must_be_null: true
+      component_refs_intersect: [U3, U4]
+      net_refs_intersect: [VCC_3V3, VCC_5V]
+      risk_must_be:
+        one_of: [high, critical]
+      evidence_must_have_at_least:
+        n: 3
+      suggestion_keywords_any: [使能延迟, PMIC, 时序控制, 电平转换]
+      root_cause_keywords_any: [时序, 灌电流, 闩锁]
+
+benchmark_weights:
+  rule_metrics_weight: 0.4
+  ai_metrics_weight: 0.6
+
+benchmark_tags:
+  - sprint1
+  - ai_discovery
+  - power_sequence
+  - multi_rail
+
+skip_categories: []
+notes: "case_b04 含 1 rule（POWER_001）+ 1 ai_discovered（上电时序异常）。预期命中 2 条。IO_003 不命中（SPI_MISO 的 U1.P1_5 是 input，不是 output）。IO_001 命中（low，不计入 defect）。POWER_002/003、CLOCK_001/002、CTRL_001/002、IO_002/003 均不应命中。calibration_status=PROVISIONAL。"

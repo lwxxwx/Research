@@ -1,0 +1,46 @@
+case_id: case_b03_io_direction_B
+evaluation_ver: "1.0"
+case_class: B
+ir_path: ./schematic_ir.json
+ground_truth_path: ./expected_review.json
+enabled: true
+strict_ir_validation: true
+
+pass_criteria:
+  rule_checks:
+    - defect_ref: DEF-B03-1
+      origin_must_be: rule
+      rule_id: IO_002
+      component_refs_intersect: [U1]
+      net_refs_intersect: [BUS_CONFLICT]
+      risk_must_be:
+        one_of: [critical]
+      evidence_must_have_at_least:
+        n: 1
+      suggestion_keywords_any: [分接, input, 隔离]
+      root_cause_keywords_any: [推挽, 输出, 冲突]
+
+    - defect_ref: DEF-B03-2
+      origin_must_be: ai_discovered
+      rule_id_must_be_null: true
+      component_refs_intersect: [U2]
+      net_refs_intersect: [SDA, SCL]
+      risk_must_be:
+        one_of: [critical]
+      evidence_must_have_at_least:
+        n: 3
+      suggestion_keywords_any: [4.7kΩ, 上拉, 开漏]
+      root_cause_keywords_any: [开漏, 上拉, ACK]
+
+benchmark_weights:
+  rule_metrics_weight: 0.4
+  ai_metrics_weight: 0.6
+
+benchmark_tags:
+  - sprint1
+  - ai_discovery
+  - i2c
+  - interface
+
+skip_categories: []
+notes: "case_b03 含 1 rule（IO_002）+ 1 ai_discovered（I2C 缺上拉）。预期命中 2 条。IO_003 不命中（SDA/SCL 是 bidirectional，不是 output）。IO_001 命中（low，不计入 defect）。POWER_001/002/003、CLOCK_001/002、CTRL_001/002 均不应命中。calibration_status=PROVISIONAL。"

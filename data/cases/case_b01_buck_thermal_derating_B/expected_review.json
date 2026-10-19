@@ -1,0 +1,132 @@
+{
+  "case_id": "case_b01_buck_thermal_derating_B",
+  "review_version": "v1.0",
+  "overall_risk_level": "critical",
+  "summary": "基于 STC89C55RC 的 8051 系统，5V 由 LM2596S-5.0 Buck 从 12V 降压。存在两处缺陷：①VCC_5V 网络无 0.1μF 陶瓷去耦，Buck 输入侧 C_in 旁也无 100nF 高频去耦（critical，POWER_001）；②85℃ 工业环境下 1A 负载时 LM2596 结温 147.5℃，超过 125℃ 最大结温和 GJB/Z 35-93 Ⅱ级降额线 95℃（high，AI 发现）。",
+  "defects": [
+    {
+      "defect_id": "DEF-B01-1",
+      "category": "power",
+      "location": {
+        "sheet": "POWER_PAGE1",
+        "path": "U1.VCC",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U1",
+      "net": "VCC_5V",
+      "risk": "critical",
+      "origin": "rule",
+      "rule_id": "POWER_001",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "STC89C55RC Datasheet V2.1",
+          "section": "7.1 Power Supply Decoupling",
+          "reason": "每个 VCC 引脚应配 0.1μF 陶瓷去耦电容；Buck 开关噪声需高频陶瓷电容滤除"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "application_note",
+          "source": "AN-8051-001 8051 Minimum System Design Guide",
+          "section": "3. Power Supply Decoupling",
+          "reason": "去耦电容距离引脚 < 5mm；Buck 输入侧需额外 100nF 陶瓷去耦抑制高频噪声"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Net[VCC_5V].connected_pins = [U2.OUT, L1.pin1, C_out.pin1, U1.VCC, R2.pin2]；C_out 为 220μF 电解，无 0.1μF 陶瓷；C_in 旁无 100nF 陶瓷"
+        }
+      ],
+      "root_cause": "VCC_5V 网络仅连接 U1.VCC 和 U2.OUT + C_out（220μF 电解）+ L1 + R2，无就近的 0.1μF 陶瓷去耦电容；Buck 开关噪声（150kHz）及其谐波会通过输出电容 ESR 传导到 VCC_5V，干扰 MCU 供电。同时 C_in 旁也无 100nF 高频去耦，输入侧高频噪声抑制不足。",
+      "suggestion": "①在 U1.VCC 就近（< 5mm）增加 0.1μF X7R 陶瓷去耦电容到 GND；②在 LM2596 输入侧 C_in 旁增加 100nF 陶瓷去耦；③C_out 保留 220μF 电解作为低频储能。",
+      "confidence": 0.95
+    },
+    {
+      "defect_id": "DEF-B01-2",
+      "category": "thermal",
+      "location": {
+        "sheet": "POWER_PAGE1",
+        "path": "U2",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U2",
+      "net": null,
+      "risk": "high",
+      "origin": "ai_discovered",
+      "rule_id": null,
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "TI LM2596 Datasheet (SNVS124E)",
+          "section": "Thermal Considerations",
+          "reason": "TO-263 封装 θJA ≈ 50℃/W（无散热片）；T_J_max = 125℃（Absolute Maximum Ratings）"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "TI LM2596 Datasheet (SNVS124E)",
+          "section": "Efficiency vs Load Current",
+          "reason": "12V→5V/1A 时典型效率 η ≈ 80%"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "application_note",
+          "source": "GJB/Z 35-93《元器件降额准则》",
+          "section": "半导体器件 Ⅱ 级降额",
+          "reason": "结温降额要求 T_J ≤ 95℃（对 T_J_max=125℃ 器件，76% ≈ 80% 经验线）"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Component[U2].attributes 无 power_dissipation_actual / thermal_resistance / ambient_temperature；POWER_003 规则无法触发；环境温度 85℃ 和负载电流 1A 由 extra_meta 给出"
+        }
+      ],
+      "root_cause": "LM2596 在 12V→5V/1A 时效率约 80%，功耗 P_loss = (5V×1A)/0.8 - 5V×1A = 1.25W；TO-263 封装 θJA ≈ 50℃/W，温升 ΔT = 1.25W × 50℃/W = 62.5℃；85℃ 环境下结温 T_J ≈ 85 + 62.5 = 147.5℃，超过 T_J_max=125℃，且远超 GJB/Z 35-93 Ⅱ级降额线 95℃。",
+      "suggestion": "①加散热片（降低 θJA 至 < 25℃/W）；②降低环境温度；③改用更高效率 Buck（如同步整流方案）；④降低负载电流至 < 0.5A。",
+      "confidence": 0.85,
+      "review_status": "NEED_EXPERT_REVIEW"
+    }
+  ],
+  "observations": [
+    {
+      "obs_id": "OBS-B01-1",
+      "title": "Buck SW 节点 EMC 风险（专家补充观察）",
+      "description": "Buck 开关节点 SW_NODE 高频开关噪声可能辐射干扰 11.0592MHz 晶振；建议布局时 SW 节点面积最小化、远离晶振。该问题依赖 PCB 布局，IR 无法表达，未列入正式 defect。",
+      "related_components": ["U2", "L1", "D1", "Y1"]
+    }
+  ],
+  "good_practices": [
+    {
+      "gp_id": "GP-B01-1",
+      "title": "复位 RC 参数合理",
+      "description": "C3=10μF + R1=10kΩ → τ=100ms，满足 8051 复位要求。",
+      "related_components": ["R1", "C3"]
+    },
+    {
+      "gp_id": "GP-B01-2",
+      "title": "晶振负载电容正确",
+      "description": "C1=C2=22pF 对称配置。",
+      "related_components": ["Y1", "C1", "C2"]
+    },
+    {
+      "gp_id": "GP-B01-3",
+      "title": "Buck 功率级器件选型合理",
+      "description": "L1=33μH 饱和 3A，D1=SS34 3A/40V，均满足 1A 负载裕量。",
+      "related_components": ["L1", "D1"]
+    }
+  ],
+  "known_ignores": [],
+  "benchmark_meta": {
+    "case_class": "B",
+    "expected_rule_hits": ["POWER_001"],
+    "total_expected_defects": 2,
+    "total_expected_ai_discovered": 1,
+    "allow_extra_findings": false
+  },
+  "expert_sign_off": {
+    "reviewer": "PROVISIONAL_AI_ASSISTANT",
+    "calibration_status": "PROVISIONAL",
+    "calibration_date": "2026-10-19",
+    "pending_review_by": "hardware-expert"
+  }
+}

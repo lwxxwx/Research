@@ -1,0 +1,31 @@
+case_id: case002
+evaluation_ver: "1.0"
+case_class: A
+ir_path: ./schematic_ir.json
+ground_truth_path: ./expected_review.json
+enabled: true
+strict_ir_validation: true
+
+pass_criteria:
+  rule_checks:
+    - defect_ref: DEF-CASE002-1
+      origin_must_be: rule
+      rule_id: POWER_003
+      component_refs_intersect: [U2]
+      net_refs_intersect: []
+      risk_must_be:
+        one_of: [high, critical]
+      evidence_must_have_at_least:
+        n: 2
+      suggestion_keywords_any: [DC-DC, 封装, 散热]
+      root_cause_keywords_any: [降额, 功耗]
+
+benchmark_weights:
+  rule_metrics_weight: 0.8
+  ai_metrics_weight: 0.2
+
+benchmark_tags:
+  - rule_only
+  - sprint1
+skip_categories: []
+notes: "case002 覆盖 POWER_003 器件功率降额检查。预期命中 1 条（U2 LDO 功耗超限）。POWER_001 / POWER_002 / CLOCK_001 / CLOCK_002 / CTRL_001 / CTRL_002 / IO_002 / IO_003 均不应命中。注意：POWER_003 的 defect 无 net（功耗是器件级属性），Benchmark 匹配逻辑需支持 net_refs_intersect 为空。"

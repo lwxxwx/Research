@@ -1,0 +1,44 @@
+case_id: case006
+evaluation_ver: "1.0"
+case_class: A
+ir_path: ./schematic_ir.json
+ground_truth_path: ./expected_review.json
+enabled: true
+strict_ir_validation: true
+
+pass_criteria:
+  rule_checks:
+    - defect_ref: DEF-CASE006-1
+      origin_must_be: rule
+      rule_id: CLOCK_002
+      component_refs_intersect: [Y1]
+      net_refs_intersect: [XTAL_OSC]
+      risk_must_be:
+        one_of: [high, critical]
+      evidence_must_have_at_least:
+        n: 2
+        source_types: [datasheet, reference_design]
+      suggestion_keywords_any: [C2, 对称, 22pF]
+      root_cause_keywords_any: [晶振, 负载电容, 缺]
+    - defect_ref: DEF-CASE006-2
+      origin_must_be: rule
+      rule_id: CTRL_002
+      component_refs_intersect: [C3, R1]
+      net_refs_intersect: [RST]
+      risk_must_be:
+        one_of: [high, critical]
+      evidence_must_have_at_least:
+        n: 2
+        source_types: [datasheet, application_note]
+      suggestion_keywords_any: [10μF, 100ms, 复位]
+      root_cause_keywords_any: [时间常数, 复位, 不足]
+
+benchmark_weights:
+  rule_metrics_weight: 0.8
+  ai_metrics_weight: 0.2
+
+benchmark_tags:
+  - rule_only
+  - sprint1
+skip_categories: []
+notes: "case006 覆盖 CLOCK_002（晶振电路完整性）+ CTRL_002（复位时序）。预期命中 2 条。CLOCK_001 不应命中（C1=22pF 正确）。POWER_001 / POWER_002 不应命中（C4 / R2 修正）。IO_* 不应命中（IO_001 low 不算 defect）。"

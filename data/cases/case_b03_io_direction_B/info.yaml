@@ -1,0 +1,49 @@
+case_id: case_b03_io_direction_B
+case_class: B
+title: "8051 + I2C EEPROM - I2C 总线缺上拉电阻"
+description: "基于 STC89C55RC 的 8051 系统，外接 AT24C02 I2C EEPROM；SDA/SCL 总线均缺上拉电阻，开漏总线无法输出高电平，I2C 通信完全失效"
+
+ai_expected_count: 1
+
+ir_generated_by: "Sprint1-B (Tech Lead B)"
+ir_schema_version: "v1.0"
+
+scenario: "工业级设备，I2C 总线连接 8051 与 EEPROM，标准模式 100kHz"
+
+# ===== PROVISIONAL：待硬件专家校准 =====
+calibration_status: PROVISIONAL
+calibration_by: "Tech Lead B + hardware-expert (PROVISIONAL)"
+calibration_date: "2026-10-19"
+calibration_note: "AI 交叉审查 (Design Agent + Review Agent)，未经真实硬件工程师签字；跑通流程用；专家校准后替换为 CALIBRATED"
+pending_review_by: "hardware-expert"
+# =====================================
+
+tags:
+  - interface
+  - i2c
+  - open_drain
+  - pullup
+
+known_design_defects:
+  - id: E1
+    summary: "MCU U1 内部两个 output 引脚 P1_0 和 P1_1 直连到 BUS_CONFLICT 网络，两路推挽输出可能冲突"
+    risk: critical
+    rule_id: IO_002
+    origin: rule
+    ground_truth: "DEF-B03-1"
+  - id: E2
+    summary: "I2C 总线 SDA/SCL 缺上拉电阻；开漏总线无法输出高电平，ACK 信号无法传输，I2C 通信完全失效"
+    risk: critical
+    rule_id: null
+    origin: ai_discovered
+    ground_truth: "DEF-B03-2"
+
+notes: |
+  Case B03 为 B 类（AI 辅助发现）案例，含 1 rule + 1 ai_discovered。
+  规则能发现：IO_002（P1_0 + P1_1 同网，两 output 冲突）。
+  AI 才能发现：I2C 开漏总线缺上拉（需电气特性分析）。
+  设计边界：
+    - SDA/SCL 在 U1 侧是 bidirectional，U2 侧也是 bidirectional（I2C 器件标准特性）
+    - IO_002（默认 ignore_bidirectional=true）不命中 SDA/SCL
+    - IO_003（external_outputs 要求 direction==output）不命中 SDA/SCL
+    - 纯 AI-only 前提成立

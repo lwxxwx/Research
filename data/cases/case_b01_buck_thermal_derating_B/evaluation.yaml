@@ -1,0 +1,54 @@
+case_id: case_b01_buck_thermal_derating_B
+evaluation_ver: "1.0"
+case_class: B
+ir_path: ./schematic_ir.json
+ground_truth_path: ./expected_review.json
+enabled: true
+strict_ir_validation: true
+
+pass_criteria:
+  rule_checks:
+    - defect_ref: DEF-B01-1
+      origin_must_be: rule
+      rule_id: POWER_001
+      component_refs_intersect: [U1]
+      net_refs_intersect: [VCC_5V]
+      risk_must_be:
+        one_of: [critical]
+      evidence_must_have_at_least:
+        n: 2
+        source_types: [datasheet, application_note]
+      suggestion_keywords_any: [0.1μF, 陶瓷, 去耦, 100nF]
+      root_cause_keywords_any: [去耦, 噪声, 陶瓷]
+
+    - defect_ref: DEF-B01-2
+      origin_must_be: ai_discovered
+      rule_id_must_be_null: true           # ← 明确 AI-only，不关联任何规则
+      component_refs_intersect: [U2]
+      risk_must_be:
+        one_of: [high, critical]
+      evidence_must_have_at_least:
+        n: 2
+        source_types: [datasheet, application_note]
+      # ===== 结温计算精度断言（Review Agent建议） =====
+      thermal_calculation_check:
+        expected_junction_temp_c: 147.5
+        tolerance_c: 2.0
+        check_field: "root_cause"
+        check_regex: "结温\\s*T_J\\s*[≈=]\\s*([\\d.]+)℃"
+        note: "待阶段 F 在 benchmark_service.py 中实现断言解析"
+      # =====================================
+      suggestion_keywords_any: [散热片, 环境温度, 效率, 负载电流]
+      root_cause_keywords_any: [结温, 降额, T_J, 147.5]
+
+benchmark_weights:
+  rule_metrics_weight: 0.4        # B 类：AI 权重更高
+  ai_metrics_weight: 0.6
+
+benchmark_tags:
+  - sprint1
+  - ai_discovery
+  - thermal
+
+skip_categories: []
+notes: "case_b01 覆盖 POWER_001（VCC 去耦）+ AI-only 热降额缺陷。B 类：AI 权重 0.6。预期命中 2 条（1 rule + 1 ai_discovered）。POWER_002 / POWER_003 / CLOCK_001 / CLOCK_002 / CTRL_001 / CTRL_002 / IO_002 / IO_003 均不应命中。IO_001 命中（low 级，不计入 defect）。calibration_status=PROVISIONAL，待硬件专家校准。"

@@ -1,0 +1,41 @@
+case_id: case_b02_reset_rc_B
+case_class: B
+title: "8051 复位 RC 裕量不足 - 最坏工况可能失效"
+description: "基于 STC89C55RC 的 8051 系统，复位 RC 标称 τ=2.2ms > 2ms 阈值，但 R1±10% + C3±10% 最坏工况 τ_min=1.782ms < 2ms，复位可靠性不足"
+
+ai_expected_count: 1
+
+ir_generated_by: "Sprint1-B (Tech Lead B)"
+ir_schema_version: "v1.0"
+
+scenario: "工业级设备，电源波动 + 宽温环境，复位电路必须保证全工况可靠"
+
+# ===== PROVISIONAL：待硬件专家校准 =====
+calibration_status: PROVISIONAL
+calibration_by: "Tech Lead B + hardware-expert (PROVISIONAL)"
+calibration_date: "2026-10-19"
+calibration_note: "AI 交叉审查 (Design Agent + Review Agent)，未经真实硬件工程师签字；跑通流程用；专家校准后替换为 CALIBRATED"
+pending_review_by: "hardware-expert"
+# =====================================
+
+tags:
+  - timing
+  - reset
+  - rc
+  - tolerance
+
+known_design_defects:
+  - id: E1
+    summary: "复位 RC 标称 τ=2.2ms，但 R1±10% + C3±10% 最坏工况 τ_min=1.782ms < 2ms（工程经验值），复位可能失败"
+    risk: high
+    rule_id: null
+    origin: ai_discovered
+    ground_truth: "DEF-B02-1"
+
+notes: |
+  Case B02 为 B 类（AI 辅助发现）案例，纯 AI-only（无 rule 缺陷）。
+  规则能发现：无（CTRL_002 的 τ=2.2ms ≥ 2ms 阈值，不命中）。
+  AI 才能发现：复位 RC 裕量不足（需容差叠加 + 最坏工况推导）。
+  设计边界：
+    - 若 C3 容差 0%、R1 容差 0%，τ=2.2ms > 2ms，不触发
+    - 本 Case 的缺陷依赖 ±10% 容差叠加的最坏工况

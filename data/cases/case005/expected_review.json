@@ -1,0 +1,99 @@
+{
+  "case_id": "case005",
+  "review_version": "v1.0",
+  "overall_risk_level": "high",
+  "summary": "基于 STC89C55RC 的 8051 系统，外扩 32K×8 SRAM（62256）。SRAM 的 CE 片选脚悬空，未连接到任何网络；器件使能状态不确定，无法被 MCU 正确读写。其余电路（复位、晶振、电源去耦、地址/数据总线）拓扑正确。",
+  "defects": [
+    {
+      "defect_id": "DEF-CASE005-1",
+      "category": "interface",
+      "location": {
+        "sheet": "MEMORY_PAGE1",
+        "path": "U2.CE",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U2",
+      "net": null,
+      "risk": "high",
+      "origin": "rule",
+      "rule_id": "CTRL_001",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "SRAM 62256 Datasheet",
+          "section": "Pin Description / Operation",
+          "reason": "CE（片选）脚为低电平有效；悬空时 CMOS 输入浮空，可能振荡或处于不确定电平，导致 SRAM 无法被正确选中"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "reference_design",
+          "source": "8051 外扩存储器参考设计",
+          "section": "2. 片选信号设计",
+          "reason": "SRAM 片选脚必须明确连接（通常接译码器输出或 IO 控制），不能悬空"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Component[U2].pins 中存在 pin_id='CE', name='CE'；该引脚 'U2.CE' 未出现在任何 Net.connected_pins 中"
+        }
+      ],
+      "root_cause": "SRAM U2（62256）的 CE 片选脚未连接到任何网络，处于悬空状态。CMOS 输入引脚悬空会导致电平不确定，可能随机振荡或处于中间电平，使 SRAM 无法被稳定选中，导致读写失败或数据错误。",
+      "suggestion": "将 U2.CE 连接到 MCU 的地址译码器输出（如 74LS138 的某一路输出），或使用 IO 口直接控制；确保 CE 在有效访问时被拉低，其他时候被拉高。",
+      "confidence": 0.9
+    }
+  ],
+  "observations": [
+    {
+      "obs_id": "OBS-CASE005-1",
+      "title": "U2 部分地址/数据线未连接",
+      "description": "本 case 为简化 IR，U2 的 A5-A14 和 D4-D7 未连接；这是构造简化，不作为缺陷报告。",
+      "related_components": ["U2"]
+    },
+    {
+      "obs_id": "OBS-CASE005-2",
+      "title": "MCU 部分 IO 悬空",
+      "description": "U1 的部分 IO 引脚（如 P1 口）悬空，属于最小系统预期场景，由 IO_001 汇总提示，不列为缺陷。",
+      "related_components": ["U1"]
+    }
+  ],
+  "good_practices": [
+    {
+      "gp_id": "GP-CASE005-1",
+      "title": "复位 RC 参数合理",
+      "description": "C3=10μF + R1=10kΩ → τ=100ms，满足 8051 复位要求。",
+      "related_components": ["R1", "C3"]
+    },
+    {
+      "gp_id": "GP-CASE005-2",
+      "title": "VCC 去耦电容正确",
+      "description": "C4=0.1μF 跨接 VCC-GND，符合 Datasheet §7.1 去耦要求。",
+      "related_components": ["C4"]
+    },
+    {
+      "gp_id": "GP-CASE005-3",
+      "title": "SRAM OE/WE 正确连接",
+      "description": "SRAM 的 OE / WE 分别连接到 MCU 的 RD / WR 信号，符合标准 8051 外扩存储器设计。",
+      "related_components": ["U2"],
+      "related_nets": ["SRAM_OE", "SRAM_WE"]
+    },
+    {
+      "gp_id": "GP-CASE005-4",
+      "title": "地址/数据总线部分连接",
+      "description": "A0-A4 和 D0-D3 已正确连接到 MCU 的 P2 / P0 口（本 case 简化，未连接全部线路）。",
+      "related_components": ["U1", "U2"]
+    }
+  ],
+  "known_ignores": [],
+  "benchmark_meta": {
+    "case_class": "A",
+    "expected_rule_hits": ["CTRL_001"],
+    "total_expected_defects": 1,
+    "total_expected_ai_discovered": 0,
+    "allow_extra_findings": false
+  },
+  "expert_sign_off": {
+    "reviewer": "hardware-expert",
+    "calibration_status": "PENDING",
+    "calibration_date": null
+  }
+}

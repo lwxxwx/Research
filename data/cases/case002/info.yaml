@@ -1,0 +1,37 @@
+case_id: case002
+case_class: A
+title: "8051 + AMS1117-5.0 LDO 电源系统 - 降额违规"
+description: "基于 STC89C55RC 的 8051 系统，5V 由 AMS1117-5.0 LDO 从 12V 降压；LDO 压差过大导致实际功耗 3.5W，远超 SOT-223 封装 1W 的 80% 降额阈值（0.8W）"
+
+ai_expected_count: 0
+
+ir_generated_by: "Sprint1-B"
+ir_schema_version: "v1.0"
+
+calibration_status: PENDING
+calibrated_at: null
+
+tags:
+  - power
+  - ldo
+  - derating
+  - mcu
+
+known_design_defects:
+  - id: E1
+    summary: "AMS1117-5.0 在 12V→5V/500mA 下功耗 3.5W，超过 SOT-223 封装 1W 降额后 0.8W 阈值；需改用 DC-DC 或加大封装/散热"
+    risk: high
+    rule_id: POWER_003
+    ground_truth: "DEF-CASE002-1"
+
+notes: |
+  Case002 为 A 类（Rule-Only）电源系统案例，覆盖 LDO 降额。
+  构造方式：8051 最小系统 + AMS1117-5.0 LDO，从 12V 降到 5V，负载 500mA。
+  LDO 功耗 = (12-5) × 0.5 = 3.5W，超过 SOT-223 封装 1W × 0.8 = 0.8W。
+  IR 用 attributes 承载功耗数据：
+    - power_dissipation_rated = 1.0 (W)
+    - power_dissipation_actual = 3.5 (W)
+    - derating_coefficient = 0.8
+    - operating_temperature = 25 (℃)
+  预期 POWER_003 命中 1 条（U2 降额违规）。
+  POWER_001 不应命中（C4 去耦在 VCC 网络上）；CLOCK_001/002、CTRL_001/002、IO_002/003 不应命中。

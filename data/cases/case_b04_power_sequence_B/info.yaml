@@ -1,0 +1,50 @@
+case_id: case_b04_power_sequence_B
+case_class: B
+title: "8051 + 多路电源 - 上电时序异常"
+description: "基于 STC89C55RC 的 8051 系统，5V 主电源 + 3.3V 外设电源；5V LDO 输出电容大启动慢，3.3V LDO 输入电容小启动快，导致 3.3V 早于 5V 建立，SPI Flash 通过 IO 灌电流到 8051"
+
+ai_expected_count: 1
+
+ir_generated_by: "Sprint1-B (Tech Lead B)"
+ir_schema_version: "v1.0"
+
+scenario: "工业级设备，多路电源上电时序需严格保证 5V 先于 3.3V"
+
+# ===== PROVISIONAL：待硬件专家校准 =====
+calibration_status: PROVISIONAL
+calibration_by: "Tech Lead B + hardware-expert (PROVISIONAL)"
+calibration_date: "2026-10-19"
+calibration_note: "AI 交叉审查 (Design Agent + Review Agent)，未经真实硬件工程师签字；跑通流程用；专家校准后替换为 CALIBRATED"
+pending_review_by: "hardware-expert"
+# =====================================
+
+tags:
+  - power
+  - power_sequence
+  - multi_rail
+  - spi
+
+known_design_defects:
+  - id: E1
+    summary: "VCC_3V3 网络缺 0.1μF 陶瓷去耦电容"
+    risk: critical
+    rule_id: POWER_001
+    origin: rule
+    ground_truth: "DEF-B04-1"
+  - id: E2
+    summary: "上电时序异常：U3(3.3V LDO) 输入电容 10μF 小于 U4(5V LDO) 输出电容 220μF，3.3V 早于 5V 建立，SPI Flash 通过 IO 保护二极管灌电流到 8051"
+    risk: high
+    rule_id: null
+    origin: ai_discovered
+    ground_truth: "DEF-B04-2"
+
+notes: |
+  Case B04 为 B 类（AI 辅助发现）案例，含 1 rule + 1 ai_discovered。
+  规则能发现：POWER_001（VCC_3V3 缺去耦）。
+  AI 才能发现：上电时序异常（需多路电源时序分析 + 器件 Datasheet 知识）。
+  设计边界：
+    - 10 条规则中无任何时序相关检查项，该缺陷 100% 属规则覆盖不到的多路时序关系
+    - 若 5V 先于 3.3V 建立（如通过时序控制芯片），本缺陷不触发
+    - 若 U4 输入/输出电容与 U3 相同，启动速度相近，本缺陷不触发
+  规则命中：POWER_001（VCC_3V3 缺去耦）+ IO_001（low，不计入 defect）。
+  IO_003 不命中（SPI_MISO 的 U1.P1_5 是 input，不是 output）。

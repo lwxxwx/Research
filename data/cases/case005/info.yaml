@@ -1,0 +1,35 @@
+case_id: case005
+case_class: A
+title: "8051 外扩 SRAM - 片选信号 CE 悬空"
+description: "基于 STC89C55RC 的 8051 系统，外扩 32K×8 SRAM（62256）；SRAM 的 CE 片选脚悬空，无法被正确选中"
+
+ai_expected_count: 0
+
+ir_generated_by: "Sprint1-B"
+ir_schema_version: "v1.0"
+
+calibration_status: PENDING
+calibrated_at: null
+
+tags:
+  - interface
+  - memory
+  - enable
+  - mcu
+  - sram
+
+known_design_defects:
+  - id: E1
+    summary: "外部 SRAM U2（62256）的 CE 片选脚未连接到任何网络，悬空；器件使能状态不确定，无法被 MCU 正确读写"
+    risk: high
+    rule_id: CTRL_001
+    ground_truth: "DEF-CASE005-1"
+
+notes: |
+  Case005 为 A 类（Rule-Only）外扩存储器案例，覆盖使能信号悬空检查。
+  构造方式：基于 8051 最小系统，外扩 62256 SRAM。
+  故意让 U2.CE 悬空（不连任何网络），U2.OE / U2.WE 正确连接到 MCU 的 RD / WR。
+  预期 CTRL_001 命中 1 条缺陷（U2.CE 悬空）。
+  POWER_001 / POWER_002 通过 C4 / R2 修正不命中。
+  IO_001 会命中（外扩总线的很多 IO 悬空），但不计入 defect（low 级）。
+  CLOCK_001 / CLOCK_002 / IO_002 / IO_003 / CTRL_002 / POWER_003 不应命中。

@@ -1,0 +1,214 @@
+{
+  "ir_schema_version": "v1.0",
+  "case_id": "case006",
+  "title": "8051 晶振电路不完整 + 复位时序不足",
+  "description": "基于 STC89C55RC 的 8051 系统，晶振负载电容 C2 缺失，且复位 RC 时间常数不足（C3=1nF）",
+  "created_at": "2026-10-16T10:00:00",
+  "components": [
+    {
+      "ref": "U1",
+      "lib_name": "STC89C55RC",
+      "value": "STC89C55RC",
+      "footprint": "DIP-40",
+      "intent": "8051微控制器核心，执行程序逻辑",
+      "context": "8051最小系统主控芯片",
+      "constraint": "VCC=5V ±5%，晶振频率11.0592MHz",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "P1_0", "name": "P1.0", "number": "1", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_1", "name": "P1.1", "number": "2", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_2", "name": "P1.2", "number": "3", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_3", "name": "P1.3", "number": "4", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_4", "name": "P1.4", "number": "5", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_5", "name": "P1.5", "number": "6", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_6", "name": "P1.6", "number": "7", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_7", "name": "P1.7", "number": "8", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "RST", "name": "RST", "number": "9", "direction": "input", "pin_type": "reset", "attributes": []},
+        {"pin_id": "P3_0", "name": "P3.0", "number": "10", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_1", "name": "P3.1", "number": "11", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_2", "name": "P3.2", "number": "12", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_3", "name": "P3.3", "number": "13", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_4", "name": "P3.4", "number": "14", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_5", "name": "P3.5", "number": "15", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_6", "name": "P3.6", "number": "16", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_7", "name": "P3.7", "number": "17", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "XTAL2", "name": "XTAL2", "number": "18", "direction": "output", "pin_type": "clock", "attributes": []},
+        {"pin_id": "XTAL1", "name": "XTAL1", "number": "19", "direction": "input", "pin_type": "clock", "attributes": []},
+        {"pin_id": "GND", "name": "GND", "number": "20", "direction": "power", "pin_type": "ground", "attributes": []},
+        {"pin_id": "P2_0", "name": "P2.0", "number": "21", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_1", "name": "P2.1", "number": "22", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_2", "name": "P2.2", "number": "23", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_3", "name": "P2.3", "number": "24", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_4", "name": "P2.4", "number": "25", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_5", "name": "P2.5", "number": "26", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_6", "name": "P2.6", "number": "27", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_7", "name": "P2.7", "number": "28", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "PSEN", "name": "PSEN", "number": "29", "direction": "output", "pin_type": "other", "attributes": []},
+        {"pin_id": "ALE", "name": "ALE", "number": "30", "direction": "output", "pin_type": "other", "attributes": []},
+        {"pin_id": "EA", "name": "EA", "number": "31", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "P0_7", "name": "P0.7", "number": "32", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_6", "name": "P0.6", "number": "33", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_5", "name": "P0.5", "number": "34", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_4", "name": "P0.4", "number": "35", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_3", "name": "P0.3", "number": "36", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_2", "name": "P0.2", "number": "37", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_1", "name": "P0.1", "number": "38", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_0", "name": "P0.0", "number": "39", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "VCC", "name": "VCC", "number": "40", "direction": "power", "pin_type": "power", "attributes": []}
+      ]
+    },
+    {
+      "ref": "Y1",
+      "lib_name": "CRYSTAL",
+      "value": "11.0592MHz",
+      "footprint": "HC-49S",
+      "intent": "提供系统时钟信号",
+      "context": "8051外部晶振电路",
+      "constraint": "频率11.0592MHz，负载电容22pF",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "XTAL1", "number": "1", "direction": "output", "pin_type": "clock", "attributes": []},
+        {"pin_id": "pin2", "name": "XTAL2", "number": "2", "direction": "output", "pin_type": "clock", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C1",
+      "lib_name": "CAP",
+      "value": "22pF",
+      "footprint": "0805",
+      "intent": "晶振负载电容（仅剩一个）",
+      "context": "晶振电路匹配电容",
+      "constraint": "22pF ±5%",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C3",
+      "lib_name": "CAP",
+      "value": "1nF",
+      "footprint": "0603",
+      "intent": "复位电路电容（值偏小）",
+      "context": "复位电路",
+      "constraint": "1nF（误用，应 10μF）",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C4",
+      "lib_name": "CAP",
+      "value": "0.1μF",
+      "footprint": "0603",
+      "intent": "VCC 去耦电容",
+      "context": "电源去耦",
+      "constraint": "0.1μF X7R",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "R1",
+      "lib_name": "RES",
+      "value": "10kΩ",
+      "footprint": "0805",
+      "intent": "复位电路下拉电阻",
+      "context": "复位电路",
+      "constraint": "10kΩ ±1%",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "R2",
+      "lib_name": "RES",
+      "value": "10kΩ",
+      "footprint": "0805",
+      "intent": "复位上拉电阻",
+      "context": "复位电路上拉",
+      "constraint": "10kΩ ±1%",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "SW1",
+      "lib_name": "SW_PB",
+      "value": "复位按键",
+      "footprint": "SW_PB",
+      "intent": "手动复位控制",
+      "context": "复位电路",
+      "constraint": "常开按键",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    }
+  ],
+  "nets": [
+    {
+      "net_name": "VCC",
+      "connected_pins": ["U1.VCC", "C4.pin1", "R2.pin2"],
+      "attributes": [],
+      "is_power": true,
+      "is_ground": false,
+      "voltage": 5.0,
+      "description": "系统电源网络 +5V"
+    },
+    {
+      "net_name": "GND",
+      "connected_pins": ["U1.GND", "C1.pin2", "C3.pin2", "C4.pin2", "R1.pin2", "SW1.pin2"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": true,
+      "voltage": 0.0,
+      "description": "系统参考地"
+    },
+    {
+      "net_name": "XTAL_OSC",
+      "connected_pins": ["U1.XTAL1", "U1.XTAL2", "Y1.pin1", "Y1.pin2", "C1.pin1"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "晶振振荡网络（缺 C2 负载电容）"
+    },
+    {
+      "net_name": "RST",
+      "connected_pins": ["U1.RST", "R1.pin1", "C3.pin1", "SW1.pin1", "R2.pin1"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "复位信号网络（C3=1nF 偏小）"
+    },
+    {
+      "net_name": "EA_GND",
+      "connected_pins": ["U1.EA"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": true,
+      "voltage": 0.0,
+      "description": "EA引脚接地"
+    }
+  ],
+  "extra_meta": {
+    "source": "基于 case001 派生",
+    "design_tool": "手工构造",
+    "total_components": 8,
+    "total_nets": 5,
+    "semantic_coverage": "100%",
+    "known_ignores": [
+      "C2 已删除（缺陷，CLOCK_002 命中）"
+    ]
+  }
+}

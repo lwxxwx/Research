@@ -1,0 +1,130 @@
+{
+  "case_id": "case004",
+  "review_version": "v1.0",
+  "overall_risk_level": "critical",
+  "summary": "基于 STC89C55RC 的 8051 UART 桥接系统。存在两处 IO 冲突：①MCU U1 的输出引脚 P3_6（WR）与外部器件 U2 的输出引脚 OUT 直连到同一网络 CTRL_WR，推挽对推挽冲突（critical，IO_003）；②MCU U1 内部两个 output 引脚 P1_0 和 P1_1 连接到同一网络 BUS_CONFLICT，两路输出可能冲突（critical，IO_002）。UART 互连（U1.TXD↔U2.RXD、U2.TXD↔U1.RXD）拓扑正确。其余电路（复位、晶振、电源去耦）正确。",
+  "defects": [
+    {
+      "defect_id": "DEF-CASE004-1",
+      "category": "interface",
+      "location": {
+        "sheet": "UART_PAGE1",
+        "path": "U1.P3_6",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U1",
+      "net": "CTRL_WR",
+      "risk": "critical",
+      "origin": "rule",
+      "rule_id": "IO_003",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "UART_BRIDGE Datasheet",
+          "section": "Pin Description",
+          "reason": "OUT 为推挽输出引脚，不可与其他推挽输出直连；多个推挽输出同网可能造成大电流或永久损坏"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "reference_design",
+          "source": "8051 UART 设计规范",
+          "section": "3. IO 冲突避免",
+          "reason": "MCU 输出与外部器件输出不能直连；需使用开漏+上拉或加缓冲/隔离"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Net[CTRL_WR].connected_pins = ['U1.P3_6', 'U2.OUT']；U1.P3_6 为 MCU 输出（bidirectional，视为潜在输出）；U2.OUT 为外部器件输出（output）"
+        }
+      ],
+      "root_cause": "MCU 输出引脚 P3_6（WR，推挽）与外部器件 U2 的输出引脚 OUT（推挽）直连到 CTRL_WR 网络。当 U1 与 U2 同时驱动该网络且电平相反时，会形成低阻通路，产生大电流，可能损坏引脚或导致器件异常。",
+      "suggestion": "断开 U1.P3_6 与 U2.OUT 的直连。方案：①将 U2.OUT 改为开漏输出（若器件支持），加外部上拉电阻；②使用方向控制/缓冲器隔离；③改由 U1 或 U2 单方驱动，另一方配置为高阻输入。",
+      "confidence": 0.95
+    },
+    {
+      "defect_id": "DEF-CASE004-2",
+      "category": "interface",
+      "location": {
+        "sheet": "UART_PAGE1",
+        "path": "U1.P1_0",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U1",
+      "net": "BUS_CONFLICT",
+      "risk": "critical",
+      "origin": "rule",
+      "rule_id": "IO_002",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "STC89C55RC Datasheet V2.1",
+          "section": "IO Port Configuration",
+          "reason": "P1 口可配置为推挽输出；同网络两个 output 引脚在相反电平下会产生短路电流"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "reference_design",
+          "source": "8051 Minimum System Design Guide",
+          "section": "5. IO 端口使用",
+          "reason": "同一 MCU 的两个 IO 输出不应连接到同一网络；应使用单路输出或加隔离"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Net[BUS_CONFLICT].connected_pins = ['U1.P1_0', 'U1.P1_1']；两个引脚均为 direction=output, pin_type=io；≥ 2 个 output 同网"
+        }
+      ],
+      "root_cause": "MCU U1 的 P1_0 和 P1_1 两个 output 引脚直连到 BUS_CONFLICT 网络。两个推挽输出同网时，若程序配置相反电平，会形成 MCU 内部短路电流，可能损坏 IO 口。",
+      "suggestion": "将 P1_0 和 P1_1 分接到不同网络；或其中一个改为 input 模式；如需合并信号，加二极管或门电路。",
+      "confidence": 0.95
+    }
+  ],
+  "observations": [
+    {
+      "obs_id": "OBS-CASE004-1",
+      "title": "UART 互连拓扑正确",
+      "description": "U1.P3_1(TXD) → U2.RXD；U2.TXD → U1.P3_0(RXD)。一输出一输入，正常。",
+      "related_components": ["U1", "U2"],
+      "related_nets": ["UART_TX", "UART_RX"]
+    }
+  ],
+  "good_practices": [
+    {
+      "gp_id": "GP-CASE004-1",
+      "title": "UART 互连方向正确",
+      "description": "TX→RX、RX←TX 交叉连接正确。",
+      "related_components": ["U1", "U2"]
+    },
+    {
+      "gp_id": "GP-CASE004-2",
+      "title": "复位 RC 参数合理",
+      "description": "C3=10μF + R1=10kΩ → τ=100ms。",
+      "related_components": ["R1", "C3"]
+    },
+    {
+      "gp_id": "GP-CASE004-3",
+      "title": "VCC 去耦电容正确",
+      "description": "C4=0.1μF 跨接 VCC-GND。",
+      "related_components": ["C4"]
+    },
+    {
+      "gp_id": "GP-CASE004-4",
+      "title": "晶振负载电容正确",
+      "description": "C1=C2=22pF 对称配置。",
+      "related_components": ["Y1", "C1", "C2"]
+    }
+  ],
+  "known_ignores": [],
+  "benchmark_meta": {
+    "case_class": "A",
+    "expected_rule_hits": ["IO_002", "IO_003"],
+    "total_expected_defects": 2,
+    "total_expected_ai_discovered": 0,
+    "allow_extra_findings": false
+  },
+  "expert_sign_off": {
+    "reviewer": "hardware-expert",
+    "calibration_status": "PENDING",
+    "calibration_date": null
+  }
+}

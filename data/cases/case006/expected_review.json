@@ -1,0 +1,124 @@
+{
+  "case_id": "case006",
+  "review_version": "v1.0",
+  "overall_risk_level": "high",
+  "summary": "基于 STC89C55RC 的 8051 系统。存在两处缺陷：①晶振 Y1 只连接一个负载电容 C1，缺少对称的 C2，晶振振荡回路不完整；②复位电容 C3=1nF 偏小，τ=R1×C3=10μs，小于 8051 最小复位脉宽要求，无法产生足够的高电平复位脉冲。C1 值正确（22pF）；VCC 去耦（C4）和复位上拉（R2）均正确。",
+  "defects": [
+    {
+      "defect_id": "DEF-CASE006-1",
+      "category": "clock",
+      "location": {
+        "sheet": "CLOCK_PAGE1",
+        "path": "Y1",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "Y1",
+      "net": "XTAL_OSC",
+      "risk": "high",
+      "origin": "rule",
+      "rule_id": "CLOCK_002",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "STC89C55RC Datasheet V2.1",
+          "section": "6.1 Crystal Oscillator",
+          "reason": "8051 晶振需两侧对称负载电容（典型 22pF），形成对称振荡回路；缺一个电容会导致起振困难或频率偏移"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "reference_design",
+          "source": "8051 Minimum System Reference Design Guide",
+          "section": "3. 时钟设计",
+          "reason": "标准 8051 最小系统晶振电路须包含晶振本体 + 两个对称负载电容 + 到 MCU 时钟引脚的连接"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Net[XTAL_OSC].connected_pins 只含 C1.pin1（1 个电容）；required_load_caps=2，实际 1 → 缺项"
+        }
+      ],
+      "root_cause": "晶振 Y1 的网络 XTAL_OSC 上只有 C1 一个负载电容，缺少对称的 C2。8051 晶振电路需要在 XTAL1/XTAL2 两侧各配一个对称负载电容，以保证振荡回路平衡。缺一个电容会导致起振困难，或起振后频率偏移，影响 MCU 时钟。",
+      "suggestion": "在 XTAL_OSC 网络上对称增加 C2=22pF 陶瓷电容，与 C1 对称；两电容靠近 MCU 的 XTAL1/XTAL2 引脚（< 10mm），走线对称。",
+      "confidence": 0.9
+    },
+    {
+      "defect_id": "DEF-CASE006-2",
+      "category": "timing",
+      "location": {
+        "sheet": "RESET_PAGE1",
+        "path": "U1.RST",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "C3",
+      "net": "RST",
+      "risk": "high",
+      "origin": "rule",
+      "rule_id": "CTRL_002",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "STC89C55RC Datasheet V2.1",
+          "section": "6.3 Reset Circuit",
+          "reason": "8051 复位引脚 RST 需保持高电平至少 2 个机器周期；推荐 RC 复位：R1=10kΩ，C3=10μF（τ=100ms）"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "application_note",
+          "source": "AN-8051-001 8051 Minimum System Design Guide",
+          "section": "7. Reset Circuit Design",
+          "reason": "RC 复位时间常数 τ = R1 × C3 应 ≥ 2 × 机器周期；@11.0592MHz 机器周期≈1.085μs，2 机器周期≈2.17μs"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Component[R1].value = '10kΩ'；Component[C3].value = '1nF'；τ = 10000Ω × 1e-9 F = 10μs；min_reset_high_ms=2 → 阈值 2000μs；10μs < 2000μs → 不足"
+        }
+      ],
+      "root_cause": "复位 RC 时间常数不足：R1=10kΩ，C3=1nF → τ = 10μs。STC89C55RC 复位保持要求为最小 2 个机器周期（本工程约定 min_reset_high_ms=2，即 2000μs），实际 τ=10μs 远小于要求，无法产生足够的高电平复位脉冲，MCU 可能无法可靠复位。",
+      "suggestion": "将 C3 更换为 10μF 电解电容（τ = 10kΩ × 10μF = 100ms），满足 8051 复位保持要求；或按实际应用调整 R1 与 C3 使 τ ≥ min_reset_high_ms。",
+      "confidence": 0.9
+    }
+  ],
+  "observations": [
+    {
+      "obs_id": "OBS-CASE006-1",
+      "title": "C1 值正确",
+      "description": "C1=22pF 符合 Datasheet 推荐；缺陷仅在 C2 缺失。",
+      "related_components": ["C1"]
+    }
+  ],
+  "good_practices": [
+    {
+      "gp_id": "GP-CASE006-1",
+      "title": "VCC 去耦电容配置正确",
+      "description": "C4=0.1μF 陶瓷电容跨接 VCC-GND，符合 Datasheet §7.1 去耦要求。",
+      "related_components": ["C4"]
+    },
+    {
+      "gp_id": "GP-CASE006-2",
+      "title": "复位拓扑正确（R2 上拉）",
+      "description": "R2=10kΩ 跨接 RST-VCC，提供高电平复位脉冲路径。",
+      "related_components": ["R2"]
+    },
+    {
+      "gp_id": "GP-CASE006-3",
+      "title": "EA 引脚硬件接地",
+      "description": "EA 接地（EA_GND 网络），芯片选择内部 Flash。",
+      "related_components": ["U1"],
+      "related_nets": ["EA_GND"]
+    }
+  ],
+  "known_ignores": [],
+  "benchmark_meta": {
+    "case_class": "A",
+    "expected_rule_hits": ["CLOCK_002", "CTRL_002"],
+    "total_expected_defects": 2,
+    "total_expected_ai_discovered": 0,
+    "allow_extra_findings": false
+  },
+  "expert_sign_off": {
+    "reviewer": "hardware-expert",
+    "calibration_status": "PENDING",
+    "calibration_date": null
+  }
+}

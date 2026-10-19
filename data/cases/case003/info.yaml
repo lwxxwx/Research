@@ -1,0 +1,35 @@
+# Case003 案例元信息
+case_id: case003
+case_class: A
+title: "8051 最小系统 - 晶振负载电容不匹配（C1=10pF）"
+description: "基于 STC89C55RC 的 8051 最小系统，晶振 Y1=11.0592MHz；C1 误用 10pF（应为 22pF），C2=22pF"
+
+ai_expected_count: 0
+
+ir_generated_by: "Sprint1-B"
+ir_schema_version: "v1.0"
+
+calibration_status: PENDING
+calibrated_at: null
+
+tags:
+  - clock
+  - crystal
+  - load_cap
+  - mcu
+
+known_design_defects:
+  - id: E1
+    summary: "晶振 Y1 的负载电容 C1=10pF 偏离期望值 22pF ± 5pF；负载电容偏小导致起振困难（增益不足）"
+    risk: medium
+    rule_id: CLOCK_001
+    ground_truth: "DEF-CASE003-1"
+
+notes: |
+  Case003 为 A 类（Rule-Only）时钟电路案例，覆盖晶振负载电容配置。
+  构造方式：基于 case001 的 8051 最小系统，做两处修改：
+    1. C1 值从 22pF 改为 10pF（引入 CLOCK_001 缺陷）
+    2. 新增 C4（0.1μF 去耦电容）+ R2（10kΩ 复位上拉），修正 case001 的 POWER_001/POWER_002 缺陷
+  这样 case003 只测 CLOCK_001，隔离性最好。
+  预期 CLOCK_001 命中 1 条缺陷（C1 值错）。
+  CLOCK_002 不应命中（电容数量足够，只是值错）。

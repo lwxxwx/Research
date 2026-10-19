@@ -1,0 +1,361 @@
+{
+  "ir_schema_version": "v1.0",
+  "case_id": "case_b04_power_sequence_B",
+  "title": "8051 + 多路电源 - 上电时序异常",
+  "description": "基于 STC89C55RC 的 8051 系统，5V 主电源 + 3.3V 外设电源；上电时序异常",
+  "created_at": "2026-10-19T10:00:00",
+  "components": [
+    {
+      "ref": "U1",
+      "lib_name": "STC89C55RC",
+      "value": "STC89C55RC",
+      "footprint": "DIP-40",
+      "intent": "8051微控制器核心，执行程序逻辑",
+      "context": "8051最小系统主控芯片",
+      "constraint": "VCC=5V ±5%，晶振频率11.0592MHz",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "P1_0", "name": "P1.0", "number": "1", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_1", "name": "P1.1", "number": "2", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_2", "name": "P1.2", "number": "3", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_3", "name": "P1.3", "number": "4", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_4", "name": "P1.4", "number": "5", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_5", "name": "P1.5", "number": "6", "direction": "input", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_6", "name": "P1.6", "number": "7", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P1_7", "name": "P1.7", "number": "8", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "RST", "name": "RST", "number": "9", "direction": "input", "pin_type": "reset", "attributes": []},
+        {"pin_id": "P3_0", "name": "P3.0", "number": "10", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_1", "name": "P3.1", "number": "11", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_2", "name": "P3.2", "number": "12", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_3", "name": "P3.3", "number": "13", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_4", "name": "P3.4", "number": "14", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_5", "name": "P3.5", "number": "15", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_6", "name": "P3.6", "number": "16", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P3_7", "name": "P3.7", "number": "17", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "XTAL2", "name": "XTAL2", "number": "18", "direction": "output", "pin_type": "clock", "attributes": []},
+        {"pin_id": "XTAL1", "name": "XTAL1", "number": "19", "direction": "input", "pin_type": "clock", "attributes": []},
+        {"pin_id": "GND", "name": "GND", "number": "20", "direction": "power", "pin_type": "ground", "attributes": []},
+        {"pin_id": "P2_0", "name": "P2.0", "number": "21", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_1", "name": "P2.1", "number": "22", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_2", "name": "P2.2", "number": "23", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_3", "name": "P2.3", "number": "24", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_4", "name": "P2.4", "number": "25", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_5", "name": "P2.5", "number": "26", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_6", "name": "P2.6", "number": "27", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P2_7", "name": "P2.7", "number": "28", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "PSEN", "name": "PSEN", "number": "29", "direction": "output", "pin_type": "other", "attributes": []},
+        {"pin_id": "ALE", "name": "ALE", "number": "30", "direction": "output", "pin_type": "other", "attributes": []},
+        {"pin_id": "EA", "name": "EA", "number": "31", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "P0_7", "name": "P0.7", "number": "32", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_6", "name": "P0.6", "number": "33", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_5", "name": "P0.5", "number": "34", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_4", "name": "P0.4", "number": "35", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_3", "name": "P0.3", "number": "36", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_2", "name": "P0.2", "number": "37", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_1", "name": "P0.1", "number": "38", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "P0_0", "name": "P0.0", "number": "39", "direction": "bidirectional", "pin_type": "io", "attributes": []},
+        {"pin_id": "VCC", "name": "VCC", "number": "40", "direction": "power", "pin_type": "power", "attributes": []}
+      ]
+    },
+    {
+      "ref": "U2",
+      "lib_name": "SPI_FLASH_W25Q16",
+      "value": "W25Q16",
+      "footprint": "SOIC-8",
+      "intent": "SPI Flash 存储，3.3V 供电",
+      "context": "8051 SPI 外设",
+      "constraint": "3.3V，16Mbit，SPI 接口",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "CS", "name": "CS", "number": "1", "direction": "input", "pin_type": "io", "attributes": []},
+        {"pin_id": "DO", "name": "DO", "number": "2", "direction": "output", "pin_type": "io", "attributes": []},
+        {"pin_id": "WP", "name": "WP", "number": "3", "direction": "input", "pin_type": "io", "attributes": []},
+        {"pin_id": "GND", "name": "GND", "number": "4", "direction": "power", "pin_type": "ground", "attributes": []},
+        {"pin_id": "DI", "name": "DI", "number": "5", "direction": "input", "pin_type": "io", "attributes": []},
+        {"pin_id": "CLK", "name": "CLK", "number": "6", "direction": "input", "pin_type": "clock", "attributes": []},
+        {"pin_id": "HOLD", "name": "HOLD", "number": "7", "direction": "input", "pin_type": "io", "attributes": []},
+        {"pin_id": "VCC", "name": "VCC", "number": "8", "direction": "power", "pin_type": "power", "attributes": []}
+      ]
+    },
+    {
+      "ref": "U3",
+      "lib_name": "LDO_AMS1117_3V3",
+      "value": "AMS1117-3.3",
+      "footprint": "SOT-223",
+      "intent": "3.3V 稳压，为 SPI Flash 供电",
+      "context": "电源子系统，从 5V 降至 3.3V",
+      "constraint": "输入 5V，输出 3.3V/500mA",
+      "attributes": [
+        {"key": "output_voltage_v", "value": 3.3, "unit": "V"},
+        {"key": "input_capacitance_uf", "value": 10.0, "unit": "μF"}
+      ],
+      "pins": [
+        {"pin_id": "VIN", "name": "VIN", "number": "3", "direction": "power", "pin_type": "power", "attributes": []},
+        {"pin_id": "VOUT", "name": "VOUT", "number": "2", "direction": "power", "pin_type": "power", "attributes": []},
+        {"pin_id": "GND", "name": "GND", "number": "1", "direction": "ground", "pin_type": "ground", "attributes": []}
+      ]
+    },
+    {
+      "ref": "U4",
+      "lib_name": "LDO_AMS1117_5V0",
+      "value": "AMS1117-5.0",
+      "footprint": "SOT-223",
+      "intent": "5V 稳压，为 8051 和 U3 供电",
+      "context": "电源子系统，从 12V 降至 5V",
+      "constraint": "输入 12V，输出 5V/1A",
+      "attributes": [
+        {"key": "output_voltage_v", "value": 5.0, "unit": "V"},
+        {"key": "output_capacitance_uf", "value": 220.0, "unit": "μF"}
+      ],
+      "pins": [
+        {"pin_id": "VIN", "name": "VIN", "number": "3", "direction": "power", "pin_type": "power", "attributes": []},
+        {"pin_id": "VOUT", "name": "VOUT", "number": "2", "direction": "power", "pin_type": "power", "attributes": []},
+        {"pin_id": "GND", "name": "GND", "number": "1", "direction": "ground", "pin_type": "ground", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C1",
+      "lib_name": "CAP_ELEC",
+      "value": "220μF",
+      "footprint": "Radial-8mm",
+      "intent": "5V 输出滤波（大电容，启动慢）",
+      "context": "5V LDO 输出侧",
+      "constraint": "220μF/10V",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "+", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "-", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C2",
+      "lib_name": "CAP_ELEC",
+      "value": "10μF",
+      "footprint": "Radial-5mm",
+      "intent": "3.3V LDO 输入滤波（小电容，启动快）",
+      "context": "3.3V LDO 输入侧",
+      "constraint": "10μF/10V",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "+", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "-", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C3",
+      "lib_name": "CAP",
+      "value": "0.1μF",
+      "footprint": "0603",
+      "intent": "VCC_5V 去耦",
+      "context": "电源去耦",
+      "constraint": "0.1μF X7R",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "Y1",
+      "lib_name": "CRYSTAL",
+      "value": "11.0592MHz",
+      "footprint": "HC-49S",
+      "intent": "提供系统时钟",
+      "context": "8051 晶振电路",
+      "constraint": "11.0592MHz，负载电容 22pF",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "XTAL1", "number": "1", "direction": "output", "pin_type": "clock", "attributes": []},
+        {"pin_id": "pin2", "name": "XTAL2", "number": "2", "direction": "output", "pin_type": "clock", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C4",
+      "lib_name": "CAP",
+      "value": "22pF",
+      "footprint": "0805",
+      "intent": "晶振负载电容",
+      "context": "晶振电路",
+      "constraint": "22pF",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C5",
+      "lib_name": "CAP",
+      "value": "22pF",
+      "footprint": "0805",
+      "intent": "晶振负载电容",
+      "context": "晶振电路",
+      "constraint": "22pF",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "C6",
+      "lib_name": "CAP_ELEC",
+      "value": "10μF",
+      "footprint": "Radial-5mm",
+      "intent": "复位延时",
+      "context": "复位电路",
+      "constraint": "10μF 电解",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "R1",
+      "lib_name": "RES",
+      "value": "10kΩ",
+      "footprint": "0805",
+      "intent": "复位下拉",
+      "context": "复位电路",
+      "constraint": "10kΩ",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "R2",
+      "lib_name": "RES",
+      "value": "10kΩ",
+      "footprint": "0805",
+      "intent": "复位上拉",
+      "context": "复位电路",
+      "constraint": "10kΩ",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    },
+    {
+      "ref": "SW1",
+      "lib_name": "SW_PB",
+      "value": "复位按键",
+      "footprint": "SW_PB",
+      "intent": "手动复位",
+      "context": "复位电路",
+      "constraint": "常开",
+      "attributes": [],
+      "pins": [
+        {"pin_id": "pin1", "name": "pin1", "number": "1", "direction": "input", "pin_type": "other", "attributes": []},
+        {"pin_id": "pin2", "name": "pin2", "number": "2", "direction": "output", "pin_type": "other", "attributes": []}
+      ]
+    }
+  ],
+  "nets": [
+    {
+      "net_name": "VIN_12V",
+      "connected_pins": ["U4.VIN"],
+      "attributes": [],
+      "is_power": true,
+      "is_ground": false,
+      "voltage": 12.0,
+      "description": "12V 输入"
+    },
+    {
+      "net_name": "VCC_5V",
+      "connected_pins": ["U4.VOUT", "C1.pin1", "C2.pin1", "U3.VIN", "U1.VCC", "C3.pin1", "R2.pin2"],
+      "attributes": [],
+      "is_power": true,
+      "is_ground": false,
+      "voltage": 5.0,
+      "description": "5V 主电源（U4 输出，C1 大电容导致启动慢）"
+    },
+    {
+      "net_name": "VCC_3V3",
+      "connected_pins": ["U3.VOUT", "U2.VCC"],
+      "attributes": [],
+      "is_power": true,
+      "is_ground": false,
+      "voltage": 3.3,
+      "description": "3.3V 外设电源（缺 0.1μF 去耦）"
+    },
+    {
+      "net_name": "GND",
+      "connected_pins": ["U1.GND", "U2.GND", "U3.GND", "U4.GND", "C1.pin2", "C2.pin2", "C3.pin2", "C4.pin2", "C5.pin2", "C6.pin2", "R1.pin2", "SW1.pin2"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": true,
+      "voltage": 0.0,
+      "description": "系统参考地"
+    },
+    {
+      "net_name": "XTAL_OSC",
+      "connected_pins": ["U1.XTAL1", "U1.XTAL2", "Y1.pin1", "Y1.pin2", "C4.pin1", "C5.pin1"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "晶振振荡网络"
+    },
+    {
+      "net_name": "RST",
+      "connected_pins": ["U1.RST", "R1.pin1", "C6.pin1", "SW1.pin1", "R2.pin1"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "复位信号网络"
+    },
+    {
+      "net_name": "EA_GND",
+      "connected_pins": ["U1.EA"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": true,
+      "voltage": 0.0,
+      "description": "EA 接地"
+    },
+    {
+      "net_name": "SPI_CS",
+      "connected_pins": ["U1.P1_2", "U2.CS"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "SPI 片选"
+    },
+    {
+      "net_name": "SPI_CLK",
+      "connected_pins": ["U1.P1_3", "U2.CLK"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "SPI 时钟"
+    },
+    {
+      "net_name": "SPI_MOSI",
+      "connected_pins": ["U1.P1_4", "U2.DI"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "SPI MOSI"
+    },
+    {
+      "net_name": "SPI_MISO",
+      "connected_pins": ["U1.P1_5", "U2.DO"],
+      "attributes": [],
+      "is_power": false,
+      "is_ground": false,
+      "description": "SPI MISO"
+    }
+  ],
+  "extra_meta": {
+    "source": "Sprint1-B 构造",
+    "design_tool": "手工构造",
+    "crystal_freq_mhz": 11.0592,
+    "total_components": 15,
+    "total_nets": 11,
+    "semantic_coverage": "100%",
+    "known_ignores": []
+  }
+}

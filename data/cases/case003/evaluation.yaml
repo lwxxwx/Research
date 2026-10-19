@@ -1,0 +1,32 @@
+case_id: case003
+evaluation_ver: "1.0"
+case_class: A
+ir_path: ./schematic_ir.json
+ground_truth_path: ./expected_review.json
+enabled: true
+strict_ir_validation: true
+
+pass_criteria:
+  rule_checks:
+    - defect_ref: DEF-CASE003-1
+      origin_must_be: rule
+      rule_id: CLOCK_001
+      component_refs_intersect: [C1, Y1]
+      net_refs_intersect: [XTAL_OSC]
+      risk_must_be:
+        one_of: [medium, high]
+      evidence_must_have_at_least:
+        n: 2
+        source_types: [datasheet, reference_design]
+      suggestion_keywords_any: [22pF, 更换, 对称]
+      root_cause_keywords_any: [负载电容, 起振, 频率]
+
+benchmark_weights:
+  rule_metrics_weight: 0.8
+  ai_metrics_weight: 0.2
+
+benchmark_tags:
+  - rule_only
+  - sprint1
+skip_categories: []
+notes: "case003 覆盖 CLOCK_001 晶振负载电容配置检查。预期命中 1 条（C1=10pF 偏离 22pF）。POWER_001 / POWER_002 / IO_001 / IO_002 / IO_003 / CLOCK_002 / CTRL_001 / CTRL_002 / POWER_003 均不应命中。"

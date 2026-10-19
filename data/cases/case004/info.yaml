@@ -1,0 +1,39 @@
+case_id: case004
+case_class: A
+title: "8051 UART 接口 - IO 输出冲突"
+description: "基于 STC89C55RC 的 8051 UART 桥接系统；存在两处 IO 冲突：①U1 与 U2 的 IO 输出直连（IO_003）；②U1 内部两个 IO 输出同网（IO_002）"
+
+ai_expected_count: 0
+
+ir_generated_by: "Sprint1-B"
+ir_schema_version: "v1.0"
+
+calibration_status: PENDING
+calibrated_at: null
+
+tags:
+  - interface
+  - uart
+  - io
+  - mcu
+
+known_design_defects:
+  - id: E1
+    summary: "MCU U1 的输出引脚 P3_6（WR）与外部器件 U2 的输出引脚 OUT 直连到同一网络，推挽对推挽冲突"
+    risk: critical
+    rule_id: IO_003
+    ground_truth: "DEF-CASE004-1"
+  - id: E2
+    summary: "MCU U1 内部两个 IO 输出引脚 P1_0 和 P1_1 连接到同一网络 BUS_CONFLICT，两路输出可能冲突"
+    risk: critical
+    rule_id: IO_002
+    ground_truth: "DEF-CASE004-2"
+
+notes: |
+  Case004 为 A 类（Rule-Only）UART 接口案例，覆盖 IO_002 + IO_003。
+  构造方式：基于 8051 最小系统，外接 UART_BRIDGE（U2）。
+    1. 正常 UART 互连：U1.P3_1(TXD)↔U2.RXD、U1.P3_0(RXD)↔U2.TXD
+    2. 缺陷 E1：U1.P3_6(WR) 与 U2.OUT 同网（IO_003 命中）
+    3. 缺陷 E2：U1.P1_0 与 U1.P1_1 同网（IO_002 命中）
+  U2 的 lib_name = UART_BRIDGE（不匹配 MCU 白名单，用于 IO_003 判定外部器件）。
+  其余电路（复位、晶振、电源去耦）拓扑正确，不触发 POWER_001/002 / CLOCK_001/002。

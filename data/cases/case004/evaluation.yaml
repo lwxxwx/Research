@@ -1,0 +1,42 @@
+case_id: case004
+evaluation_ver: "1.0"
+case_class: A
+ir_path: ./schematic_ir.json
+ground_truth_path: ./expected_review.json
+enabled: true
+strict_ir_validation: true
+
+pass_criteria:
+  rule_checks:
+    - defect_ref: DEF-CASE004-1
+      origin_must_be: rule
+      rule_id: IO_003
+      component_refs_intersect: [U1, U2]
+      net_refs_intersect: [CTRL_WR]
+      risk_must_be:
+        one_of: [critical]
+      evidence_must_have_at_least:
+        n: 2
+      suggestion_keywords_any: [开漏, 上拉, 隔离, 缓冲]
+      root_cause_keywords_any: [推挽, 冲突, 直连]
+    - defect_ref: DEF-CASE004-2
+      origin_must_be: rule
+      rule_id: IO_002
+      component_refs_intersect: [U1]
+      net_refs_intersect: [BUS_CONFLICT]
+      risk_must_be:
+        one_of: [critical]
+      evidence_must_have_at_least:
+        n: 2
+      suggestion_keywords_any: [分接, 隔离, input]
+      root_cause_keywords_any: [推挽, 输出, 冲突]
+
+benchmark_weights:
+  rule_metrics_weight: 0.8
+  ai_metrics_weight: 0.2
+
+benchmark_tags:
+  - rule_only
+  - sprint1
+skip_categories: []
+notes: "case004 覆盖 IO_003（MCU vs 外设输出冲突）+ IO_002（IO 间方向冲突）。预期命中 2 条。POWER_001 / POWER_002 / CLOCK_001 / CLOCK_002 / CTRL_001 / CTRL_002 / POWER_003 均不应命中。"

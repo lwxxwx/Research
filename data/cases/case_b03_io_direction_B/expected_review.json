@@ -1,0 +1,131 @@
+{
+  "case_id": "case_b03_io_direction_B",
+  "review_version": "v1.0",
+  "overall_risk_level": "critical",
+  "summary": "基于 STC89C55RC 的 8051 系统，外接 AT24C02 I2C EEPROM。存在两处缺陷：①MCU 内部两个 output 引脚 P1_0 和 P1_1 直连到 BUS_CONFLICT 网络（critical，IO_002）；②I2C 总线 SDA/SCL 缺上拉电阻，开漏总线无法输出高电平，ACK 无法传输，通信完全失效（critical，AI 发现）。",
+  "defects": [
+    {
+      "defect_id": "DEF-B03-1",
+      "category": "interface",
+      "location": {
+        "sheet": "IO_PAGE1",
+        "path": "U1.P1_0",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U1",
+      "net": "BUS_CONFLICT",
+      "risk": "critical",
+      "origin": "rule",
+      "rule_id": "IO_002",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "STC89C55RC Datasheet V2.1",
+          "section": "4. IO Port Configuration",
+          "reason": "P1 口可配置为推挽输出；同网络两个 output 引脚在相反电平下会产生短路电流"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Net[BUS_CONFLICT].connected_pins = ['U1.P1_0', 'U1.P1_1']；两个引脚均为 direction=output, pin_type=io；≥ 2 个 OUTPUT 同网"
+        }
+      ],
+      "root_cause": "MCU U1 的 P1_0 和 P1_1 两个 output 引脚直连到 BUS_CONFLICT 网络。两个推挽输出同网时，若程序配置相反电平，会形成 MCU 内部短路电流，可能损坏 IO 口。",
+      "suggestion": "将 P1_0 和 P1_1 分接到不同网络；或其中一个改为 input 模式。",
+      "confidence": 0.95
+    },
+    {
+      "defect_id": "DEF-B03-2",
+      "category": "interface",
+      "location": {
+        "sheet": "IO_PAGE1",
+        "path": "U2.SDA",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U2",
+      "net": "SDA",
+      "risk": "critical",
+      "origin": "ai_discovered",
+      "rule_id": null,
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "NXP I2C Bus Specification UM10204",
+          "section": "7.1 Pull-up Resistor Sizing",
+          "reason": "I2C 为开漏总线，SDA/SCL 必须外接上拉电阻；标准模式 100kHz 下 5V 系统推荐 4.7kΩ，计算区间 1.7kΩ~5.7kΩ"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "AT24C02 Datasheet",
+          "section": "I2C Bus Timing",
+          "reason": "AT24C02 标准模式下 SDA/SCL 上升时间 ≤ 1000ns，上拉电阻过大会导致上升沿过缓，通信失败"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "application_note",
+          "source": "I2C Bus Design Guidelines",
+          "section": "2. Open-Drain Bus Requirement",
+          "reason": "开漏总线只能拉低，无法输出高电平；高电平靠上拉电阻提供；无上拉时总线浮空，ACK 信号无法传输"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Net[SDA].connected_pins = ['U1.P3_6', 'U2.SDA']，无电阻元件；Net[SCL].connected_pins = ['U1.P3_7', 'U2.SCL']，无电阻元件；U1.P3_6/P3_7 为 bidirectional，U2.SDA 为 bidirectional，U2.SCL 为 input"
+        }
+      ],
+      "root_cause": "I2C 是开漏总线，SDA/SCL 的器件只能拉低总线，无法主动输出高电平；高电平由外部上拉电阻提供。IR 中 SDA 和 SCL 网络均无上拉电阻，总线在空闲时浮空，无法产生稳定的高电平。I2C 通信依赖 ACK 位（从机拉低 SDA），但主机发送逻辑 1 时总线无法拉高，通信完全失效。",
+      "suggestion": "在 SDA 和 SCL 上各加 4.7kΩ 上拉到 VCC（标准模式 100kHz，5V 系统）；若总线速率更高或总线电容较大，按 1.7kΩ~5.7kΩ 区间调整。",
+      "confidence": 0.95,
+      "review_status": "NEED_EXPERT_REVIEW"
+    }
+  ],
+  "observations": [
+    {
+      "obs_id": "OBS-B03-1",
+      "title": "IO_002 命中 BUS_CONFLICT，不命中 SDA/SCL",
+      "description": "IO_002 默认 ignore_bidirectional=true，只统计 OUTPUT 引脚。SDA/SCL 上是 bidirectional，不计入；BUS_CONFLICT 是两个 output，命中。",
+      "related_components": ["U1"]
+    }
+  ],
+  "good_practices": [
+    {
+      "gp_id": "GP-B03-1",
+      "title": "I2C 器件地址引脚正确接地",
+      "description": "U2 的 A0/A1/A2 接地，I2C 地址为 0x50。",
+      "related_components": ["U2"]
+    },
+    {
+      "gp_id": "GP-B03-2",
+      "title": "晶振负载电容正确",
+      "description": "C1=C2=22pF 对称配置。",
+      "related_components": ["Y1", "C1", "C2"]
+    },
+    {
+      "gp_id": "GP-B03-3",
+      "title": "复位 RC 参数合理",
+      "description": "C3=10μF + R1=10kΩ → τ=100ms。",
+      "related_components": ["R1", "C3"]
+    },
+    {
+      "gp_id": "GP-B03-4",
+      "title": "VCC 去耦电容正确",
+      "description": "C4=0.1μF 跨接 VCC-GND。",
+      "related_components": ["C4"]
+    }
+  ],
+  "known_ignores": [],
+  "benchmark_meta": {
+    "case_class": "B",
+    "expected_rule_hits": ["IO_002"],
+    "total_expected_defects": 2,
+    "total_expected_ai_discovered": 1,
+    "allow_extra_findings": false
+  },
+  "expert_sign_off": {
+    "reviewer": "PROVISIONAL_AI_ASSISTANT",
+    "calibration_status": "PROVISIONAL",
+    "calibration_date": "2026-10-19",
+    "pending_review_by": "hardware-expert"
+  }
+}

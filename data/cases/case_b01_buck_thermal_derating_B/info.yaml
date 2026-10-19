@@ -1,0 +1,51 @@
+case_id: case_b01_buck_thermal_derating_B
+case_class: B
+title: "8051 + LM2596 Buck 电源 - 热降额裕量不足"
+description: "基于 STC89C55RC 的 8051 系统，5V 由 LM2596S-5.0 Buck 从 12V 降压；85℃ 工业级户外环境下，1A 负载时 LM2596 结温 147.5℃，超过 125℃ 最大结温"
+
+ai_expected_count: 1
+
+ir_generated_by: "Sprint1-B (Tech Lead B)"
+ir_schema_version: "v1.0"
+
+scenario: "工业级户外无人值守设备（如户外通信基站、环境监测节点），夏季密闭机箱内温度可达 85℃"
+
+# ===== PROVISIONAL：待硬件专家校准 =====
+calibration_status: PROVISIONAL
+calibration_by: "Tech Lead B + hardware-expert (PROVISIONAL)"
+calibration_date: "2026-10-19"
+calibration_note: "AI 交叉审查 (Design Agent + Review Agent)，未经真实硬件工程师签字；跑通流程用；专家校准后替换为 CALIBRATED"
+pending_review_by: "hardware-expert"
+# =====================================
+
+tags:
+  - power
+  - buck
+  - thermal
+  - derating
+  - emc
+
+known_design_defects:
+  - id: E1
+    summary: "VCC_5V 网络无 0.1μF 陶瓷去耦电容；Buck 输入侧 C_in 旁也缺 100nF 高频去耦"
+    risk: critical
+    rule_id: POWER_001
+    origin: rule
+    ground_truth: "DEF-B01-1"
+  - id: E2
+    summary: "LM2596 在 85℃ + 1A 下功耗 1.25W，结温 147.5℃，超过 T_J_max=125℃ 和 GJB/Z 35-93 Ⅱ级降额线 95℃"
+    risk: high
+    rule_id: null
+    origin: ai_discovered
+    ground_truth: "DEF-B01-2"
+
+notes: |
+  Case B01 为 B 类（AI 辅助发现）案例。
+  规则能发现：POWER_001（VCC 去耦缺失）+ IO_001（IO 悬空，low）。
+  AI 才能发现：LM2596 热降额裕量不足（需要基于 Datasheet 热阻参数 + 效率推导 + GJB/Z 35 降额准则推理）。
+  设计边界：
+    - IR 中 U2.attributes 明确不含 power_dissipation_actual / thermal_resistance / ambient_temperature
+    - 确保 POWER_003 无法触发，热降额缺陷 100% 属于 AI/RAG 推理
+  边界说明（Review Agent 建议）：
+    - 环境温度 < 40℃ 且负载 < 0.5A 时热降额可能不触发
+    - 本 Case 的 85℃ + 1A 组合下，T_J=147.5℃ 同时超过 T_J_max 和 GJB/Z 35 降额线

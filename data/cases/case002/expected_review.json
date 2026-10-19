@@ -1,0 +1,92 @@
+{
+  "case_id": "case002",
+  "review_version": "v1.0",
+  "overall_risk_level": "high",
+  "summary": "基于 STC89C55RC 的 8051 系统，5V 由 AMS1117-5.0 LDO 从 12V 降压。LDO 在 500mA 负载下功耗 3.5W，远超 SOT-223 封装 1W 的 80% 降额阈值（0.8W），存在过热和可靠性风险。其余电路（复位、晶振、去耦）拓扑正确。",
+  "defects": [
+    {
+      "defect_id": "DEF-CASE002-1",
+      "category": "power",
+      "location": {
+        "sheet": "POWER_PAGE1",
+        "path": "U2",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U2",
+      "net": "VIN_12V",
+      "risk": "high",
+      "origin": "rule",
+      "rule_id": "POWER_003",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "AMS1117 Datasheet",
+          "section": "Absolute Maximum Ratings / Thermal",
+          "reason": "SOT-223 封装在 25℃ 无散热片时最大功耗约 1W；通用硬件降额准则要求按 0.8 系数降额使用"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "reference_design",
+          "source": "通用硬件降额设计规范（占位：GJB/Z 35、IPC-9592）",
+          "section": "功率器件降额",
+          "reason": "线性稳压器功耗 P = (Vin - Vout) × Iout；SOT-223 封装功率上限低，压差大时需改用 DC-DC 或加大封装/散热"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Component[U2].attributes: power_dissipation_rated=1.0W, power_dissipation_actual=3.5W, derating_coefficient=0.8, operating_temperature=25℃ → 阈值 = 1.0 × 0.8 × 1.0 = 0.8W < 实际 3.5W"
+        }
+      ],
+      "root_cause": "AMS1117-5.0 从 12V 降至 5V，负载 500mA，LDO 自身功耗 = (12-5) × 0.5 = 3.5W。SOT-223 封装额定功耗约 1W，按降额系数 0.8 计算可用功耗 0.8W。实际功耗 3.5W 远超降额阈值，LDO 会过热，可能触发过温保护、损坏器件或影响系统可靠性。",
+      "suggestion": "①改用 DC-DC 降压（Buck 转换器，效率高，损耗小）；②或更换更大功率封装（如 TO-220 / DPAK）并加散热片；③或降低输入电压（如用 9V 适配器）；④若必须用 LDO，需重新评估热设计并加散热措施。",
+      "confidence": 0.9
+    }
+  ],
+  "observations": [
+    {
+      "obs_id": "OBS-CASE002-1",
+      "title": "LDO 输入输出滤波正常",
+      "description": "VIN 和 VCC 网络均有滤波/去耦电容，符合线性稳压器布局要求。",
+      "related_components": ["C4", "C5"]
+    }
+  ],
+  "good_practices": [
+    {
+      "gp_id": "GP-CASE002-1",
+      "title": "LDO 输入输出滤波电容配置",
+      "description": "C5=10μF 输出滤波，C4=0.1μF 高频去耦，符合 AMS1117 推荐电路。",
+      "related_components": ["C4", "C5"]
+    },
+    {
+      "gp_id": "GP-CASE002-2",
+      "title": "复位 RC 参数合理",
+      "description": "C3=10μF + R1=10kΩ → τ=100ms。",
+      "related_components": ["R1", "C3"]
+    },
+    {
+      "gp_id": "GP-CASE002-3",
+      "title": "晶振负载电容正确",
+      "description": "C1=C2=22pF 对称配置。",
+      "related_components": ["Y1", "C1", "C2"]
+    },
+    {
+      "gp_id": "GP-CASE002-4",
+      "title": "复位拓扑正确",
+      "description": "R2=10kΩ 上拉 RST-VCC。",
+      "related_components": ["R2"]
+    }
+  ],
+  "known_ignores": [],
+  "benchmark_meta": {
+    "case_class": "A",
+    "expected_rule_hits": ["POWER_003"],
+    "total_expected_defects": 1,
+    "total_expected_ai_discovered": 0,
+    "allow_extra_findings": false
+  },
+  "expert_sign_off": {
+    "reviewer": "hardware-expert",
+    "calibration_status": "PENDING",
+    "calibration_date": null
+  }
+}

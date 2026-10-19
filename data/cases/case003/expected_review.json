@@ -1,0 +1,93 @@
+{
+  "case_id": "case003",
+  "review_version": "v1.0",
+  "overall_risk_level": "medium",
+  "summary": "基于 STC89C55RC 的 8051 最小系统，晶振 Y1=11.0592MHz。晶振负载电容 C1 误用 10pF（应为 22pF），偏离 Datasheet 推荐值，可能导致起振困难或频率偏移。C2 正确为 22pF。其余电路（复位、电源去耦、EA 接地）拓扑正确。",
+  "defects": [
+    {
+      "defect_id": "DEF-CASE003-1",
+      "category": "clock",
+      "location": {
+        "sheet": "CLOCK_PAGE1",
+        "path": "Y1.C1",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "C1",
+      "net": "XTAL_OSC",
+      "risk": "medium",
+      "origin": "rule",
+      "rule_id": "CLOCK_001",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "STC89C55RC Datasheet V2.1",
+          "section": "6.1 Crystal Oscillator",
+          "reason": "11.0592MHz 晶振推荐负载电容 22pF ±5%；负载电容偏离会导致振荡频率偏移或起振失败"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "reference_design",
+          "source": "8051 Minimum System Reference Design Guide",
+          "section": "3. 时钟设计",
+          "reason": "标准 8051 最小系统晶振负载电容 22pF；两侧对称布局，走线靠近 MCU"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Component[C1].value = '10pF'；Component[C2].value = '22pF'；晶振网络 Net[XTAL_OSC] 上 C1/C2 均为负载电容，但 C1 偏离期望值 22pF ±5pF"
+        }
+      ],
+      "root_cause": "晶振负载电容 C1=10pF 偏离推荐值 22pF。负载电容偏小会导致晶振振荡回路增益不足，可能起振困难；即使起振，振荡频率也可能偏移，影响串口波特率等对时钟敏感的功能。",
+      "suggestion": "将 C1 更换为 22pF X7R 陶瓷电容，与 C2 一致；保持两侧电容对称布局，靠近 MCU 的 XTAL1/XTAL2 引脚（< 10mm）。",
+      "confidence": 0.9
+    }
+  ],
+  "observations": [
+    {
+      "obs_id": "OBS-CASE003-1",
+      "title": "C2 保持 22pF 正确",
+      "description": "C2 为 22pF，符合 Datasheet 推荐；缺陷仅在 C1。",
+      "related_components": ["C2"]
+    }
+  ],
+  "good_practices": [
+    {
+      "gp_id": "GP-CASE003-1",
+      "title": "复位 RC 参数合理",
+      "description": "C3=10μF + R1=10kΩ → τ=100ms，满足 8051 复位保持要求。",
+      "related_components": ["R1", "C3", "SW1"]
+    },
+    {
+      "gp_id": "GP-CASE003-2",
+      "title": "VCC 去耦电容配置正确",
+      "description": "C4=0.1μF 陶瓷电容跨接 VCC-GND，符合 Datasheet §7.1 去耦要求。",
+      "related_components": ["C4"]
+    },
+    {
+      "gp_id": "GP-CASE003-3",
+      "title": "复位拓扑正确（R2 上拉）",
+      "description": "R2=10kΩ 跨接 RST-VCC，提供高电平复位脉冲路径，符合 STC89C55RC 高电平复位要求。",
+      "related_components": ["R2"]
+    },
+    {
+      "gp_id": "GP-CASE003-4",
+      "title": "EA 引脚硬件接地",
+      "description": "EA 接地（EA_GND 网络），芯片选择内部 Flash，避免引脚浮空。",
+      "related_components": ["U1"],
+      "related_nets": ["EA_GND"]
+    }
+  ],
+  "known_ignores": [],
+  "benchmark_meta": {
+    "case_class": "A",
+    "expected_rule_hits": ["CLOCK_001"],
+    "total_expected_defects": 1,
+    "total_expected_ai_discovered": 0,
+    "allow_extra_findings": false
+  },
+  "expert_sign_off": {
+    "reviewer": "hardware-expert",
+    "calibration_status": "PENDING",
+    "calibration_date": null
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "case_id": "case_b04_power_sequence_B",
+  "review_version": "v1.0",
+  "overall_risk_level": "critical",
+  "summary": "基于 STC89C55RC 的 8051 系统，5V 主电源 + 3.3V 外设电源。存在两处缺陷：①VCC_3V3 网络缺 0.1μF 陶瓷去耦（critical，POWER_001）；②上电时序异常：U3(3.3V LDO) 输入电容 10μF 小于 U4(5V LDO) 输出电容 220μF，3.3V 早于 5V 建立，SPI Flash 通过 IO 保护二极管灌电流到 8051（high，AI 发现）。",
+  "defects": [
+    {
+      "defect_id": "DEF-B04-1",
+      "category": "power",
+      "location": {
+        "sheet": "POWER_PAGE1",
+        "path": "U2.VCC",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U2",
+      "net": "VCC_3V3",
+      "risk": "critical",
+      "origin": "rule",
+      "rule_id": "POWER_001",
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "W25Q16 Datasheet",
+          "section": "Power Supply",
+          "reason": "每个 VCC 引脚应配 0.1μF 陶瓷去耦电容，抑制高频噪声"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "Net[VCC_3V3].connected_pins = ['U3.VOUT', 'U2.VCC']，无任何电容元件"
+        }
+      ],
+      "root_cause": "VCC_3V3 网络仅连接 U3.VOUT 和 U2.VCC，无 0.1μF 陶瓷去耦电容。SPI Flash 在高速开关时会产生高频噪声，缺少去耦可能导致电源轨波动，通信不稳定。",
+      "suggestion": "在 U2.VCC 就近（< 5mm）增加 0.1μF X7R 陶瓷去耦电容到 GND。",
+      "confidence": 0.95
+    },
+    {
+      "defect_id": "DEF-B04-2",
+      "category": "power",
+      "location": {
+        "sheet": "POWER_PAGE1",
+        "path": "U3",
+        "coords": {"x": 0, "y": 0}
+      },
+      "component": "U3",
+      "net": "VCC_3V3",
+      "risk": "high",
+      "origin": "ai_discovered",
+      "rule_id": null,
+      "evidence": [
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "AMS1117 Datasheet",
+          "section": "Startup Time",
+          "reason": "AMS1117 启动时间 ≈ 1~10ms，取决于输出电容和负载电流；输出电容越大，启动越慢"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "datasheet",
+          "source": "STC89C55RC Datasheet V2.1",
+          "section": "Absolute Maximum Ratings",
+          "reason": "IO 引脚电压不能超过 VCC + 0.5V；超过会触发 ESD 保护二极管导通，可能引起闩锁"
+        },
+        {
+          "type": "rag_ref",
+          "source_type": "application_note",
+          "source": "Power Sequence Design Guidelines",
+          "section": "3. Multi-Rail Power Sequencing",
+          "reason": "多路电源必须保证核心电压先于 IO 电压建立；否则 IO 电压通过 ESD 二极管灌入核心电源域"
+        },
+        {
+          "type": "ir_ref",
+          "detail": "U4.OUT 连 C1=220μF（启动慢）；U3.VIN 连 VCC_5V；U3.VOUT 连 VCC_3V3；C2=10μF 在 U3 输入侧（启动快）；U3 比 U4 早约 1~10ms 建立 3.3V；U2(SPI Flash) 的 IO 通过 SPI 网络与 U1(8051) 的 IO 直连"
+        }
+      ],
+      "root_cause": "上电时序异常：U4(5V LDO) 的输出电容 C1=220μF 远大于 U3(3.3V LDO) 的输入电容 C2=10μF，导致 5V 建立时间远慢于 3.3V。上电瞬间 3.3V 先建立，SPI Flash(W25Q16) 的 IO 已输出 3.3V，但 8051 的 VCC 尚未建立（0V）。SPI Flash 的 IO 电压通过 8051 的 ESD 保护二极管灌入 VCC_5V 网络，可能超过 8051 的 IO 绝对最大值（VCC+0.5V），引发闩锁（latch-up）风险，损坏器件。",
+      "suggestion": "①在 5V 输出侧加使能延迟（如 AMS1117 的 EN 引脚 + RC 延时）；②或改用带电源时序控制的 PMIC；③或减小 C1 到 47μF、增大 C2 到 22μF，让启动时间接近；④或在 SPI 线上加电平转换/隔离。",
+      "confidence": 0.85,
+      "review_status": "NEED_EXPERT_REVIEW"
+    }
+  ],
+  "observations": [
+    {
+      "obs_id": "OBS-B04-1",
+      "title": "10 条规则无时序检查",
+      "description": "现有 10 条规则中无任何上电时序检查项；多路时序缺陷属 AI/RAG 推理范畴。",
+      "related_components": ["U3", "U4"]
+    }
+  ],
+  "good_practices": [
+    {
+      "gp_id": "GP-B04-1",
+      "title": "晶振负载电容正确",
+      "description": "C4=C5=22pF 对称。",
+      "related_components": ["Y1", "C4", "C5"]
+    },
+    {
+      "gp_id": "GP-B04-2",
+      "title": "复位 RC 参数合理",
+      "description": "C6=10μF + R1=10kΩ → τ=100ms。",
+      "related_components": ["R1", "C6"]
+    },
+    {
+      "gp_id": "GP-B04-3",
+      "title": "VCC_5V 去耦正确",
+      "description": "C3=0.1μF 跨接 VCC_5V-GND。",
+      "related_components": ["C3"]
+    },
+    {
+      "gp_id": "GP-B04-4",
+      "title": "SPI 总线拓扑正确",
+      "description": "CS/CLK/MOSI/MISO 一对一连接。",
+      "related_components": ["U1", "U2"]
+    }
+  ],
+  "known_ignores": [],
+  "benchmark_meta": {
+    "case_class": "B",
+    "expected_rule_hits": ["POWER_001"],
+    "total_expected_defects": 2,
+    "total_expected_ai_discovered": 1,
+    "allow_extra_findings": false
+  },
+  "expert_sign_off": {
+    "reviewer": "PROVISIONAL_AI_ASSISTANT",
+    "calibration_status": "PROVISIONAL",
+    "calibration_date": "2026-10-19",
+    "pending_review_by": "hardware-expert"
+  }
+}
