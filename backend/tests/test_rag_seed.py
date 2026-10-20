@@ -210,9 +210,18 @@ abc
 
 
 def test_get_embedding_client_fake_mode():
-    emb = get_embedding_client()
+    # --- 原代码（保留，已注释） ---
+    # emb = get_embedding_client()
+    # vec = emb.embed_query("测试输入文本")
+    # assert len(vec) == 1536
+    # --- 原代码（保留，已注释） ---
+    # ===== [S1-C 修正] 显式传 fake，不依赖 RAG_EMBEDDING_BACKEND 环境变量；
+    # 维度从 BACKEND_DIM 读，避免写死 =====
+    from app.rag.embedding_factory import BACKEND_DIM
+    emb = get_embedding_client("fake")
     vec = emb.embed_query("测试输入文本")
-    assert len(vec) == 1536
+    assert len(vec) == BACKEND_DIM["fake"] == 1536
+    # ===== [S1-C 修正 END] =====
 
 
 def test_retriever_instance_create():
@@ -836,6 +845,12 @@ related_rule_ids: ["R1"]
         call_log = {"embed_documents": 0, "embed_query": 0}
 
         class SpyEmbedding:
+            # ===== [S1-C 修正] ingest_single_file 从 embeddings 实例读
+            # provider_name / model 写入 meta_json，Spy 需补这两个属性 =====
+            provider_name = "spy"
+            model = "spy-model"
+            # ===== [S1-C 修正 END] =====
+
             def embed_documents(self, texts):
                 call_log["embed_documents"] += 1
                 return real_client.embed_documents(texts)

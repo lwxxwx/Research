@@ -7,7 +7,12 @@
    - 本脚本已支持"数据库已初始化"的友好提示（不会输出错误堆栈）
    - 检测到对象已存在时，会跳过 DDL 执行，直接进行 Schema 校验
    - 如需彻底重建：请先清空数据库（见 README 或 CONTRIBUTING）
-Schema唯一事实源：infra/docker/initdb/002_schema.sql
+# --- 原说明（保留，Sprint 0 有效） ---
+# Schema唯一事实源：infra/docker/initdb/002_schema.sql
+# --- 原说明（保留，Sprint 0 有效） ---
+【S1-C 更新】Sprint 1 起 Schema 唯一事实源为 Alembic migration；
+  建库请用 `alembic upgrade head`，本脚本保留"Schema 校验"职责。
+  002_schema.sql 已退居历史基线（见 Sprint1 前置条件 4）。
 Sprint‑0：建表review_defect，业务层实现JSON解析写入；Sprint‑0不使用该表做查询，Sprint‑1全面启用。
 """
 import logging
@@ -236,6 +241,32 @@ def init_database():
                 "❌ rule_candidates 表缺失！Sprint0 Phase‑I 反馈闭环依赖该表，"
                 "请检查 002_schema.sql 是否包含 rule_candidates 定义。"
             )
+
+        # ===== [S1-C 新增] Embedding 维度一致性只读校验 =====
+        # 说明：只读检查，不改 Schema、不清数据。
+        #      切换后端请用 scripts/switch_embedding_backend.py（一次性执行，非每次启动）。
+        from app.rag.embedding_factory import BACKEND_DIM
+        backend = (settings.rag_embedding_backend or "fake").lower().strip()
+        expected_dim = BACKEND_DIM.get(backend)
+        actual_dim = conn.execute(text(
+            "SELECT atttypmod - 4 FROM pg_attribute "
+            "WHERE attrelid = 'knowledge_chunk'::regclass AND attname = 'embedding'"
+        )).scalar()
+        if expected_dim is None:
+            raise RuntimeError(
+                f"不支持的 RAG_EMBEDDING_BACKEND={backend}，"
+                f"可选值: {sorted(BACKEND_DIM.keys())}"
+            )
+        if actual_dim != expected_dim:
+            raise RuntimeError(
+                f"Embedding 维度不匹配：后端 {backend} 期望 {expected_dim} 维，"
+                f"DB 当前 {actual_dim} 维。请先执行切换脚本（一次性）："
+                f"python /scripts/switch_embedding_backend.py --to {backend}"
+            )
+        logger.info(
+            f"✅ knowledge_chunk.embedding 维度 = {actual_dim}（后端 {backend}）"
+        )
+        # ===== [S1-C 新增 END] =====
 
     logger.info("🎉 数据库初始化全部校验完成")
 

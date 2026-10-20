@@ -27,22 +27,30 @@ v1.4 变更（豆包新优化 4）：
 v1.5 变更（豆包新优化 1）：
 - 优化 1：删除未使用的 import：Union、Session（PEP 8 / ruff F401）
 
+【S1-C 变更】Sprint 1 阶段 C：
+- 收敛 get_embedding_client 到 app.rag.embedding_factory（含 zhipu 分支 + 维度守卫）
+- Retriever.__init__ 实例化时调用 assert_backend_matches_db
+
 Sprint-0 限制：仅内部 Python API，无重排，不对外暴露 HTTP 接口
 """
 import logging
 import threading
 from typing import List, Optional
 
-from langchain_core.embeddings.fake import DeterministicFakeEmbedding
+# ===== [S1-C 修改] 本地工厂注释后不再直接使用，import 注释掉避免 F401 =====
+# --- 原代码（保留，已注释） ---
+# from langchain_core.embeddings.fake import DeterministicFakeEmbedding
 
 # ★ 优化 1：删除未使用 import Session
 # --- 原 import（保留，已删） ---
 # from sqlalchemy.orm import joinedload, Session
-from langchain_openai import OpenAIEmbeddings
+# from langchain_openai import OpenAIEmbeddings
 
 # ★ 优化 1：删除未使用 import
 # --- 原 import（保留，已删） ---
 # from typing import List, Optional, Union
+# --- 原代码（保留，已注释） ---
+# ===== [S1-C 修改 END] =====
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
@@ -50,31 +58,47 @@ from app.core.config import settings
 from app.persistence.db import get_db_session
 from app.persistence.models import KnowledgeChunk
 from app.rag.knowledge import RetrievalResult
+# ===== [S1-C 新增] 从统一工厂导入，替代本地 get_embedding_client =====
+from app.rag.embedding_factory import (
+    assert_backend_matches_db,
+    get_embedding_client,
+)
+# ===== [S1-C 新增 END] =====
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL_NAME = settings.openai_embedding_model
+# ===== [S1-C 修改] EMBEDDING_MODEL_NAME 注释掉，工厂内部按后端取模型名 =====
+# --- 原代码（保留，已注释） ---
+# EMBEDDING_MODEL_NAME = settings.openai_embedding_model
+# --- 原代码（保留，已注释） ---
+# ===== [S1-C 修改 END] =====
 
 
-def get_embedding_client():
-    backend = settings.rag_embedding_backend.lower()
-    if backend == "fake":
-        return DeterministicFakeEmbedding(size=1536)
-    elif backend == "openai":
-        _embedding_api_key = settings.openai_embedding_api_key or settings.llm_api_key
-        if not _embedding_api_key:
-            raise RuntimeError(
-                "RAG_EMBEDDING_BACKEND=openai 模式需要配置 "
-                "OPENAI_EMBEDDING_API_KEY 或者 LLM_API_KEY"
-            )
-        return OpenAIEmbeddings(
-            model=EMBEDDING_MODEL_NAME,
-            openai_api_key=_embedding_api_key,
-        )
-    else:
-        raise ValueError(
-            f"不支持的 RAG_EMBEDDING_BACKEND={backend}，可选值：fake / openai"
-        )
+# ===== [S1-C 修改] 本地 get_embedding_client 注释掉，改用 app.rag.embedding_factory =====
+# 原因：与 ingest.py 存在逐字相同的重复实现，统一收敛到 embedding_factory，
+#      并新增 zhipu 分支与维度守卫。
+# --- 原代码（保留，已注释） ---
+# def get_embedding_client():
+#     backend = settings.rag_embedding_backend.lower()
+#     if backend == "fake":
+#         return DeterministicFakeEmbedding(size=1536)
+#     elif backend == "openai":
+#         _embedding_api_key = settings.openai_embedding_api_key or settings.llm_api_key
+#         if not _embedding_api_key:
+#             raise RuntimeError(
+#                 "RAG_EMBEDDING_BACKEND=openai 模式需要配置 "
+#                 "OPENAI_EMBEDDING_API_KEY 或者 LLM_API_KEY"
+#             )
+#         return OpenAIEmbeddings(
+#             model=EMBEDDING_MODEL_NAME,
+#             openai_api_key=_embedding_api_key,
+#         )
+#     else:
+#         raise ValueError(
+#             f"不支持的 RAG_EMBEDDING_BACKEND={backend}，可选值：fake / openai"
+#         )
+# --- 原代码（保留，已注释） ---
+# ===== [S1-C 修改 END] =====
 
 
 # ============================================================
@@ -126,7 +150,14 @@ def _as_dict(meta_raw) -> dict:
 
 class Retriever:
     def __init__(self):
+        # --- 原代码（保留，已注释） ---
+        # self._embed_client = get_embedding_client()
+        # --- 原代码（保留，已注释） ---
+        # ===== [S1-C 修改] 实例化后立即做一次维度守卫 =====
         self._embed_client = get_embedding_client()
+        with get_db_session() as db:
+            assert_backend_matches_db(db)
+        # ===== [S1-C 修改 END] =====
 
     def retrieve(
         self,

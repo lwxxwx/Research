@@ -23,6 +23,11 @@ v1.5 变更：
 - _dry_run：对齐 run_ingest，支持 case_evidence_scan，收集阶段 exists() 检查，单文件异常隔离
 - _dry_run：[ERROR] 打印附带异常类型名
 
+【S1-C 变更】Sprint 1 阶段 C：
+- 收敛 get_embedding_client 到 app.rag.embedding_factory（含 zhipu 分支 + 维度守卫）
+- ingest_single_file 写入前调用 assert_backend_matches_db
+- meta_json 的 embedding_provider / embedding_model 改为从 embeddings 实例读取
+
 CLI 入口（容器内，data/ 挂载到 /data）：
     python -m app.rag.ingest --config /data/knowledge/seed_ingest_list.yaml
     python -m app.rag.ingest --config /data/knowledge/seed_ingest_list.yaml --dry-run
@@ -35,8 +40,12 @@ from typing import List
 
 import yaml
 from langchain_core.embeddings import Embeddings
-from langchain_core.embeddings.fake import DeterministicFakeEmbedding
-from langchain_openai import OpenAIEmbeddings
+# ===== [S1-C 修改] 本地工厂注释后不再直接使用，import 注释掉避免 F401 =====
+# --- 原代码（保留，已注释） ---
+# from langchain_core.embeddings.fake import DeterministicFakeEmbedding
+# from langchain_openai import OpenAIEmbeddings
+# --- 原代码（保留，已注释） ---
+# ===== [S1-C 修改 END] =====
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -44,6 +53,12 @@ from app.persistence.db import get_db_session
 from app.persistence.models import KnowledgeChunk, KnowledgeDoc
 from app.rag.chunking import process_markdown_file_v2
 from app.rag.knowledge import IngestConfig
+# ===== [S1-C 新增] 从统一工厂导入，替代本地 get_embedding_client =====
+from app.rag.embedding_factory import (
+    assert_backend_matches_db,
+    get_embedding_client,
+)
+# ===== [S1-C 新增 END] =====
 
 logger = logging.getLogger(__name__)
 
@@ -54,29 +69,42 @@ CHUNK_SIZE = 800
 # 此常量保留仅用于文档追溯；实际调用 process_markdown_file_v2 时已忽略
 CHUNK_OVERLAP = 0
 
-EMBEDDING_MODEL_NAME = settings.openai_embedding_model
+# ===== [S1-C 修改] EMBEDDING_MODEL_NAME 注释掉，改为从 embeddings 实例读 =====
+# --- 原代码（保留，已注释） ---
+# EMBEDDING_MODEL_NAME = settings.openai_embedding_model
+# --- 原代码（保留，已注释） ---
+# ===== [S1-C 修改 END] =====
 
 
-def get_embedding_client() -> Embeddings:
-    """根据 settings.rag_embedding_backend 返回 embedding 实例"""
-    backend = settings.rag_embedding_backend.lower()
-    if backend == "fake":
-        return DeterministicFakeEmbedding(size=1536)
-    elif backend == "openai":
-        _embedding_api_key = settings.openai_embedding_api_key or settings.llm_api_key
-        if not _embedding_api_key:
-            raise RuntimeError(
-                "RAG_EMBEDDING_BACKEND=openai 模式需要配置 "
-                "OPENAI_EMBEDDING_API_KEY 或者 LLM_API_KEY"
-            )
-        return OpenAIEmbeddings(
-            model=EMBEDDING_MODEL_NAME,
-            openai_api_key=_embedding_api_key,
-        )
-    else:
-        raise ValueError(
-            f"不支持的 RAG_EMBEDDING_BACKEND={backend}，可选值：fake / openai"
-        )
+# ===== [S1-C 修改] 本地 get_embedding_client 注释掉，改用 app.rag.embedding_factory =====
+# 原因：与 retriever.py 存在逐字相同的重复实现，统一收敛到 embedding_factory，
+#      并新增 zhipu 分支与维度守卫。
+# 兼容：本文件顶部已 from app.rag.embedding_factory import get_embedding_client，
+#      tests/test_rag_seed.py 的 `from app.rag.ingest import get_embedding_client`
+#      仍可正常 import。
+# --- 原代码（保留，已注释） ---
+# def get_embedding_client() -> Embeddings:
+#     """根据 settings.rag_embedding_backend 返回 embedding 实例"""
+#     backend = settings.rag_embedding_backend.lower()
+#     if backend == "fake":
+#         return DeterministicFakeEmbedding(size=1536)
+#     elif backend == "openai":
+#         _embedding_api_key = settings.openai_embedding_api_key or settings.llm_api_key
+#         if not _embedding_api_key:
+#             raise RuntimeError(
+#                 "RAG_EMBEDDING_BACKEND=openai 模式需要配置 "
+#                 "OPENAI_EMBEDDING_API_KEY 或者 LLM_API_KEY"
+#             )
+#         return OpenAIEmbeddings(
+#             model=EMBEDDING_MODEL_NAME,
+#             openai_api_key=_embedding_api_key,
+#         )
+#     else:
+#         raise ValueError(
+#             f"不支持的 RAG_EMBEDDING_BACKEND={backend}，可选值：fake / openai"
+#         )
+# --- 原代码（保留，已注释） ---
+# ===== [S1-C 修改 END] =====
 
 
 def scan_case_evidence(root_dir: str, glob_pattern: str) -> List[pathlib.Path]:
@@ -127,6 +155,10 @@ db.commit()
 
 
 def ingest_single_file(db: Session, file_path: pathlib.Path, embeddings: Embeddings):
+    # ===== [S1-C 新增] 写入前维度守卫：后端期望维度 vs DB 实际维度 =====
+    # 不匹配时 raise 可操作错误，指向切换脚本，避免 pgvector 抛难懂的维度错误。
+    assert_backend_matches_db(db)
+    # ===== [S1-C 新增 END] =====
     logger.info(f"开始处理文件：{file_path.as_posix()}")
     meta, raw_content, chunks = process_markdown_file_v2(
         file_path,
@@ -143,8 +175,16 @@ def ingest_single_file(db: Session, file_path: pathlib.Path, embeddings: Embeddi
             "source_section": meta["source_section"],
             "part_numbers": meta["part_numbers"],
             "related_rule_ids": meta["related_rule_ids"],
-            "embedding_provider": settings.rag_embedding_backend,
-            "embedding_model": EMBEDDING_MODEL_NAME,
+            # --- 原代码（保留，已注释） ---
+            # "embedding_provider": settings.rag_embedding_backend,
+            # "embedding_model": EMBEDDING_MODEL_NAME,
+            # --- 原代码（保留，已注释） ---
+            # ===== [S1-C 修改] 改为从 embeddings 实例读实际后端/模型 =====
+            "embedding_provider": embeddings.provider_name,
+            "embedding_model": getattr(
+                embeddings, "model", embeddings.provider_name
+            ),
+            # ===== [S1-C 修改 END] =====
         },
         version="v1.0",
     )

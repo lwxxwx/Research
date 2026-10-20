@@ -288,7 +288,8 @@ class KnowledgeChunk(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     knowledge_doc_id: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("knowledge_doc.id", ondelete="CASCADE"))
     chunk_text: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding: Mapped[Optional[Vector]] = mapped_column(Vector(1536))
+    # ===== [S1-C 修改]  embedding 维度改为 1024 =====
+    embedding: Mapped[Optional[Vector]] = mapped_column(Vector(1024))
     # ORM属性 meta_json，DB列名 metadata
     meta_json: Mapped[Dict[str, Any]] = mapped_column(JSONB, name="metadata", server_default="{}")
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
