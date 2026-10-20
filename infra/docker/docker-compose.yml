@@ -114,21 +114,35 @@ services:
       context: ../../backend
       dockerfile: Dockerfile
     image: schematic-review-backend:${TAG:-latest}
+    # ===== [CHANGE-1] 新增：compose 直接读项目根 .env，注入所有变量 =====
+    # 目的：
+    #   1. 解决 ${VAR:-default} 从 infra/docker/.env 读取（不读项目根 .env）的问题
+    #   2. 使 LLM_PROVIDER / ZHIPUAI_API_KEY / RAG_EMBEDDING_* 等变量直接注入容器
+    #   3. 无需 --env-file，无需维护 backend/.env
+    # 路径：../../.env 相对本文件 = <project_root>/.env
+    env_file:
+      - ../../.env
+    # ===== [CHANGE-1 END] =====
     environment:
-      # ⚠️优先级：.env 文件中 DATABASE_URL > 下面自动拼接的默认值
-      # 对齐.env.example 连接串协议 postgresql+psycopg://
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-dev_secure_pwd_CHANGE_ME}@postgres:5432/${POSTGRES_DB:-schematic_review}}
-      # 对齐 .env.example APP_ENV，不再使用 ENVIRONMENT
-      APP_ENV: ${APP_ENV:-dev}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      SECRET_KEY: ${SECRET_KEY:-change_me_in_production_env}
-      # ⚠️ V1.3：追加根目录 /，使 import scripts.xxx 命中 /scripts 挂载点
-      PYTHONPATH: ${PYTHONPATH:-/app:/}
-      # AI服务相关环境变量，对齐.env.example
-      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
-      LLM_API_KEY: ${LLM_API_KEY:-your_api_key_here}
-      # ⚠️ V1.3：与方案A 并列挂载 /data 对齐
-      DATA_DIR: ${DATA_DIR:-/data}
+      # ------------------------------------------------------------
+      # [原逻辑 - 保留注释，便于对照回滚]
+      # env_file 已提供所有变量，以下 environment 仅保留"容器内路径强制"
+      # 原内容（已删除）：
+      #   DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://...}
+      #   APP_ENV: ${APP_ENV:-dev}
+      #   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      #   SECRET_KEY: ${SECRET_KEY:-change_me_in_production_env}
+      #   PYTHONPATH: ${PYTHONPATH:-/app:/}
+      #   LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      #   LLM_API_KEY: ${LLM_API_KEY:-your_api_key_here}
+      #   DATA_DIR: ${DATA_DIR:-/data}
+      # 原因：${VAR:-default} 从 -f 第一个文件目录的 .env 读（infra/docker/.env），
+      #       不读项目根 .env，导致 LLM_PROVIDER=zhipu 等值不生效。
+      # ------------------------------------------------------------
+      # ===== [CHANGE-2] 新增：容器内路径强制（固定值，不走 ${VAR:-default}） =====
+      PYTHONPATH: /app:/
+      DATA_DIR: /data
+      # ===== [CHANGE-2 END] =====
     depends_on:
       postgres:
         condition: service_healthy

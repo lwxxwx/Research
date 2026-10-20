@@ -9,7 +9,7 @@ dependencies = [
     "fastapi==0.104.1",
     "uvicorn[standard]==0.24.0",
     # Configuration & Validation
-    "pydantic==2.5.2",                  # Update from 2.5.0 to 2.5.2
+    "pydantic>=2.6.0",                  # Update from 2.5.0 to 2.5.2 to >=2.6.0
     "pydantic-settings==2.1.0",
     # Database
     "sqlalchemy==2.0.23",
@@ -30,6 +30,8 @@ dependencies = [
     "langgraph>=0.2.35",
     "alembic>=1.20.0",
     "openai==1.109.1",
+    "zhipuai>=2.1.5",
+
 ]
 
 [project.optional-dependencies]

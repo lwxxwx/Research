@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # ========== 新增：支持LLM扩展 ==========
     llm_model: Optional[str] = None
     llm_base_url: Optional[str] = None
+    # ========== 智谱 AI（LLM_PROVIDER=zhipu 时使用） ==========
+    zhipuai_api_key: Optional[str] = None
+    zhipuai_model: str = "glm-4-flash"
+    zhipuai_embedding_model: str = "embedding-3"
     # -------- 【✅新增】Embedding配置 --------
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_api_key: Optional[str] = None
