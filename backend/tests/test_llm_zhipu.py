@@ -431,6 +431,28 @@ def test_dimension_guard_mismatch_raises():
     # 一致时通过
     assert True
 
+def test_embedding_factory_minilm_returns_instance():
+    """
+    MiniLM 当前是骨架占位：
+    - 未注册到 _PROVIDERS 时，get_embedding_client("minilm") 抛 ValueError
+    - 注册后但 __init__ 抛 NotImplementedError 时，pytest.skip
+    - 完整接入后，正常返回实例
+
+    三种状态都兼容，不会让 CI 因"尚未接入"而失败。
+    """
+    from app.llm.embeddings.minilm import MiniLMEmbedding
+    from app.rag.embedding_factory import BACKEND_DIM, get_embedding_client
+
+    try:
+        client = get_embedding_client("minilm")
+    except ValueError:
+        pytest.skip("minilm 尚未注册到 _PROVIDERS（骨架占位阶段）")
+    except NotImplementedError:
+        pytest.skip("minilm 已注册但尚未实现（骨架占位阶段）")
+
+    assert isinstance(client, MiniLMEmbedding)
+    assert client.dimension == BACKEND_DIM["minilm"] == 384
+
 
 # ============================================================
 # 七、手动运行入口（pytest 不执行此块）

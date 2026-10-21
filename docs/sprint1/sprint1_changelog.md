@@ -1,7 +1,7 @@
 # Sprint 1 变更与阻塞记录
 
 > 起始：2026-10-19
-> 最后更新：2026-10-20
+> 最后更新：2026-10-21
 > 状态：阶段 A ✅ / 阶段 B ✅（B 类 4 个 Case 待硬件专家校准）/ 阶段 C ✅
 > 依据：`Sprint1_融合版开发落地规划_v1.0.md`、`Sprint1前置条件确认清单.md`
 
@@ -184,6 +184,7 @@ psycopg.errors.ProgramLimitExceeded: column cannot have more than 2000 dimension
 | `ingest_single_file` docstring 补契约 | 说明 `embeddings` 需提供 `provider_name` / `model` | 阶段 D 顺手补 |
 | `test_embedding` 与项目维度解耦 | 该测试测智谱 API 原生 2048 维，与项目 1024 维不冲突，保持现状 | 不处理 |
 | `halfvec` 2048 维支持 | 若将来需要保留 2048 维精度 | 后续 Sprint |
+| 本地化 MiniLM（384 维）接入 | 骨架已建，未注册、未迁移 | 见 `docs/sprint1/onprem_minilm_embedding_integration.md` |
 
 ### C.5 验收证据
 
@@ -225,3 +226,4 @@ psycopg.errors.ProgramLimitExceeded: column cannot have more than 2000 dimension
 | 2026-10-20 | 切换脚本去本地 `BACKEND_DIM` | 单一事实来源 |
 | 2026-10-20 | 测试 2 条修正 | `fake` 显式传参 + `SpyEmbedding` 补属性 |
 | 2026-10-20 | 合并阶段 B / C 记录为单文件 | 原 `sprint1_blockers.md` + `stage_c_changelog.md` 合并 |
+| 2026-10-21 | 新增本地化 MiniLM 接入指南 | 见 `docs/sprint1/onprem_minilm_embedding_integration.md` |
