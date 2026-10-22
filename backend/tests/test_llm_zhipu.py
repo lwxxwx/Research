@@ -413,23 +413,73 @@ def test_embedding_factory_unknown_raises():
         get_embedding_client("not-a-backend")
 
 
-def test_dimension_guard_mismatch_raises():
-    """维度守卫：期望维度与 DB 不一致时 raise（需要 DB 可用）。"""
+# ============================================================
+# 维度守卫严格化（Sprint 1 阶段 D 第 5 步）
+# ------------------------------------------------------------
+# 原测试只验证"一致时通过"，不一致时 skip，未断言"不一致时确实抛预期错误"。
+# 严格化后拆成 2 条：
+#   1. test_dimension_guard_passes_when_match      一致时通过
+#   2. test_dimension_guard_raises_on_mismatch     用 monkeypatch 制造不一致，断言抛错
+# ============================================================
+def test_dimension_guard_passes_when_match():
+    """
+    维度守卫：当前后端期望维度与 DB 实际维度一致时，不抛异常。
+
+    DB 不可用时 skip（CI 无 DB 场景），不视为失败。
+    """
     from app.rag.embedding_factory import assert_backend_matches_db
-    from app.core.config import settings
     from app.persistence.db import get_db_session
 
     try:
         with get_db_session() as db:
             assert_backend_matches_db(db)
+    except RuntimeError as exc:
+        # 维度不一致 → 这是环境问题，不是本测试要验证的场景，skip
+        if "维度不匹配" in str(exc):
+            pytest.skip(f"当前维度与后端不一致，跳过一致场景测试：{exc}")
+        raise
     except Exception as exc:
-        msg = str(exc)
-        if "维度不匹配" in msg or "switch_embedding_backend" in msg:
-            pytest.skip(f"当前维度与后端不一致（预期行为）：{msg}")
-        # DB 不可用等其他异常，也 skip 掉，避免 CI 因 DB 未起而失败
-        pytest.skip(f"跳过维度守卫测试：{type(exc).__name__}: {exc}")
-    # 一致时通过
+        pytest.skip(f"DB 不可用，跳过：{type(exc).__name__}: {exc}")
+
+    # 一致时无异常，测试通过
     assert True
+
+
+def test_dimension_guard_raises_on_mismatch(monkeypatch):
+    """
+    维度守卫：期望维度与 DB 实际维度不一致时，抛 RuntimeError 且消息含切换脚本提示。
+
+    用 monkeypatch 把当前后端的 BACKEND_DIM 改成错误值（+1），
+    制造"期望维度 != DB 实际维度"的场景，断言：
+      1. 抛 RuntimeError
+      2. 消息含 "维度不匹配"
+      3. 消息含 "switch_embedding_backend"（指向修复方式）
+
+    不依赖 DB 实际维度，不依赖环境变量，CI 可稳定跑。
+    """
+    from app.core.config import settings
+    from app.persistence.db import get_db_session
+    from app.rag import embedding_factory as ef
+
+    # 取当前后端名与真实期望维度
+    backend = (settings.rag_embedding_backend or "fake").lower().strip()
+    real_dim = ef.BACKEND_DIM.get(backend)
+    if real_dim is None:
+        pytest.skip(f"当前后端 {backend} 不在 BACKEND_DIM 中，跳过")
+
+    # 制造不一致：把当前后端期望维度 +1
+    monkeypatch.setitem(ef.BACKEND_DIM, backend, real_dim + 1)
+
+    with get_db_session() as db:
+        with pytest.raises(RuntimeError) as exc_info:
+            ef.assert_backend_matches_db(db)
+
+    msg = str(exc_info.value)
+    assert "维度不匹配" in msg, f"消息应含 '维度不匹配'，实际: {msg}"
+    assert "switch_embedding_backend" in msg, (
+        f"消息应含 'switch_embedding_backend'（指向修复方式），实际: {msg}"
+    )
+    assert backend in msg, f"消息应含后端名 {backend}，实际: {msg}"
 
 def test_embedding_factory_minilm_returns_instance():
     """
@@ -452,7 +502,6 @@ def test_embedding_factory_minilm_returns_instance():
 
     assert isinstance(client, MiniLMEmbedding)
     assert client.dimension == BACKEND_DIM["minilm"] == 384
-
 
 # ============================================================
 # 七、手动运行入口（pytest 不执行此块）
