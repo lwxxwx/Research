@@ -187,10 +187,17 @@ def test_e2e_case001_mock_with_defects(mock_llm_with_defects):
     )
     report = final_state["review_report"]
     assert len(report.defects) == 1
-    # ===== [S1-D 修正] defect_id 动态生成，从 report 里取，不写死 =====
+    # --- 原代码（保留，已注释） ---
+    # expected_defect_id = report.defects[0].defect_id
+    # assert expected_defect_id.startswith("DEF-MOCK-E2E-")
+    # --- 原代码（保留，已注释） ---
+    # ===== [S1-E 修正] defect_id 落库时加 task_id 前缀，
+    # 格式 {task_id}-{原 defect_id} =====
     expected_defect_id = report.defects[0].defect_id
-    assert expected_defect_id.startswith("DEF-MOCK-E2E-")
-    # ===== [S1-D 修正 END] =====
+    assert expected_defect_id.startswith(f"{task_id}-DEF-MOCK-E2E-"), (
+        f"defect_id 应为 {{task_id}}-DEF-MOCK-E2E-...，实际 {expected_defect_id}"
+    )
+    # ===== [S1-E 修正 END] =====
 
     # 落库验证
     task_info = get_task(task_id)
