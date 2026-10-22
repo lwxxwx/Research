@@ -215,6 +215,151 @@ psycopg.errors.ProgramLimitExceeded: column cannot have more than 2000 dimension
 
 ---
 
+## 阶段 D · LangGraph 6 节点工作流（2026-10-22）
+
+> 状态：✅ 已完成
+> 依据：§5.3 / §14
+> 测试结果：`tests/test_review_graph_e2e.py` 6 passed；`tests/test_llm_zhipu.py` 29 passed / 1 skipped；全量回归 510 passed / 1 skipped
+
+### D.1 交付清单
+
+| # | 文件 | 说明 |
+|---|---|---|
+| 1 | `app/workflows/__init__.py` | 工作流包入口 |
+| 2 | `app/workflows/state.py` | `ReviewGraphState` + `make_initial_state()`；任务状态枚举 |
+| 3 | `app/workflows/review_graph.py` | 6 节点 DAG + `build_review_graph()` + `run_review_graph()` |
+| 4 | `app/services/task_service.py` | `create_task` / `get_task` / `list_tasks` / `get_task_defects` |
+| 5 | `tests/test_review_graph_e2e.py` | 双轨 E2E（4 mock + 2 zhipu） |
+| 6 | `tests/test_llm_zhipu.py`（改） | `test_dimension_guard_mismatch_raises` 严格化为 2 条 |
+
+### D.2 6 节点 DAG
+
+```text
+load_ir → rule_check → rag_retrieve → expert_analysis → report_generate → feedback_save
+```
+
+| 节点 | 职责 | 失败处理 |
+|---|---|---|
+| `load_ir` | 从 `data/cases/<case_id>/schematic_ir.json` 加载 + 严格校验 | 写 `errors`，后续节点检测前置缺失时跳过 |
+| `rule_check` | `execute_defect_rules` 执行 10 条规则 | 写 `errors` |
+| `rag_retrieve` | `Retriever` 按 `rule_hits` + `rule_ids` 检索 | 写 `errors`，`rag_context=[]`，LLM 走"无 RAG 依据"降级 |
+| `expert_analysis` | `render_prompt` + `get_provider().complete()` | 写 `errors`，`llm_raw_output` 缺失 |
+| `report_generate` | `parse_report` 三级校验 + 三态判定 | 写 `errors` + `task_status=failed` |
+| `feedback_save` | 落库 `review_result` + `review_defect` | 写 `errors` + `task_status=failed` |
+
+### D.3 关键技术决策
+
+#### D.3.1 状态分离：任务状态 vs 缺陷质量状态
+
+- **任务状态**：`pending` / `running` / `done` / `failed`，表达"评审任务本身是否完成"
+- **缺陷质量状态**：`AI_CONFIRMED` / `NEED_EXPERT_REVIEW` / `LOW_CONFIDENCE`，表达"单条缺陷的可信度"
+- 两者严格分离（Sprint 1 §23.1），`task_status` 不因缺陷全被降级而变 `failed`
+
+#### D.3.2 `review_result.task_id` 由 Graph 决定，不由 LLM 回显
+
+- `review_result.task_id` 的语义是"任务批次标识"，应由 `task_service` 生成
+- LLM 输出里的 `task_id` 只是 Prompt 渲染时注入的回显值，模型可能漏写/写错/写死占位符（Mock 场景即如此）
+- `_persist_review_report` 显式传 `state["task_id"]`，不依赖 `report.task_id`
+
+#### D.3.3 `feedback_save` 节点只落库报告，不实现反馈提交
+
+- 命名保留 `feedback_save` 是为了与 Sprint 1 §5.3 的 6 节点清单对齐
+- 实际职责是"报告落库"（`review_result` + `review_defect`）
+- 反馈提交入口在阶段 E 由 API 层调用 `feedback_service`
+
+#### D.3.4 异常不中断 Graph
+
+- 6 个节点全部 `try/except` + `_append_error`
+- `run_review_graph` 最外层再兜底一次
+- 最终 `review_report` 带 `errors` 落库，API 可返回给前端
+
+#### D.3.5 不建 `tasks` 表
+
+- Sprint 0 已冻结用 `review_result` 承担"一次评审"
+- `task_id` 对应 `review_result.task_id`
+- `get_task` 按 `task_id` 查 `review_result`
+
+#### D.3.6 双轨 E2E
+
+- **Mock 轨**（4 条）：`monkeypatch` 替换 `review_graph.get_provider`，不触网，CI 稳定
+- **真实轨**（2 条）：调用智谱 API，无 `ZHIPUAI_API_KEY` 时 skip
+
+### D.4 踩坑与修正
+
+#### 坑 1：LangGraph `StateGraph` 与 `TYPE_CHECKING` 不兼容
+
+**现象**：`StateGraph(ReviewGraphState)` 构造时报：
+
+```text
+NameError: name 'SchematicIRDocument' is not defined
+```
+
+**根因**：`state.py` 用 `TYPE_CHECKING` 保护重依赖类型的 import，但 LangGraph 的 `_get_channels()` 会对 TypedDict 做 `get_type_hints()` 求值，`TYPE_CHECKING` 在运行时不生效。
+
+**修正**：去掉 `TYPE_CHECKING`，改为运行时真实 import。阶段 C 的五个类型模块均无重依赖（`zhipuai` 等在 `provider.py` 内延迟 import），运行时 import 安全。
+
+#### 坑 2：`review_output_json` 是 NOT NULL，落库漏传
+
+**现象**：
+
+```text
+psycopg.errors.NotNullViolation: null value in column "review_output_json"
+```
+
+**根因**：`_persist_review_report` 构造 `ReviewResult` 时漏传 `review_output_json`。
+
+**修正**：补 `review_output_json=report.model_dump(mode="json")`。
+
+#### 坑 3：`review_result.task_id` 被 LLM 回显覆盖
+
+**现象**：Mock 场景下 `get_task(task_id)` 查不到，因为落库的 `task_id` 是 Mock payload 的 `"PLACEHOLDER"`。
+
+**根因**：`_persist_review_report` 里 `rr.task_id = report.task_id`，而 `report.task_id` 来自 LLM 输出。
+
+**修正**：`_persist_review_report` 签名加 `task_id` 参数，`node_feedback_save` 传 `state["task_id"]`。
+
+#### 坑 4：`task_status` 被误判为 `done`
+
+**现象**：LLM 抛异常时，`node_report_generate` 构造空报告，`node_feedback_save` 落库成功，`task_status` 被置 `done`。
+
+**根因**：`node_report_generate` 在 `llm_raw_output` 缺失时没置 `failed`；`node_feedback_save` 无条件置 `done`。
+
+**修正**：
+- `node_report_generate` 两个失败分支（`llm_raw_output` 缺失、`parse_report` 异常）均置 `task_status=failed`
+- `node_feedback_save` 不覆盖上游的 `failed`
+
+#### 坑 5：测试 `defect_id` 全局唯一导致幂等跳过
+
+**现象**：`get_task_defects` 返回空列表，日志显示 `review_defect 已存在，跳过`。
+
+**根因**：`defect_id` 在 DB 层 `unique=True`，Mock payload 写死 `DEF-MOCK-E2E-001`，第二次跑测试时幂等跳过。
+
+**修正**：Mock payload 的 `defect_id` 改为动态生成 `DEF-MOCK-E2E-{uuid}`，测试断言从 `report` 取。
+
+### D.5 遗留项
+
+| 项 | 说明 | 归属 |
+|---|---|---|
+| `rules_passed` 精确化 | 当前 `_build_rules_passed_text` 用固定文案占位，未暴露"执行但未命中"的规则清单 | 后续 Sprint（需规则引擎扩展） |
+| E2E 测试数据残留 | `test_e2e_case001_mock_with_defects` 会落库 `TEST-` 前缀数据，未自动清理 | 阶段 G 写 API 测试时统一加清理 fixture |
+| 任务列表按质量筛选 | `list_tasks` 当前返回 `review_status`，不支持"只看全降级任务" | 阶段 G 的 API 层加聚合字段 |
+| `test_demo.py` 兼容性 | Sprint 0 的 Mock E2E，依赖旧路径，阶段 D 起忽略 | 阶段 J 文档收尾时清理 |
+
+### D.6 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `tests/test_review_graph_e2e.py` | 6 passed（4 mock + 2 zhipu） |
+| `tests/test_llm_zhipu.py` | 29 passed / 1 skipped |
+| 全量回归（`pytest tests/ --ignore=tests/test_demo.py`） | 510 passed / 1 skipped |
+| case001 E2E（Mock + 真实） | 通 |
+| case_b01 E2E（Mock + 真实） | 通 |
+| 异常隔离（LLM 抛异常） | 通，`task_status=failed` |
+| 报告落库 | 通，`review_result.review_output_json` 非空 |
+| `review_defect` 落库 | 通，`defect_id` 唯一 |
+
+---
+
 ## 变更记录
 
 | 日期 | 变更 | 说明 |
