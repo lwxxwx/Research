@@ -1,8 +1,8 @@
 # Sprint 1 变更与阻塞记录
 
 > 起始：2026-10-19
-> 最后更新：2026-10-21
-> 状态：阶段 A ✅ / 阶段 B ✅（B 类 4 个 Case 待硬件专家校准）/ 阶段 C ✅
+> 最后更新：2026-10-22（阶段 E 完成）
+> 状态：阶段 A ✅ / 阶段 B ✅（B 类 4 个 Case 待硬件专家校准）/ 阶段 C ✅ / 阶段 D ✅ / 阶段 E ✅
 > 依据：`Sprint1_融合版开发落地规划_v1.0.md`、`Sprint1前置条件确认清单.md`
 
 ---
@@ -360,6 +360,123 @@ psycopg.errors.NotNullViolation: null value in column "review_output_json"
 
 ---
 
+## 阶段 E · 反馈与规则演进（2026-10-22）
+
+> 状态：✅ 已完成
+> 依据：§10 / §14
+> 测试结果：`tests/test_feedback_e2e.py` 4 passed；`tests/test_demo.py` 双轨 passed；全量回归待跑
+
+### E.1 交付清单
+
+| # | 文件 | 说明 |
+|---|---|---|
+| 1 | `app/services/task_service.py`（改） | 新增 `submit_task_feedback`：按 task_id + defect_id 提交反馈，内部翻译为外键 |
+| 2 | `app/rules/engine.py`（改） | 新增 `execute_defect_rules_with_extra`：磁盘规则 + 内存候选一起跑 |
+| 3 | `app/services/rule_evolution_service.py`（改） | 新增 `run_benchmark_for_candidate`：候选规则临时 Benchmark 骨架 |
+| 4 | `app/services/rule_evolution_service.py`（改） | 新增 3 个辅助函数 `_match_tp_fp_fn` / `_with_pr` / `_safe_delta` |
+| 5 | `tests/test_feedback_e2e.py` | 新建：六类反馈 E2E（Mock 3 + Zhipu 1） |
+| 6 | `tests/test_demo.py`（改） | 双轨：Mock 轨（CI）/ 真实轨（Demo），走真实 6 节点 Graph |
+| 7 | `scripts/demo_sprint1.ps1` | 新建：Sprint 1 Demo 脚本（六步，真实智谱） |
+| 8 | `app/workflows/review_graph.py`（改） | `_persist_review_report` 加 `defect_id` 前缀，避免 DB unique 冲突 |
+
+### E.2 关键技术决策
+
+#### E.2.1 `submit_task_feedback` 用 task_id + defect_id 而非外键
+
+- 调用方（API / Demo / CLI）只需业务标识，不需要查 DB 拿 `review_result_id` / `review_defect_id`
+- 内部翻译为外键，再委托 `feedback_service.submit_feedback`
+- 六类反馈走同一入口，不按类型分支
+
+#### E.2.2 候选 Benchmark 只做骨架
+
+- 内存加载候选 YAML → 对比基线 → 返回指标变化
+- 不落库、不写文件、不生成 CSV
+- 候选规则只在内存中追加，不写 `data/rules/`（Sprint 1 §10.3）
+- `per_case` 字段保留，便于定位"候选在哪个 Case 引入 FP"
+
+#### E.2.3 `defect_id` 落库加 task_id 前缀
+
+- `review_defect.defect_id` 在 DB 层是 `unique=True`（全局唯一）
+- 但缺陷 ID 的语义应是"本次评审内唯一"，不是"全局唯一"
+- 真实 LLM 每次返回 `DEF-1` / `DEF-2`，直接落库第二次会因 unique 冲突被幂等跳过
+- 修法：落库时改写为 `{task_id}-{defect_id}`，全局唯一且可追溯
+- `review_output_json` 与 `review_defect` 的 `defect_id` 一致
+
+#### E.2.4 `test_demo.py` 双轨
+
+- 默认 Mock 轨（`DEMO_REAL_LLM` 未设或 =0）：patch `get_provider`，不触网，CI 稳定
+- 真实轨（`DEMO_REAL_LLM=1`）：不 patch，走 `.env` 的 `LLM_PROVIDER=zhipu`
+- 真实轨失败降级：打印 `⚠️` + 展示已有产物 + 不 raise，Demo 不中断
+- 五产物：`report.json` / `feedback_submit_log.json` / `rule_candidate_proposed.yaml` / `knowledge_gap_backlog.json` / `candidate_benchmark.json`
+
+#### E.2.5 `demo_sprint1.ps1` 直接读宿主机产物
+
+- `/out` 是 bind mount（`docker-compose.dev.yml: ../../out:/out`）
+- 容器内写文件，宿主机 `out/demo_sprint1/` 实时同步
+- 不用 `docker compose cp`（语义复杂、Windows 下行为不稳定）
+
+### E.3 踩坑与修正
+
+#### 坑 1：`defect_id` 全局唯一导致幂等跳过
+
+**现象**：真实轨 `test_feedback_e2e_zhipu` 失败，日志显示 `review_defect 已存在，跳过: DEF-1`。
+
+**根因**：`review_defect.defect_id` 是 `unique=True`，智谱每次返回 `DEF-1`，第二次落库被幂等跳过。
+
+**修正**：落库前改写为 `{task_id}-{defect_id}`，全局唯一且可追溯。
+
+#### 坑 2：`test_demo.py` 的 `prepare_out_dir` fixture 未 `yield` 值
+
+**现象**：`TypeError: unsupported operand type(s) for /: 'NoneType' and 'str'`。
+
+**根因**：fixture `yield` 无值，`prepare_out_dir` 是 `None`。
+
+**修正**：`yield OUT_DIR`。
+
+#### 坑 3：`report.json` 的 `task_id` 是 `"PLACEHOLDER"`
+
+**现象**：`assert report_data["task_id"] == task_id` 失败，实际是 `"PLACEHOLDER"`。
+
+**根因**：Mock payload 里 `task_id` 写死 `"PLACEHOLDER"`，`report.task_id` 来自 LLM 回显。
+
+**修正**：断言改为“非空”，因为权威值是 `review_result.task_id`（落库时由 Graph 决定），不是 `report.task_id`。
+
+#### 坑 4：`demo_sprint1.ps1` 的 `docker compose cp` 拷回空
+
+**现象**：`[Step 5] 展示产物... 产物目录为空`。
+
+**根因**：`docker compose cp` 语义（拷目录到目标目录下，多一层）在 Windows 下行为不稳定。
+
+**修正**：`/out` 是 bind mount，直接读宿主机 `out/demo_sprint1/`，不用 cp。
+
+#### 坑 5：`demo_sprint1.ps1` 的 `-e DEMO_REAL_LLM` 未传
+
+**现象**：Step 4 模式显示“真实轨”，但容器内仍是 Mock。
+
+**根因**：`docker compose exec` 不自动传宿主机环境变量。
+
+**修正**：显式 `-e DEMO_REAL_LLM=1`。
+
+### E.4 遗留项
+
+| 项 | 说明 | 归属 |
+|---|---|---|
+| `_cleanup_test_data.py` 不清理 `rule_candidates` | 候选累积到 15+ 条 | 阶段 J 文档收尾时清理 |
+| 真实轨失败降级 | 当前不 raise，CI 若误设 `DEMO_REAL_LLM=1` 且 LLM 挂了会“假通过” | 阶段 F 加 `DEMO_STRICT=1` 开关 |
+| 候选 Benchmark CSV 输出 | 当前只返回 dict，不生成 CSV | 阶段 F 完整实现 |
+
+### E.5 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `tests/test_feedback_e2e.py` | 4 passed（3 mock + 1 zhipu） |
+| `tests/test_demo.py`（Mock 轨） | 1 passed |
+| `tests/test_demo.py`（真实轨） | 1 passed（39s） |
+| `demo_sprint1.ps1` 六步 | 全部正常 |
+| 五产物 | `report.json` / `feedback_submit_log.json` / `rule_candidate_proposed.yaml` / `knowledge_gap_backlog.json` / `candidate_benchmark.json` |
+| 六类反馈 | 全部可提交，`false_negative` / `new_rule_candidate` 生成候选，其余不生成 |
+| 候选 Benchmark | 返回 `baseline` / `candidate` / `delta` / `per_case` |
+
 ## 变更记录
 
 | 日期 | 变更 | 说明 |
@@ -372,3 +489,4 @@ psycopg.errors.NotNullViolation: null value in column "review_output_json"
 | 2026-10-20 | 测试 2 条修正 | `fake` 显式传参 + `SpyEmbedding` 补属性 |
 | 2026-10-20 | 合并阶段 B / C 记录为单文件 | 原 `sprint1_blockers.md` + `stage_c_changelog.md` 合并 |
 | 2026-10-21 | 新增本地化 MiniLM 接入指南 | 见 `docs/sprint1/onprem_minilm_embedding_integration.md` |
+| 2026-10-22 | 阶段 E 完成（反馈与规则演进） | 见 E 章；E2E 4 passed；Demo 双轨 passed |
