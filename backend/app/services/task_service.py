@@ -29,6 +29,15 @@ from typing import Any
 
 from app.persistence.db import get_db_session
 from app.persistence.models import ReviewDefect, ReviewResult
+from app.schemas.feedback import (
+    FeedbackCreate,   # ← 新增
+    FeedbackOut,
+    FeedbackType,
+    RuleCandidate,
+    SuggestionDiff,
+)
+from app.services.feedback_service import FeedbackNotFoundError
+from app.services.feedback_service import FeedbackService   # ← 新增
 from app.workflows.review_graph import run_review_graph
 from app.workflows.state import (
     TASK_STATUS_DONE,
@@ -283,10 +292,105 @@ def get_task_defects(task_id: str) -> list[dict[str, Any]]:
             for d in defects
         ]
 
+# ============================================================
+# submit_task_feedback：反馈提交入口（Sprint 1 阶段 E1）
+# ------------------------------------------------------------
+# 设计理由：
+#   1. 调用方（API / Demo / CLI）只需知道 task_id + defect_id，
+#      不需要自己查 DB 拿 review_result_id / review_defect_id 外键。
+#      这是"对外入口"的语义，符合 Sprint 1 §10.1 的 FeedbackService 边界。
+#   2. 内部把 task_id + defect_id 翻译成 review_result_id / review_defect_id，
+#      再委托 feedback_service.submit_feedback 落库 + 触发规则演进。
+#   3. 六类反馈全部走同一入口，不按类型分支（分支在 feedback_service 内部）。
+# ============================================================
+def submit_task_feedback(
+    task_id: str,
+    defect_id: str,
+    feedback_type: FeedbackType,
+    *,
+    expert_suggestion: str | None = None,
+    suggestion_adopted: str | None = None,
+    suggestion_diff: list[SuggestionDiff] | None = None,
+    rule_candidate: RuleCandidate | None = None,
+    created_by: int | None = None,
+) -> FeedbackOut:
+    """
+    按 task_id + defect_id 提交专家反馈。
+
+    参数：
+      task_id           : 评审任务 ID（review_result.task_id）
+      defect_id         : 缺陷业务 ID（review_defect.defect_id）
+      feedback_type     : 六类反馈类型
+      expert_suggestion : 专家建议（correct_defect / false_positive / false_negative /
+                          suggestion_update / knowledge_gap 时用）
+      suggestion_adopted: 是否采纳建议（suggestion_update 时用，yes/partial/no）
+      suggestion_diff   : 新旧建议对比（suggestion_update 时用）
+      rule_candidate    : 规则候选草稿（false_negative / new_rule_candidate 时用）
+      created_by        : 反馈人 users.id（可选）
+
+    返回：
+      FeedbackOut（含 JOIN 回填的 task_id / defect_id）
+
+    异常：
+      - task_id 不存在 → FeedbackNotFoundError（继承 ValueError）
+      - defect_id 不存在或不属于该 task_id → FeedbackNotFoundError
+    """
+    #原代码注释#
+    #from app.persistence.models import ReviewDefect, ReviewResult
+    #from app.schemas.feedback import FeedbackCreate
+    #from app.services.feedback_service import FeedbackService
+
+    with get_db_session() as db:
+        # 1. 按 task_id 查 review_result
+        rr = (
+            db.query(ReviewResult)
+            .filter(ReviewResult.task_id == task_id)
+            .order_by(ReviewResult.id.desc())
+            .first()
+        )
+        if rr is None:
+            raise FeedbackNotFoundError(
+                f"review_result task_id={task_id} 不存在"
+            )
+
+        # 2. 按 defect_id + review_result_id 查 review_defect
+        #    注意：defect_id 是全局唯一（DB unique 约束），但为了防御
+        #    "同一 defect_id 挂在多个 review_result 下"的异常数据，
+        #    额外用 review_result_id 限定，确保反馈挂在正确的任务下。
+        rd = (
+            db.query(ReviewDefect)
+            .filter(
+                ReviewDefect.defect_id == defect_id,
+                ReviewDefect.review_result_id == rr.id,
+            )
+            .first()
+        )
+        if rd is None:
+            raise FeedbackNotFoundError(
+                f"review_defect defect_id={defect_id} "
+                f"(review_result_id={rr.id}) 不存在"
+            )
+
+        # 3. 构造 FeedbackCreate，补全外键
+        fb_in = FeedbackCreate(
+            review_result_id=rr.id,
+            review_defect_id=rd.id,
+            feedback_type=feedback_type,
+            expert_suggestion=expert_suggestion,
+            suggestion_adopted=suggestion_adopted,
+            suggestion_diff=suggestion_diff,
+            rule_candidate=rule_candidate,
+            created_by=created_by,
+        )
+
+        # 4. 委托 feedback_service
+        svc = FeedbackService()
+        return svc.submit_feedback(db, fb_in)
 
 __all__ = [
     "create_task",
     "get_task",
     "list_tasks",
     "get_task_defects",
+    "submit_task_feedback",
 ]

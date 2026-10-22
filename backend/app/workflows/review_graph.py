@@ -521,6 +521,22 @@ def _persist_review_report(report, case_id: str, task_id: str) -> None:
     """
     from app.persistence.models import ReviewDefect, ReviewResult, SchematicCase
 
+    # ===== [S1-E 修正] 落库前统一改写 defect_id 为 {task_id}-{defect_id} =====
+    # 原因：
+    #   1. review_defect.defect_id 在 DB 层是 unique=True（全局唯一），
+    #      但缺陷 ID 的语义应是"本次评审内唯一"，不是"全局唯一"。
+    #      真实 LLM 每次返回 DEF-1 / DEF-2，若直接落库，第二次评审会因
+    #      unique 冲突被幂等逻辑跳过，导致 review_result 下无 review_defect。
+    #   2. 加 task_id 前缀后全局唯一，同时保留原 ID 可追溯：
+    #      "DEF-1" → "RUN-20261022-120000-ABCD-DEF-1"
+    #   3. 改写放在落库前，保证 review_output_json 与 review_defect 的
+    #      defect_id 一致，不出现两套 ID。
+    #   4. 前缀格式 {task_id}-{defect_id}：task_id 自身格式固定为
+    #      RUN-YYYYMMDD-HHMMSS-XXXX，后接 "-DEF-N" 仍可解析。
+    for d in report.defects:
+        d.defect_id = f"{task_id}-{d.defect_id}"
+    # ===== [S1-E 修正 END] =====
+
     # 主 review_status 取最严格态
     status_priority = {"LOW_CONFIDENCE": 3, "NEED_EXPERT_REVIEW": 2, "AI_CONFIRMED": 1}
     main_status = "AI_CONFIRMED"
@@ -570,7 +586,18 @@ def _persist_review_report(report, case_id: str, task_id: str) -> None:
         db.flush()
 
         for d in report.defects:
-            # 幂等：defect_id 唯一，冲突则跳过
+            # ===== [S1-E 修正] defect_id 已在落库前改写为 {task_id}-{defect_id}，
+            # 此处 d.defect_id 已是全局唯一值。幂等检查针对同一 task_id 重跑场景。
+            # --- 原代码（保留，已注释） ---
+            # exists = (
+            #     db.query(ReviewDefect)
+            #     .filter(ReviewDefect.defect_id == d.defect_id)
+            #     .first()
+            # )
+            # if exists is not None:
+            #     logger.warning("review_defect 已存在，跳过: %s", d.defect_id)
+            #     continue
+            # --- 原代码（保留，已注释） ---
             exists = (
                 db.query(ReviewDefect)
                 .filter(ReviewDefect.defect_id == d.defect_id)
@@ -579,10 +606,16 @@ def _persist_review_report(report, case_id: str, task_id: str) -> None:
             if exists is not None:
                 logger.warning("review_defect 已存在，跳过: %s", d.defect_id)
                 continue
+            # ===== [S1-E 修正 END] =====
 
             rd = ReviewDefect(
                 review_result_id=rr.id,
+                # --- 原代码（保留，已注释） ---
+                # defect_id=d.defect_id,
+                # --- 原代码（保留，已注释） ---
+                # ===== [S1-E 修正] d.defect_id 已是改写后的全局唯一值 =====
                 defect_id=d.defect_id,
+                # ===== [S1-E 修正 END] =====
                 category=d.category,
                 location=d.location,
                 component=d.component,

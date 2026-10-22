@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import uuid
+import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -104,6 +105,10 @@ class RuleEvolutionService:
                       synchronize_session="fetch")
           3) db.delete(rc)
           4) commit 由参数控制（与 submit_feedback 保持一致）
+
+    v1.4 新增（Sprint 1 阶段 E4）：
+      - run_benchmark_for_candidate：候选规则临时 Benchmark 骨架
+        （内存加载，不写磁盘，不落库；完整实现留阶段 F）
     """
     def generate_candidate_from_feedback(
         self,
@@ -230,6 +235,197 @@ class RuleEvolutionService:
         if p.exists():
             raise FileExistsError(f"File {out_path} already exists, refuse overwrite.")
         p.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    # ============================================================
+    # run_benchmark_for_candidate：候选规则临时 Benchmark（Sprint 1 阶段 E4）
+    # ------------------------------------------------------------
+    # 设计理由：
+    #   1. 只做骨架：内存加载候选 YAML → 对比基线 → 返回指标变化。
+    #      不落库、不写文件、不生成 CSV（完整实现留阶段 F）。
+    #   2. 候选规则只在内存中追加，不写入 data/rules/，
+    #      不污染正式规则目录（Sprint 1 §10.3）。
+    #   3. per_case 字段保留，便于定位"候选规则在哪个 Case 上引入 FP"。
+    #   4. precision / recall 分母为 0 时返回 None，与 benchmark_service 一致，
+    #      避免 0.0 被误读为"精度为零"。
+    #   5. 风险字段映射：RuleResult.severity 对应 expected_review.json 的 risk，
+    #      沿用 benchmark_service.match_defect 的约定（Sprint 0 冻结）。
+    # ============================================================
+    def run_benchmark_for_candidate(
+        self,
+        candidate_yaml: str,
+        case_ids: List[str],
+        cases_root: str | Path = "/data/cases",
+        rules_root: str | Path = "/data/rules",
+    ) -> Dict[str, Any]:
+        """
+        对候选规则做临时 Benchmark：对比"磁盘基线"与"磁盘 + 候选"的指标变化。
+
+        参数：
+          candidate_yaml : 候选规则 YAML 字符串（来自 proposed_yaml）
+          case_ids       : 要跑的 Case 列表（如 ["case001", "case_b01_..."]）
+          cases_root     : Case 根目录（默认 /data/cases）
+          rules_root     : 规则根目录（默认 /data/rules）
+
+        返回：
+          {
+            "candidate_rule_id": str,
+            "case_ids": list[str],
+            "baseline":  {"tp": int, "fp": int, "fn": int,
+                          "precision": float | None, "recall": float | None},
+            "candidate": {"tp": int, "fp": int, "fn": int,
+                          "precision": float | None, "recall": float | None},
+            "delta":     {"tp": int, "fp": int, "fn": int,
+                          "precision": float | None, "recall": float | None},
+            "per_case": [
+                {"case_id": str,
+                 "baseline":  {"tp": int, "fp": int, "fn": int},
+                 "candidate": {"tp": int, "fp": int, "fn": int}},
+                ...
+            ],
+          }
+
+        异常：
+          - candidate_yaml 解析失败 → ValueError
+          - case_id 目录不存在 → ValueError
+        """
+        from app.ir.serializer import load_ir
+        from app.rules.engine import (
+            RuleDefinition,
+            execute_defect_rules,
+            execute_defect_rules_with_extra,
+        )
+        from app.services.benchmark_service import match_defect
+
+        # 1. 解析候选规则
+        try:
+            raw = yaml.safe_load(candidate_yaml)
+            candidate_rule = RuleDefinition(**raw)
+        except Exception as exc:
+            raise ValueError(
+                f"候选规则 YAML 解析失败: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        cases_root_p = Path(cases_root)
+        rules_root_p = Path(rules_root)
+
+        # 2. 逐 case 跑基线与候选
+        per_case: List[Dict[str, Any]] = []
+        total_base = {"tp": 0, "fp": 0, "fn": 0}
+        total_cand = {"tp": 0, "fp": 0, "fn": 0}
+
+        for case_id in case_ids:
+            case_dir = cases_root_p / case_id
+            ir_path = case_dir / "schematic_ir.json"
+            gt_path = case_dir / "expected_review.json"
+            if not ir_path.exists() or not gt_path.exists():
+                raise ValueError(
+                    f"Case {case_id} 缺少 schematic_ir.json 或 expected_review.json"
+                )
+
+            ir = load_ir(ir_path)
+            with open(gt_path, "r", encoding="utf-8") as f:
+                gt_json = json.load(f)
+            gt_defects = gt_json.get("defects", [])
+
+            # 基线：磁盘规则
+            base_hits = execute_defect_rules(ir, rules_root_p)
+            base_pred = [r.model_dump() for r in base_hits]
+            base_tp, base_fp, base_fn = _match_tp_fp_fn(
+                base_pred, gt_defects, match_defect
+            )
+
+            # 候选：磁盘 + 内存候选
+            cand_hits = execute_defect_rules_with_extra(
+                ir, rules_root_p, [candidate_rule]
+            )
+            cand_pred = [r.model_dump() for r in cand_hits]
+            cand_tp, cand_fp, cand_fn = _match_tp_fp_fn(
+                cand_pred, gt_defects, match_defect
+            )
+
+            per_case.append({
+                "case_id": case_id,
+                "baseline": {"tp": base_tp, "fp": base_fp, "fn": base_fn},
+                "candidate": {"tp": cand_tp, "fp": cand_fp, "fn": cand_fn},
+            })
+            total_base["tp"] += base_tp
+            total_base["fp"] += base_fp
+            total_base["fn"] += base_fn
+            total_cand["tp"] += cand_tp
+            total_cand["fp"] += cand_fp
+            total_cand["fn"] += cand_fn
+
+        # 3. 组装结果
+        baseline = _with_pr(total_base)
+        candidate = _with_pr(total_cand)
+        delta = {
+            "tp": candidate["tp"] - baseline["tp"],
+            "fp": candidate["fp"] - baseline["fp"],
+            "fn": candidate["fn"] - baseline["fn"],
+            "precision": _safe_delta(baseline["precision"], candidate["precision"]),
+            "recall": _safe_delta(baseline["recall"], candidate["recall"]),
+        }
+
+        return {
+            "candidate_rule_id": candidate_rule.rule_id,
+            "case_ids": list(case_ids),
+            "baseline": baseline,
+            "candidate": candidate,
+            "delta": delta,
+            "per_case": per_case,
+        }
+
+# ============================================================
+# 辅助函数：TP/FP/FN 匹配与 Precision/Recall 计算
+# ------------------------------------------------------------
+# 独立成函数，便于单测；逻辑与 benchmark_service.run_single_case 一致，
+# 但只算 TP/FP/FN，不算 EVC / 三态（候选 Benchmark 不需要）。
+# ============================================================
+def _match_tp_fp_fn(
+    pred_defects: List[Dict[str, Any]],
+    gt_defects: List[Dict[str, Any]],
+    match_fn,
+) -> tuple[int, int, int]:
+    """
+    贪心匹配 pred 与 gt，返回 (tp, fp, fn)。
+
+    贪心策略与 benchmark_service.run_single_case 一致：
+      - 外层遍历 GT，内层遍历未占用的 pred
+      - 一个 GT 命中一个 pred 后立即 break
+      - 未命中的 pred 计 FP，未命中的 GT 计 FN
+    """
+    tp_set_gt: set[int] = set()
+    tp_set_pred: set[int] = set()
+    for gt_idx, gt_d in enumerate(gt_defects):
+        for pred_idx, pred_d in enumerate(pred_defects):
+            if pred_idx in tp_set_pred:
+                continue
+            if match_fn(pred_d, gt_d):
+                tp_set_gt.add(gt_idx)
+                tp_set_pred.add(pred_idx)
+                break
+    tp = len(tp_set_gt)
+    fp = len(pred_defects) - len(tp_set_pred)
+    fn = len(gt_defects) - len(tp_set_gt)
+    return tp, fp, fn
+
+
+def _with_pr(counts: Dict[str, int]) -> Dict[str, Any]:
+    """
+    在 tp/fp/fn 基础上补 precision / recall。
+    分母为 0 时返回 None（与 benchmark_service 一致，避免 0.0 误读）。
+    """
+    tp, fp, fn = counts["tp"], counts["fp"], counts["fn"]
+    precision = tp / (tp + fp) if (tp + fp) > 0 else None
+    recall = tp / (tp + fn) if (tp + fn) > 0 else None
+    return {"tp": tp, "fp": fp, "fn": fn, "precision": precision, "recall": recall}
+
+
+def _safe_delta(base: float | None, cand: float | None) -> float | None:
+    """两值都非 None 时返回差值，否则返回 None。"""
+    if base is None or cand is None:
+        return None
+    return cand - base
 
 if __name__ == "__main__":
     # CLI入口，供demo脚本调用

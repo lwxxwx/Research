@@ -237,3 +237,59 @@ def execute_defect_rules(
     """
     all_hits = execute_all_rules(ir, rules_dir, rule_ids)
     return [r for r in all_hits if r.severity in {"medium", "high", "critical"}]
+
+# ============================================================
+# execute_defect_rules_with_extra：磁盘基线 + 内存候选（Sprint 1 阶段 E5）
+# ------------------------------------------------------------
+# 设计理由：
+#   1. execute_defect_rules 的 rule_ids 参数是"只跑这些规则"的过滤，
+#      无法表达"磁盘规则 + 额外内存规则一起跑"。
+#      候选 Benchmark（E4）需要这种能力，故新增独立函数。
+#   2. 不改 execute_defect_rules 的签名，避免影响
+#      benchmark_service 和阶段 D 的 node_rule_check。
+#   3. extra_rules 只在内存中追加，不写入 data/rules/，
+#      不污染正式规则目录（Sprint 1 §10.3 明确要求）。
+# ============================================================
+def execute_defect_rules_with_extra(
+    ir: SchematicIRDocument,
+    rules_dir: Path,
+    extra_rules: List[RuleDefinition],
+    rule_ids: Optional[List[str]] = None,
+) -> List[RuleResult]:
+    """
+    执行"磁盘规则 + 额外内存规则"，只返回 defect 级命中。
+
+    参数：
+      ir          : 原理图 IR
+      rules_dir   : 磁盘规则目录（data/rules/）
+      extra_rules : 额外内存规则（如候选规则），不写入磁盘
+      rule_ids    : 可选，只跑这些 rule_id（磁盘 + 内存合并后过滤）
+
+    返回：
+      List[RuleResult]，severity ∈ {medium, high, critical}
+
+    与 execute_defect_rules 的区别：
+      - execute_defect_rules：只跑磁盘规则
+      - execute_defect_rules_with_extra：磁盘规则 + 内存规则一起跑
+
+    用途：
+      - 阶段 E4 候选规则 Benchmark（基线 vs 候选对比）
+      - 阶段 F 候选规则正式评估（如需要）
+    """
+    # 1. 加载磁盘规则
+    rules = load_rule_definitions(rules_dir)
+
+    # 2. 追加内存规则（候选规则）
+    rules.extend(extra_rules)
+
+    # 3. rule_ids 过滤（磁盘 + 内存合并后）
+    if rule_ids:
+        rules = [r for r in rules if r.rule_id in rule_ids]
+
+    # 4. 逐条执行
+    all_hits: List[RuleResult] = []
+    for r in rules:
+        all_hits.extend(run_single_rule(r, ir))
+
+    # 5. 只取 defect 级
+    return [r for r in all_hits if r.severity in {"medium", "high", "critical"}]
