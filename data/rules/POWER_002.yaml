@@ -1,7 +1,7 @@
 rule_id: POWER_002
 rule_name: RC复位电路拓扑检查
 version: "1.1"                                    # ← 版本号从 1.0 升到 1.1
-category: timing
+category: power
 severity: medium
 enabled: true
 

@@ -481,12 +481,13 @@ def node_feedback_save(state: ReviewGraphState) -> ReviewGraphState:
         return state
 
     try:
-        # ===== [S1-D 修正] 显式传 task_id：落库用 Graph 的 task_id，
-        # 而不是 report.task_id。原因：report.task_id 来自 LLM 输出回显，
-        # 模型可能漏写/写错/写死占位符（Mock 场景即如此），
-        # review_result.task_id 的语义是"任务批次标识"，应由任务创建方决定。
-        _persist_review_report(report, state["case_id"], state["task_id"])
-        # ===== [S1-D 修正 END] =====
+        # ===== [S1-F 修正] 传 rule_hits，供 _persist_review_report 纠正
+        # origin=rule 缺陷的 category =====
+        _persist_review_report(
+            report, state["case_id"], state["task_id"],
+            rule_hits=state.get("rule_hits", []),
+        )
+        # ===== [S1-F 修正 END] =====
     except Exception as exc:
         _append_error(state, f"报告落库失败: {type(exc).__name__}: {exc}")
         state["task_status"] = TASK_STATUS_FAILED
@@ -503,8 +504,57 @@ def node_feedback_save(state: ReviewGraphState) -> ReviewGraphState:
                 state["case_id"], state["task_id"], state["task_status"])
     return state    
     
+def _resolve_rule_fields(
+    d,
+    rule_hits: list | None,
+) -> tuple[str, str]:
+    """
+    对 origin=rule 的缺陷，用 RuleResult 的权威字段覆盖 LLM 输出。
+
+    【S1-F 修正】
+      原因：LLM 可能改写 category / risk（如把 CTRL_001 的 high 写成 medium），
+           导致 Pred 与 GT 不一致，Full Review 匹配失败。
+      权威来源：
+        - category  ← RuleResult.category
+        - risk      ← RuleResult.severity
+      两者使用同一套等级体系（rule_format.md §1）。
+
+    【工程要求】
+      1. 找不到对应规则时，记录 warning（不静默忽略）。
+      2. category 与 risk 覆盖行为一致。
+      3. 非 origin=rule 的缺陷不覆盖。
+
+    :return: (resolved_category, resolved_risk)
+    """
+    resolved_category = d.category
+    resolved_risk = d.risk
+
+    if d.origin == "rule" and d.rule_id and rule_hits:
+        matched_rule = None
+        for rh in rule_hits:
+            if rh.rule_id == d.rule_id:
+                matched_rule = rh
+                break
+
+        if matched_rule is not None:
+            resolved_category = matched_rule.category
+            resolved_risk = matched_rule.severity
+        else:
+            logger.warning(
+                "_resolve_rule_fields: origin=rule 的缺陷 %s 的 rule_id=%s "
+                "在 rule_hits 中未找到对应规则，category/risk 保持 LLM 输出",
+                d.defect_id, d.rule_id,
+            )
+
+    return resolved_category, resolved_risk
+
 # ===== [S1-D 修正] 签名加 task_id 参数，落库用 Graph 的 task_id =====
-def _persist_review_report(report, case_id: str, task_id: str) -> None:
+def _persist_review_report(
+    report,
+    case_id: str,
+    task_id: str,
+    rule_hits: list | None = None,
+) -> None:
     """
     将 ReviewReport 落库到 review_result + review_defect。
 
@@ -518,6 +568,13 @@ def _persist_review_report(report, case_id: str, task_id: str) -> None:
     【S1-D 修正】task_id 显式传入
       参数 task_id 来自 state["task_id"]（由 task_service 生成），
       不是 report.task_id（来自 LLM 输出回显，可能不一致）。
+
+    【S1-F 修正】新增 rule_hits 参数
+      原因：origin=rule 的缺陷，category 应以规则引擎为准（RuleResult.category），
+           不应被 LLM 输出覆盖。LLM 可能把 POWER_002 的 power 写成 reset，
+           导致 Pred 的 category 与 GT 不一致，Full Review 匹配失败。
+      用法：按 rule_id 匹配，用 RuleResult.category 覆盖 d.category。
+      兜底：rule_id 在 rule_hits 里找不到时，保持 d.category 原值。
     """
     from app.persistence.models import ReviewDefect, ReviewResult, SchematicCase
 
@@ -606,21 +663,33 @@ def _persist_review_report(report, case_id: str, task_id: str) -> None:
             if exists is not None:
                 logger.warning("review_defect 已存在，跳过: %s", d.defect_id)
                 continue
-            # ===== [S1-E 修正 END] =====
+            # ===== [S1-F 修正] origin=rule 的缺陷，category / risk 以规则引擎为准 =====
+            # 统一走 _resolve_rule_fields，保证两个字段行为一致。
+            resolved_category, resolved_risk = _resolve_rule_fields(d, rule_hits)
+            # ===== [S1-F 修正 END] =====
 
             rd = ReviewDefect(
                 review_result_id=rr.id,
-                # --- 原代码（保留，已注释） ---
-                # defect_id=d.defect_id,
-                # --- 原代码（保留，已注释） ---
-                # ===== [S1-E 修正] d.defect_id 已是改写后的全局唯一值 =====
                 defect_id=d.defect_id,
-                # ===== [S1-E 修正 END] =====
-                category=d.category,
+                # --- 原代码（保留，已注释） ---
+                # category=d.category,
+                # --- 原代码（保留，已注释） ---
+                category=resolved_category,
                 location=d.location,
-                component=d.component,
-                net=d.net,
-                risk=d.risk,
+                # ===== [S1-F 修正] LLM 可能输出 "-" / "" 作为 component 占位符 =====
+                component=d.component if d.component not in (None, "", "-") else None,
+                # ===== [S1-F 修正 END] =====
+                #component=d.component,
+                # ===== [S1-F 修正] LLM 可能输出 "-" / "" 作为 net 占位符，
+                # 归一化为 None，避免 match_defect_full_review 把 '-' 当作真实网络名。
+                net=d.net if d.net not in (None, "", "-") else None,
+                # ===== [S1-F 修正 END] =====
+                # --- 原代码（保留，已注释） ---
+                #net=d.net,
+                # --- 原代码（保留，已注释） ---
+                # risk=d.risk,
+                # --- 原代码（保留，已注释） ---
+                risk=resolved_risk,
                 evidence=[e.model_dump(mode="json") for e in d.evidence],
                 root_cause=d.root_cause,
                 suggestion=d.suggestion,

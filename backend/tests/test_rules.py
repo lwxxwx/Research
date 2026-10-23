@@ -214,7 +214,7 @@ def test_power002_hits_rst_net(case001_results):
     hit = power002[0]
     assert hit.net == "RST", f"POWER_002 net 应为 RST，实际 {hit.net}"
     assert hit.severity == "medium"
-    assert hit.category == "timing"
+    assert hit.category == "power"
 
 
 def test_power003_no_hits_on_case001(case001_results):

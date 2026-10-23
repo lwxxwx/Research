@@ -28,3 +28,6 @@ Thumbs.db
 .DS_Store
 commit_msg.txt
 scripts/_diag_embedding.py
+scripts/_diag_bench_full.py
+scripts/_diag_bench_full_10cases.py
+scripts/_diag_gt_category.py

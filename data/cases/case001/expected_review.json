@@ -43,7 +43,7 @@
     },
     {
       "defect_id": "DEF-CASE001-2",
-      "category": "timing",
+      "category": "power",
       "location": {
         "sheet": "POWER_PAGE1",
         "path": "U1.RST",
