@@ -1,8 +1,8 @@
 # Sprint 1 变更与阻塞记录
 
 > 起始：2026-10-19
-> 最后更新：2026-10-22（阶段 E 完成）
-> 状态：阶段 A ✅ / 阶段 B ✅（B 类 4 个 Case 待硬件专家校准）/ 阶段 C ✅ / 阶段 D ✅ / 阶段 E ✅
+> 最后更新：2026-10-23（阶段 F 完成）
+> 状态：阶段 A ✅ / 阶段 B ✅（B 类 4 个 Case 待硬件专家校准）/ 阶段 C ✅ / 阶段 D ✅ / 阶段 E ✅ / 阶段 F ✅
 > 依据：`Sprint1_融合版开发落地规划_v1.0.md`、`Sprint1前置条件确认清单.md`
 
 ---
@@ -477,6 +477,125 @@ psycopg.errors.NotNullViolation: null value in column "review_output_json"
 | 六类反馈 | 全部可提交，`false_negative` / `new_rule_candidate` 生成候选，其余不生成 |
 | 候选 Benchmark | 返回 `baseline` / `candidate` / `delta` / `per_case` |
 
+---
+
+## 阶段 F · Benchmark V1.2（2026-10-23）
+
+> 状态：✅ 已完成
+> 依据：§9 / §14
+> 测试结果：`tests/test_benchmark.py` 17 passed；`tests/test_review_persistence.py` 4 passed；`tests/test_benchmark_llm.py -m integration` 1 passed；全量回归 516 passed / 1 skipped
+
+### F.1 交付清单
+
+| # | 文件 | 说明 |
+|---|---|---|
+| 1 | `app/services/benchmark_service.py`（改） | `BenchmarkResult` 统一结构；`run_single_case_full_review`；`run_all_benchmark`；`compute_ai_ner_simulated` / `compute_ear_simulated`；`summarize_benchmark`；`match_defect_full_review`；`_evidence_is_complete_pred`；`_infer_case_class`；`write_csv` 扩展 |
+| 2 | `app/workflows/review_graph.py`（改） | `_resolve_rule_fields` 公共函数；`_persist_review_report` 的 `category` / `risk` 归一化；`net` / `component` 的 `"-"` / `""` 归一化 |
+| 3 | `data/rules/POWER_002.yaml`（改） | `category: timing` → `power`（业务语义修正，`power` 在冻结枚举内） |
+| 4 | `data/cases/case001/expected_review.json`（改） | `DEF-CASE001-2.category` 同步改为 `power` |
+| 5 | `backend/tests/test_rules.py`（改） | `test_power002_hits_rst_net` 断言 `category == "power"` |
+| 6 | `backend/tests/test_benchmark.py`（改） | CLI 入口 + 17 条 pytest 测试（Rule Only / Full Review Mock / 批量 / CSV / 模拟指标 / 匹配边界） |
+| 7 | `backend/tests/test_review_persistence.py`（新建） | 4 条持久化回归测试（risk 覆盖 / category 覆盖 / ai_discovered 不覆盖 / 找不到规则回退） |
+| 8 | `backend/tests/test_benchmark_llm.py`（新建） | 真实智谱 10-Case Full Review Integration 测试 |
+
+### F.2 关键技术决策
+
+#### F.2.1 `BenchmarkResult` 统一结构
+
+- `CaseBenchResult` 重命名为 `BenchmarkResult`，旧名保留为别名
+- 兼容 Rule Only 与 Full Review 两种模式
+- 字段分三组：真实指标（`ear` / `ai_ner`）、模拟指标（`ai_ner_simulated` / `ear_simulated`）、口径标记（`metric_source`）
+- 不适用的字段用明确空值（`None` / `0` / `""`）
+
+#### F.2.2 `evc` 与 `evc_pred` 分列
+
+- `evc`：GT 侧，分母 `total_gt_defects`，口径不变
+- `evc_pred`：Pred 侧，分母 `total_pred_defects`，只算 Pred 自己的 evidence，不混入 GT 未发现的缺陷
+- `_evidence_is_complete_pred` 按 `type` 分流：`rag_ref` 三要素，`ir_ref` 只需 `detail >= 5`
+
+#### F.2.3 模拟指标口径
+
+- `AI_NER_SIMULATED = N_ai_effective_sim / (N_rule_effective_sim + N_ai_effective_sim)`，分母 0 时 `None`
+- `EAR_SIMULATED = len(tp_set_pred) / len(pred_defects)`，语义是 **gold-label match precision**，不是真实专家采纳率
+- 不写 `review_defect.expert_decision`，不写 `review_result.ai_new_effective_rate` / `expert_adoption_rate`
+- 真实 `ear` / `ai_ner` 在 Full Review 无反馈时为 `None`
+
+#### F.2.4 `match_defect_full_review` 的降级路径
+
+- 严格路径（`pred_net` 非空）：`net 交集 AND risk 严格一致 AND (rule_id 一致 OR category 一致)`
+- 降级路径（`pred_net` 为空）：`risk 严格一致 AND (rule_id 一致 OR (category 一致 AND component 交集))`
+- 禁止反向放宽：`pred_net` 非空但与 GT 不一致时直接 `False`
+- 降级路径是受限例外，只对"器件级缺陷（无网络）"开放
+
+#### F.2.5 `_resolve_rule_fields` 公共函数
+
+- `origin=rule` 的缺陷，`category` / `risk` 以 `RuleResult` 为权威来源
+- 找不到对应规则时 `logger.warning`，回退 LLM 输出
+- `category` 与 `risk` 覆盖行为一致，避免字段行为分叉
+
+#### F.2.6 `POWER_002` 的 category 修正
+
+- `timing` → `power`（业务语义：复位电路是电源/RC 拓扑）
+- `power` 在冻结枚举内，不违反 Rule YAML Format v1.0
+- 连带修改：GT 的 `DEF-CASE001-2.category`、`test_rules.py` 的断言
+
+### F.3 踩坑与修正
+
+#### 坑 1：`match_defect` 的 `risk` 字段映射
+
+**现象**：Full Review 的 `tp=0`，因为 `match_defect` 用 `pred["severity"]` 与 `gt["risk"]` 比较，但 `review_defect` 表的字段是 `risk`，没有 `severity`。
+
+**修正**：`match_defect_full_review` 内部处理 `pred.get("risk") or pred.get("severity")`，不手动映射。
+
+#### 坑 2：LLM 输出的 `net='-'` 导致降级路径失效
+
+**现象**：case002 / case005 的 `tp=0`，诊断发现 `net='-'`（字符串占位符），`pred_net` 非空，走严格路径，`{'-'} & {'VIN_12V'} = 空` → `False`。
+
+**修正**：两层归一化——
+1. `_persist_review_report` 落库时 `net` / `component` 的 `"-"` / `""` → `None`
+2. `_set_of` 内部把 `"-"` / `""` 视为空集
+
+#### 坑 3：LLM 改写规则的 `category` / `risk`
+
+**现象**：case005 / case006 的 Pred `risk=medium`，但 `CTRL_001` / `CTRL_002` 的 `severity=high`，GT `risk=high`，匹配失败。
+
+**修正**：`_resolve_rule_fields` 在 `_persist_review_report` 里用 `RuleResult.category` / `RuleResult.severity` 覆盖 `origin=rule` 缺陷的 `category` / `risk`。
+
+#### 坑 4：`_resolve_rule_fields` 未生效（`rule_hits` 未传或内联逻辑未替换）
+
+**现象**：`test_review_persistence.py` 4 条测试中 3 条失败。
+
+**修正**：确认 `node_feedback_save` 传 `rule_hits=state.get("rule_hits", [])`；确认 `_persist_review_report` 调用 `_resolve_rule_fields`，不保留内联逻辑。
+
+#### 坑 5：测试用 `CLOCK_001` 构造，但 `CLOCK_001` 不在 case001 命中
+
+**现象**：`test_persistence_rule_origin_category_overridden` 失败，因为 `CLOCK_001` 不在 case001 的 `rule_hits` 里，`_resolve_rule_fields` 正确回退。
+
+**修正**：测试改用 `POWER_001`（case001 命中，`category=power`），LLM 输出错误的 `category=interface`，验证覆盖为 `power`。
+
+### F.4 遗留项
+
+| 项 | 说明 | 归属 |
+|---|---|---|
+| B 类 Case 的 AI 辅助发现 | 4 个 `fn` 全是 `ai_discovered` 缺陷，LLM 无 AI 发现能力（`AI_NER_SIMULATED=0.0`） | 后续 Prompt/RAG 优化，用同一套 GT / 匹配 / 指标重评 |
+| LLM 输出的 `net='-'` | Prompt 未明确"无网络时必须写 `null`" | Prompt 优化（阶段 J 或后续） |
+| 真实轨落库数据累积 | 每次 Integration 测试落库 10 条 `review_result` + 若干 `review_defect` | 阶段 J 的 `_cleanup_test_data.py` 按批次标识清理 |
+| `summarize_benchmark` 的 API 接入 | 当前只被 `write_csv` 调用 | 阶段 G 的 API 层 |
+
+### F.5 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `tests/test_benchmark.py` | 17 passed |
+| `tests/test_review_persistence.py` | 4 passed |
+| `tests/test_benchmark_llm.py -m integration` | 1 passed（221s） |
+| 全量回归（`-k "not integration"`） | 516 passed / 1 skipped |
+| 真实轨 10 Case CSV | Precision=1.0 / Recall=0.75 / EVC=0.5542 / EVC_PRED=1.0 / EAR_SIMULATED=1.0 |
+| case002 | tp=0 → 1（net 归一化 + 降级匹配） |
+| case005 | tp=0 → 1（risk 覆盖 + net 归一化） |
+| case006 | tp=1 → 2（risk 覆盖） |
+| case_b04 | tp=1 不变（B 判据拒绝 component 不交集） |
+
 ## 变更记录
 
 | 日期 | 变更 | 说明 |
@@ -490,3 +609,4 @@ psycopg.errors.NotNullViolation: null value in column "review_output_json"
 | 2026-10-20 | 合并阶段 B / C 记录为单文件 | 原 `sprint1_blockers.md` + `stage_c_changelog.md` 合并 |
 | 2026-10-21 | 新增本地化 MiniLM 接入指南 | 见 `docs/sprint1/onprem_minilm_embedding_integration.md` |
 | 2026-10-22 | 阶段 E 完成（反馈与规则演进） | 见 E 章；E2E 4 passed；Demo 双轨 passed |
+| 2026-10-23 | 阶段 F 完成（Benchmark V1.2） | 见 F 章；17+4+1 passed；全量 516 passed；真实轨 Precision=1.0 |
