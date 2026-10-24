@@ -27,7 +27,7 @@ out/
 Thumbs.db
 .DS_Store
 commit_msg.txt
-scripts/_diag_embedding.py
-scripts/_diag_bench_full.py
-scripts/_diag_bench_full_10cases.py
-scripts/_diag_gt_category.py
+
+# 临时诊断/清理脚本（不进版本库）
+scripts/_diag_*.py
+scripts/_cleanup_*.py

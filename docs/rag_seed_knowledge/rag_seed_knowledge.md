@@ -4,6 +4,7 @@
 > **对齐规范**：`Sprint0_详细执行计划_V1.2_最终版` §13；`第一阶段工程实施方案_V1.2_增强版` §6
 > **冻结版本**：v1.7
 > **冻结日期**：2026-09-17
+> **S1-B 追加（2026-10-24）**：知识库从 5 份扩展至 14 份（补 9 份 B 类专题知识），详见 §2.1.1。§1–§11 的 v1.7 冻结内容保持不变，§5.4 / §7.2 的过期数值已在原位加注说明。
 > **Sprint0 收官追加**：`test_rag_seed.py` v1.8 新增 3 个并入逻辑集成测试 + 1 个 ingest 回归测试
 > **结论**：PASS · v1.7 基线 34 passed（29 单测 + 5 集成）；v1.8 追加后 RAG 相关测试 ≥ 38 passed
 
@@ -47,6 +48,28 @@
 | 3 | `application_notes/an_mcu_reset_circuit.md` | application_note | `["POWER_002"]` | 1 |
 | 4 | `reference_designs/ref_stc89c55_minimum_system.md` | reference_design | `["POWER_001", "POWER_002"]` | 1 |
 | 5 | `reference_designs/an_8051_io_port_feature.md` | application_note | `["IO_001"]` | 1 |
+
+### 2.1.1 S1-B 追加的 9 份 B 类专题知识（2026-10-24）
+
+> 阶段 H 冻结时为 5 份（A 类场景）。S1-B 为解决 B 类 Case 的 `ai_discovered` 未命中问题，追加 9 份专题知识。
+
+| # | 文件 | source_type | related_rule_ids | 内容来源 |
+| :--- | :--- | :--- | :--- | :--- |
+| 6 | `datasheets/lm2596_thermal.md` | datasheet | `["POWER_003", "POWER_001"]` | LM2596_DS_thermal + Buck_Converter_Thermal_Design 合并 |
+| 7 | `reference_designs/gjbz35_semiconductor_derating.md` | design_standard | `["POWER_003"]` | GJBZ35-93 摘录 |
+| 8 | `application_notes/an_rc_reset_tolerance.md` | application_note | `["CTRL_002", "POWER_002"]` | AN-8051-002_reset_timing |
+| 9 | `datasheets/intel_mcs51_reset_timing.md` | datasheet | `["CTRL_002"]` | Intel_MCS51_UM_reset |
+| 10 | `datasheets/i2c_bus_electrical.md` | datasheet | `["IO_003", "IO_002"]` | I2C_Bus_Design + AT24C02_DS + NXP_I2C_UM 合并 |
+| 11 | `reference_designs/power_sequence_design.md` | design_standard | `["POWER_001", "CTRL_002"]` | Power_Sequence_Design |
+| 12 | `datasheets/ams1117_startup.md` | datasheet | `["POWER_001", "CTRL_002"]` | AMS1117_DS_startup |
+| 13 | `datasheets/w25q16_power_seq.md` | datasheet | `["POWER_001", "CTRL_002"]` | W25Q16_DS_power_seq |
+| 14 | `datasheets/stc89c55rc_abs_max.md` | datasheet | `["POWER_001", "CTRL_002"]` | STC89C55RC_DS_abs_max + §4.2 Recommended Operating Conditions |
+
+**知识库规模**：5 doc / 5 chunk → **14 doc / 40 chunk**。
+
+**source_type 说明**：`design_standard` 是 `sources.py` 的 `DocumentType` 已有的合法值，但 Sprint 0 冻结时未实际使用。S1-B 首次使用，文件放在 `reference_designs/` 目录下（物理目录与 source_type 不强制对应，`ingest.py` 只看 frontmatter）。
+
+**related_rule_ids 的设计**：同时填「专题 rule_id」（如 POWER_003）和「Case 实际命中的 rule_id」（如 POWER_001），保证带 `rule_ids` 过滤的检索能命中。这是「用规则命中当检索入口」的妥协，详见 `sprint1_changelog.md` S1-B.3.1。
 
 **覆盖三类来源**：
 - datasheet × 2（晶振、电源）
@@ -491,6 +514,8 @@ Sprint1 Node3 可直接调用：
 | 单元测试耗时 | ~1.2s |
 | 集成测试耗时 | ~1.2s |
 
+> **S1-B 后（2026-10-24）**：知识库扩展至 14 doc / 40 chunk。详见 §2.1.1。§5.4 的 5 doc / 5 chunk 是 Phase H 冻结时的快照，保留作为历史对照。
+
 ---
 
 ## 6. 目录结构（Phase H 相关）
@@ -558,6 +583,10 @@ Sprint1 Node3 可直接调用：
 | 11 | 全局 warning 治理 `filterwarnings = ["error"]`（S6） |
 | 12 | 加 `pg_session_rollback` fixture（事务回滚），隔离 `test_ingest_uses_embed_documents_not_embed_query` 的 DB 污染 |
 | 13 | 可选：`sources.py` 支持 `MCU_xxx → POWER_xxx` 别名（若 Sprint 1 需要保留旧规则标识） |
+
+> **S1-B 进展（2026-10-24）**：
+> - #5 部分完成：补了 2 份 `design_standard`（`gjbz35_semiconductor_derating.md` / `power_sequence_design.md`）；`review_case` 类型仍未补。
+> - #6 部分完成：4 个 B 类 Case 的 evidence 知识已手动摘录入库（9 份），`scan_case_evidence` 自动扫描仍未启用。
 
 ---
 

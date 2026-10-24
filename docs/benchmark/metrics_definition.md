@@ -74,7 +74,7 @@ Benchmark 支持两种运行模式，由 `run_all_benchmark(case_ids, mode)` 的
 
 | 语义 | 字段 | 说明 |
 | :--- | :--- | :--- |
-| 缺陷 ID | `defect_id` | 落库时加 `{task_id}-` 前缀（S1-E 修正） |
+| 缺陷 ID | `defect_id` | 落库时加 `{task_id}-` 前缀（S1-E 修正）。S1-B 后：`origin=rule` 的缺陷由 RuleResult 构造，格式为 `{task_id}-DEF-RULE-{rule_id}`；`origin=ai_discovered` 的缺陷格式为 `{task_id}-{LLM 原始 defect_id}` |
 | 分类 | `category` | `origin=rule` 时由 `_resolve_rule_fields` 用 `RuleResult.category` 覆盖（S1-F）；`ai_discovered` 时保留 LLM 输出 |
 | 风险等级 | `risk` | `origin=rule` 时由 `_resolve_rule_fields` 用 `RuleResult.severity` 覆盖（S1-F）；`ai_discovered` 时保留 LLM 输出 |
 | 主元件 | `component` | LLM 输出；`"-"` / `""` 落库时归一化为 `None`（S1-F） |
@@ -147,6 +147,11 @@ Full Review 的 Pred 来自 `review_defect` 表，字段比 `RuleResult` 少（�
    - `category` 一致 **且** `component` 交集非空（双锚点）
 
 **禁止反向放宽**：若 `pred_net` 非空但与 `gt_net` 不一致，直接返回 `False`，不进入降级路径。
+
+**Full Review 的 rule 缺陷来源（S1-B 起）**：
+- `origin=rule` 的缺陷**完全由 `RuleResult` 构造**（`_build_rule_defect`），不依赖 LLM 是否输出。
+- LLM 输出的 `origin=rule` 缺陷全部被丢弃（Merge 层集合运算 v14），只保留 `origin=ai_discovered`。
+- 因此 rule 缺陷的 `component` / `net` / `risk` / `category` 与规则引擎输出严格一致，匹配稳定性不再受 LLM 随机性影响。
 
 **为什么 Full Review 放宽 `component`**：
 - GT 金标可能选“更精确的定位”（如 `C3`），LLM 选“更宏观的定位”（如 `U1`），两者在同一网络上，语义等价。
@@ -630,6 +635,35 @@ def _fmt(v: Optional[float], ndigits: int = 4) -> Any:
 
 **这 4 个 FN 是阶段 F 的已知边界**：LLM 无 AI 辅助发现能力，属后续 Prompt / RAG 优化范围，不是 Benchmark 逻辑缺陷。阶段 F 保留此基线，后续改进后用同一套 GT / 匹配 / 指标重评对比。
 
+#### 8.3.1 S1-B 后基线（2026-10-24）
+
+> S1-B（B 类 Case 跑通尝试）后的真实轨 10 Case 结果。改动：RAG 四路检索 + Prompt 专题线索注入 + Merge 层集合运算（v14）。
+
+| 指标 | 阶段 F 基线 | S1-B 后 | 变化 |
+|---|---|---|---|
+| 全局 tp / fp / fn | 12 / 0 / 4 | **14 / 3 / 2** | tp +2, fp +3, fn -2 |
+| Rule_Precision | 1.0 | **0.824** | -0.176（LLM 输出错误 ai_discovered） |
+| Rule_Recall | 0.75 | **0.875** | +0.125 |
+| EVC | 0.5542 | 0.5542 | 持平（GT 侧未变） |
+| EVC_PRED | 1.0 | 1.0 | 持平 |
+| AI_NER_SIMULATED | 0.0 | **0.15** | +0.15 |
+| EAR_SIMULATED | 1.0 | **0.867** | -0.133 |
+
+逐 B 类 Case：
+
+| Case | 阶段 F | S1-B 后 | 判断 |
+|---|---|---|---|
+| case_b01 | tp=1, fn=1 | tp=1, fn=1 | 持平（glm-4-flash 没发现 U2 热降额） |
+| case_b02 | tp=0, fn=1 | **tp=1, fn=0** | 跑通 |
+| case_b03 | tp=1, fn=1 | **tp=2, fn=0** | 双命中 |
+| case_b04 | tp=1, fn=1 | tp=1, fn=1 | 持平（glm-4-flash 没发现 U3 时序） |
+
+**3 条 fp + 2 条 fn 全部归因 glm-4-flash 能力**（专题推理 + 字段填写准确性），不是 Benchmark 逻辑缺陷。详见 `sprint1_changelog.md` S1-B.5。
+
+**这 4 个 FN 是阶段 F 基线下的已知边界**：LLM 无 AI 辅助发现能力，属后续 Prompt / RAG 优化范围，不是 Benchmark 逻辑缺陷。阶段 F 保留此基线，后续改进后用同一套 GT / 匹配 / 指标重评对比。
+
+（S1-B 后的改进结果见 §8.3.1：FN 从 4 降到 2，case_b02 / case_b03 已跑通。）
+
 ---
 
 ## 9. 验收标准
@@ -675,6 +709,7 @@ def _fmt(v: Optional[float], ndigits: int = 4) -> Any:
 | v1.0 | 2026-09-15 | Sprint 0 首次冻结：Rule-Only 四项指标 + EVC + 占位 EAR/AI_NER |
 | v2.0 | 2026-09-15 | M1 `rule_id` 弱校验；M2 贪心策略显式化；M3 `IR_REF_EXEMPT` 开关；M4 CSV ↔ V1.2 §8.2 映射表；S1 三态列；S2 Overall 预留列；S3 `notes` 字段 |
 | v3.0 | 2026-10-23 | Sprint 1 阶段 F 升级：<br>1. 新增 `full_review` 运行模式<br>2. 新增 `BenchmarkResult` 统一结构<br>3. 新增 `EVC_PRED` / `EVC_COMPLETE_RATE`<br>4. 新增 `AI_NER_SIMULATED` / `EAR_SIMULATED`（金标模拟）<br>5. 新增 `match_defect_full_review`（严格 + 降级路径）<br>6. 新增 `_resolve_rule_fields`（`origin=rule` 的 `category` / `risk` 以 `RuleResult` 为准）<br>7. 新增 `net='-'` / `component='-'` 归一化<br>8. CSV 从 18 列扩展到 24 列，删除 `Overall_*` 三列<br>9. 新增汇总行 `__SUMMARY__`<br>10. 新增“模拟指标边界”章节（§6.4） |
+| v3.1 | 2026-10-24 | S1-B 后升级：<br>1. §1.3 补 `defect_id` 格式说明（`DEF-RULE-*` vs LLM 原始）<br>2. §2.1.2 补 rule 缺陷来源（RuleResult 构造，不依赖 LLM）<br>3. §8.3 追加 S1-B 后基线（tp=14 fp=3 fn=2, Precision=0.824, Recall=0.875）<br>4. 新增 §8.3.1 逐 B 类 Case 对比 |
 
 ---
 

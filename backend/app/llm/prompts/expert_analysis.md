@@ -1,6 +1,15 @@
 <!--
 【渲染约定】调用方必须使用 app.llm.prompt_renderer.render_prompt（str.replace），
 禁止使用 str.format()，否则 JSON 示例中的字面花括号会被误判为占位符。
+【占位符清单（调用方必须全部传入）】
+  {task_id} / {report_id} / {ir_facts} / {semantic_ctx} / {topic_hints}
+  {rule_hits} / {rules_passed} / {rag_evidence}
+
+【S1-B 新增】
+  {topic_hints}：由 review_graph._build_topic_hints(ir) 生成，
+                从 IR 提取专题线索（热降额 / RC 容差 / I2C 开漏 / 电源时序），
+                供 LLM 判断是否需要输出 origin=ai_discovered 缺陷。
+                无线索时传 "(无专题线索触发)"。
 -->
 
 # 角色
@@ -13,6 +22,13 @@
 
 1. **解释规则引擎已命中的问题**：对「输入 3 · 规则结果」中每条 `rule_hits`，给出根因与可执行建议。
 2. **提出规则未覆盖的候选缺陷**：基于「输入 1 · IR 事实」与「输入 4 · RAG 证据」，提出 `origin=ai_discovered` 的候选缺陷。
+
+   **补充说明**：规则引擎只覆盖确定性拓扑类缺陷。如果「输入 1.5 · 专题线索」中存在已触发的线索，且「输入 4 · RAG 证据」中有对应 `[专题: xxx]` 标注的证据，应主动检查并提出 `ai_discovered` 候选。
+
+   **关键约束**：
+   - `origin=rule` 的缺陷必须来自「输入 3.1 rule_hits」，`rule_id` 必须与命中项逐字一致，**不得把规则命中重新标为 `ai_discovered`**
+   - `origin=ai_discovered` 的缺陷必须来自「输入 1 IR 事实」+「输入 4 RAG 证据」，不得凭空编造
+   - 如果 IR 事实 + RAG 证据不足以推出确定结论，不要输出该缺陷，不要为了"发现专题"而强行输出
 
 # 不做的事
 
@@ -49,6 +65,30 @@
 2. 引用时 `detail` 字段填 `ir_ref` 字符串本身（如 `Component[U1].attributes.VIN=12V`），不要附加解释。
 3. 若某条结论需要的事实不在 `{ir_facts}` 中，说明该结论缺乏 IR 依据，不得写入 `ir_ref` 类 evidence。
 4. `{ir_facts}` 为空时，本次评审无法提出 `origin=ai_discovered` 的候选缺陷（缺 IR 追溯），只能解释规则命中。
+
+# 输入 1.5 · 专题线索自动检查（系统已扫描）
+
+系统已扫描「输入 1 · IR 事实」，发现以下可能触发专题的线索。请对**每条已触发的线索**判断是否需要输出 `origin=ai_discovered` 的缺陷。
+
+```
+{topic_hints}
+```
+
+
+## 判断方式
+
+1. 对每条线索，从「输入 4 · RAG 证据」中找带 `[专题: xxx]` 标注且与线索专题一致的证据。
+2. 如果 RAG 证据支持「存在缺陷」（如"85℃ 超降额线""τ_min < 2ms"），输出 `ai_discovered` 缺陷，必须附：
+   - 至少 1 条 `ir_ref`（指向该线索涉及的 IR 事实，如 `Component[U2].attributes.package=TO-263`）
+   - 至少 1 条 `rag_ref`（指向对应的 `[专题: xxx]` 证据，source / section 逐字复制）
+3. 如果 RAG 证据不足，不输出该缺陷。
+4. 如果上述专题线索列表为 `(无专题线索触发)`，跳过本段。
+
+## 约束
+
+1. 本段只处理「专题线索」，与「输入 3.1 规则命中」是**互补关系**。规则命中仍按原方式输出 `origin=rule` 缺陷。
+2. 不得把「输入 3.1」的规则命中重新标为 `origin=ai_discovered`。
+3. 线索涉及的元件（如 U2）与规则命中的元件（如 U1）可能不同，这是正常的——规则命中去耦电容缺失（U1），专题线索是热降额（U2），两者是不同缺陷。
 
 # 输入 2 · 电路语义上下文
 
@@ -178,11 +218,13 @@ source: MP2307_DS_Rev1.2.pdf
 section: 6 Thermal Information
 reason: 自然对流 TA≤70℃，本设计 TA=85℃，连续满载将超出降额曲线
 source_type: datasheet
+[专题: 热降额 — 检查功率器件（LDO/Buck/MOS）在最高环境温度下的结温是否超降额线]
 ---
 source: AN_Thermal_Derating_For_DC-DC.md
 section: 3.2 降额计算
 reason: PD(max) = (Tj_max − TA) / θJA，TA=85℃ 时 PD(max)=1.625W
 source_type: application_note
+[专题: 热降额 — 检查功率器件（LDO/Buck/MOS）在最高环境温度下的结温是否超降额线]
 ---
 ```
 
@@ -194,6 +236,7 @@ source_type: application_note
 | `section` | 章节 / 页码 | 必填 |
 | `reason` | 该片段的关键内容摘要 | 必填 |
 | `source_type` | `datasheet` / `reference_design` / `application_note` / `review_case` / `design_standard` | 可选 |
+| `[专题: xxx]` | 该证据所属专题；无标注时视为"通用" | 可选 |
 
 ## 约束
 
@@ -275,8 +318,12 @@ JSON 顶层结构：
 | `rag_ref` | `source` / `section` / `reason` | 各 ≥ 10 |
 | `ir_ref` | `detail` | ≥ 5 |
 
-- `ir_ref.detail` 必须是「输入 1」中出现过的 `ir_ref` 字符串
+- `ir_ref.detail` **必填**，必须是「输入 1」中出现过的 `ir_ref` 字符串。
+  - ✅ 正确：`{"type": "ir_ref", "detail": "Component[U1].value=STC89C55RC"}`
+  - ❌ 错误：`{"type": "ir_ref"}`（缺 detail，系统会拒绝整份报告）
+  - ❌ 错误：`{"type": "ir_ref", "detail": ""}`（空字符串，系统会拒绝整份报告）
 - `rag_ref.source` / `section` 必须逐字复制「输入 4」，不得编造
+- **长度不足会被系统降级**：`section` 只写 "p5" / "§3" 这类短字符串会被判定为无效证据，导致该条缺陷降级为 `NEED_EXPERT_REVIEW`。必须写完整章节名（如 "6 Thermal Information" / "3. Power Supply Decoupling"），长度 ≥ 10 字符
 
 ## 6.4 origin 的分支约束
 
@@ -290,7 +337,7 @@ JSON 顶层结构：
 
 - 必须**至少 1 条 `ir_ref` + 1 条 `rag_ref`**
 - `review_status` 不得写 `AI_CONFIRMED`，应写 `NEED_EXPERT_REVIEW` 或 `LOW_CONFIDENCE`
-- `rule_id` 必须为 `null`
+- 建议来源：「输入 1.5 · 专题线索」中已触发的线索 + 「输入 4」中对应 `[专题: xxx]` 的证据
 
 ### 6.4.3 origin=hybrid
 
@@ -330,10 +377,11 @@ JSON 顶层结构：
 6. ❌ 虚构元件位号、引脚 ID、网络名、属性键
 7. ❌ 用解释性文字代替 `defects: []`（无缺陷时应输出空数组）
 8. ❌ 输出 JSON 之外的任何内容（包括三个反引号包裹的代码块标记）
+9. ❌ 把「输入 3.1」的规则命中重新标为 `origin=ai_discovered`（违反 6.4.1，会被 Parser 硬拦截降级）
 
 ## 6.8 空结果
 
-若「输入 3.1」无命中，且你认为无 AI 候选缺陷，输出：
+若「输入 3.1」无命中，且「输入 1.5」无线索触发，输出：
 
 ```json
 {

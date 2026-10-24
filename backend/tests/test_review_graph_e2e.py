@@ -171,11 +171,17 @@ def test_e2e_case001_mock_with_defects(mock_llm_with_defects):
     """
     case001（A 类）Mock 轨 + 有缺陷：验证 report_generate + feedback_save 链路。
 
+    【S1-B v14 语义变更】
+      v14 起：rule 缺陷完全由 RuleResult 构造，LLM 输出的 origin=rule 被丢弃。
+      case001 的 rule_hits 有 2 条（POWER_001 + POWER_002），
+      所以最终 defects 有 2 条 rule 缺陷（synthesized=True），
+      而不是 Mock LLM 输出的 1 条。
+
     验收：
       - task_status == done
-      - review_report.defects 长度 == 1
-      - defect_id == "DEF-MOCK-E2E-001"
-      - 落库成功（get_task 可查到）
+      - review_report.defects 长度 == 2（POWER_001 + POWER_002）
+      - 两条都是 origin=rule 且 synthesized=True
+      - 落库成功（get_task 可查到 2 条）
     """
     from app.services.task_service import get_task, get_task_defects
 
@@ -186,30 +192,67 @@ def test_e2e_case001_mock_with_defects(mock_llm_with_defects):
         f"case001 Mock+defects 失败，errors={final_state.get('errors')}"
     )
     report = final_state["review_report"]
-    assert len(report.defects) == 1
-    # --- 原代码（保留，已注释） ---
+
+    # ===== [S1-B v14 测试适配] =====
+    # --- 原断言（保留，已注释） ---
+    # assert len(report.defects) == 1
     # expected_defect_id = report.defects[0].defect_id
-    # assert expected_defect_id.startswith("DEF-MOCK-E2E-")
-    # --- 原代码（保留，已注释） ---
-    # ===== [S1-E 修正] defect_id 落库时加 task_id 前缀，
-    # 格式 {task_id}-{原 defect_id} =====
-    expected_defect_id = report.defects[0].defect_id
-    assert expected_defect_id.startswith(f"{task_id}-DEF-MOCK-E2E-"), (
-        f"defect_id 应为 {{task_id}}-DEF-MOCK-E2E-...，实际 {expected_defect_id}"
+    # assert expected_defect_id.startswith(f"{task_id}-DEF-MOCK-E2E-")
+    # --- 原断言（保留，已注释） ---
+    # v14：case001 有 2 条 rule_hit，最终 defects 应为 2 条
+    assert len(report.defects) == 2, (
+        f"case001 有 2 条 rule_hit（POWER_001 + POWER_002），"
+        f"v14 下应产出 2 条 rule 缺陷，实际 {len(report.defects)} 条"
     )
-    # ===== [S1-E 修正 END] =====
+    rule_ids = {d.rule_id for d in report.defects}
+    assert rule_ids == {"POWER_001", "POWER_002"}, (
+        f"期望 rule_id 集合 {{POWER_001, POWER_002}}，实际 {rule_ids}"
+    )
+    for d in report.defects:
+        assert d.origin == "rule", (
+            f"v14 下 rule 缺陷 origin 应为 rule，实际 {d.defect_id} origin={d.origin}"
+        )
+        assert d.synthesized is True, (
+            f"v14 下所有 rule 缺陷应由 RuleResult 构造（synthesized=True），"
+            f"实际 {d.defect_id} synthesized={d.synthesized}"
+        )
+        # defect_id 格式：{task_id}-DEF-RULE-{rule_id}
+        assert d.defect_id.startswith(f"{task_id}-DEF-RULE-"), (
+            f"defect_id 应为 {{task_id}}-DEF-RULE-...，实际 {d.defect_id}"
+        )
+    # ===== [S1-B v14 测试适配 END] =====
 
     # 落库验证
     task_info = get_task(task_id)
     assert task_info is not None
     assert task_info["status"] == TASK_STATUS_DONE
-    assert task_info["defects_count"] == 1
+    # ===== [S1-B v14 测试适配] 落库数量从 1 改为 2 =====
+    # --- 原断言（保留，已注释） ---
+    # assert task_info["defects_count"] == 1
+    # --- 原断言（保留，已注释） ---
+    assert task_info["defects_count"] == 2, (
+        f"落库 defects_count 应为 2，实际 {task_info['defects_count']}"
+    )
+    # ===== [S1-B v14 测试适配 END] =====
 
     defects = get_task_defects(task_id)
-    assert len(defects) == 1
-    # ===== [S1-D 修正] 用动态生成的 defect_id =====
-    assert defects[0]["defect_id"] == expected_defect_id
-    # ===== [S1-D 修正 END] =====
+    # ===== [S1-B v14 测试适配] 落库数量从 1 改为 2 =====
+    # --- 原断言（保留，已注释） ---
+    # assert len(defects) == 1
+    # assert defects[0]["defect_id"] == expected_defect_id
+    # --- 原断言（保留，已注释） ---
+    assert len(defects) == 2, (
+        f"get_task_defects 应返回 2 条，实际 {len(defects)} 条"
+    )
+    # defect_id 是 {task_id}-DEF-RULE-{rule_id}，检查两条都在
+    defect_ids = {d["defect_id"] for d in defects}
+    for rid in ("POWER_001", "POWER_002"):
+        expected = f"{task_id}-DEF-RULE-{rid}"
+        assert expected in defect_ids, (
+            f"期望 {expected} 在落库结果中，实际 {defect_ids}"
+        )
+    # ===== [S1-B v14 测试适配 END] =====
+
 
 def test_e2e_case_b01_mock(mock_llm):
     """

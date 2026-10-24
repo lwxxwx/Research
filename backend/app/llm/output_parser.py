@@ -23,7 +23,9 @@ LLM 输出解析与质量校验（Sprint 1 阶段 C 新增）
   规则 3：ai_discovered 缺 ir_ref 或 rag_ref  → NEED_EXPERT_REVIEW（confidence -0.2）
   规则 4：模糊词黑名单在 risk≥medium 出现 ≥2  → LOW_CONFIDENCE（confidence -0.2）
   规则 5：以上全通过                          → AI_CONFIRMED
-  硬约束：origin == ai_discovered 时，最终 review_status 不得为 AI_CONFIRMED
+  硬约束 1：origin == ai_discovered 时，最终 review_status 不得为 AI_CONFIRMED
+  硬约束 2（S1-B 新增）：origin == ai_discovered 且 component/net 与某条 rule_hit
+                        完全相同，判定为"重标规则命中"，强制降级 LOW_CONFIDENCE
 """
 from __future__ import annotations
 
@@ -61,6 +63,15 @@ CONF_CAP_LOW: float = 0.4         # 规则 1 触发时 confidence 上限
 CONF_PENALTY: float = 0.2         # 规则 2/3/4 触发时扣减
 FUZZY_THRESHOLD_HITS: int = 2     # 规则 4 阈值
 
+# ============================================================
+# ===== [S1-B 新增] 常量：重标规则命中拦截 =====
+# ------------------------------------------------------------
+# 原因：glm-4-flash 无法区分"解释规则命中"和"发现专题缺陷"，
+#      会把 rule 缺陷重标为 origin=ai_discovered（component/net/risk/category 相同）。
+#      硬拦截后强制降级 LOW_CONFIDENCE，不丢弃，保留追溯。
+# ============================================================
+CONF_CAP_RELABEL: float = 0.3     # 重标规则命中时 confidence 上限
+
 
 # ============================================================
 # ===== [S1-C 新增] 解析入口 =====
@@ -79,7 +90,8 @@ def parse_report(
       llm_response   : Provider 返回对象
       ir_document    : 用于校验 ir_ref.detail 可解析性；None 时跳过该项校验
       rag_context    : 本次输入的 RAG 证据列表；None 时跳过 rag_ref 真实性校验
-      rule_hits      : 本次规则命中（当前仅记录，不参与状态判定；预留给阶段 D/E）
+      rule_hits      : 本次规则命中（S1-B 起参与"重标规则命中"拦截；
+                       其余判定不依赖它）
 
     返回：
       ReviewReport。解析失败时返回空 defects + errors，且 summary 全零，
@@ -113,7 +125,22 @@ def parse_report(
             d,
             ir_document=ir_document,
             rag_context=rag_context,
+            rule_hits=rule_hits,
         )
+
+    # ===== [S1-B 新增 v12] 过滤 AI 重标缺陷 =====
+    # 在判定之后、重算之前，丢弃"确定匹配某条 rule_hit"的 ai_discovered 缺陷。
+    # 原因：LLM 会把 rule 缺陷重标为 ai_discovered，这些不是真实的 AI 发现。
+    #      丢弃后，rule 缺陷由 review_graph 的 _merge_rule_defects 从 RuleResult 补齐。
+    # 判定条件（三重校验，避免误删）：
+    #   1) origin == ai_discovered
+    #   2) component 完全相同
+    #   3) net 完全相同（None 视为相同）
+    #   4) category 相同（额外锚点，避免"同 component/net 但不同 category"的误删）
+    # 说明：category 作为额外锚点是用户建议的"确认是同一个规则缺陷"，避免误删
+    #      同一元件/网络上但不同类别的 AI 发现。
+    # ===== [S1-B 新增 v12 END] =====
+    report.defects = _filter_relabeled_ai_defects(report.defects, rule_hits)
 
     # 4) 重算三态分布
     report.recount_review_status()
@@ -135,12 +162,14 @@ def _classify_defect(
     *,
     ir_document: SchematicIRDocument | None,
     rag_context: list[dict[str, Any]] | None,
+    rule_hits: list[Any] | None = None,        # ===== [S1-B 新增] =====
 ) -> None:
     """
     就地修改 d.review_status 与 d.confidence。
     判定顺序严格按 §5.2，命中任一即不再升级（只能往更严格方向降级）。
-    """
 
+    S1-B 新增：rule_hits 参数用于"重标规则命中"拦截（见规则 6）。
+    """
     # ---------- 规则 1：10 字段完整性 ----------
     # Schema 已强制大部分必填；这里做「业务级非空」复核：
     # location 非空 dict、root_cause/suggestion 非空、defect_id 非空
@@ -162,7 +191,12 @@ def _classify_defect(
     if rule2_violated:
         d.confidence = max(0.0, d.confidence - CONF_PENALTY)
         d.review_status = ReviewStatus.NEED_EXPERT_REVIEW
-        # 不 return：继续跑规则 3/4，取更严格状态
+        # ===== [S1-B 修正] 记录降级原因，便于统计 LLM 证据质量 =====
+        logger.info(
+            "defect %s evidence 不足（有效 %d/%d 条），降级 NEED_EXPERT_REVIEW",
+            d.defect_id, valid_ev_count, len(d.evidence),
+        )
+        # ===== [S1-B 修正 END] =====
 
     # ---------- 规则 3：ai_discovered 必须 ir_ref + rag_ref ----------
     rule3_violated = False
@@ -207,7 +241,7 @@ def _classify_defect(
     ):
         d.review_status = ReviewStatus.AI_CONFIRMED
 
-    # ---------- 硬约束：ai_discovered 不得 AI_CONFIRMED ----------
+    # ---------- 硬约束 1：ai_discovered 不得 AI_CONFIRMED ----------
     # 对齐 tests/test_case_b_validation.py::test_ai_discovered_review_status
     if d.origin == "ai_discovered" and d.review_status == ReviewStatus.AI_CONFIRMED:
         d.review_status = ReviewStatus.NEED_EXPERT_REVIEW
@@ -216,6 +250,96 @@ def _classify_defect(
             d.defect_id,
         )
 
+    # ===== [S1-B 修正 v12] 硬约束 2 已移至 parse_report 的 _filter_relabeled_ai_defects =====
+    # 原因：重标缺陷应"丢弃"而非"降级"，且需在报告级别统一处理（可能涉及多条）。
+    #      详见 parse_report 里的调用。
+    # --- 原代码（保留，已注释） ---
+    # if d.origin == "ai_discovered" and rule_hits:
+    #     for rh in rule_hits:
+    #         rh_comp = getattr(rh, "component", None) or None
+    #         rh_net = getattr(rh, "net", None) or None
+    #         if (d.component or None) == rh_comp and (d.net or None) == rh_net:
+    #             d.review_status = ReviewStatus.LOW_CONFIDENCE
+    #             d.confidence = min(d.confidence, CONF_CAP_RELABEL)
+    #             logger.warning(...)
+    #             break
+    # --- 原代码（保留，已注释） ---
+    # ===== [S1-B 修正 v12 END] =====
+
+
+# ============================================================
+# ===== [S1-B 新增 v12] AI 重标缺陷过滤 =====
+# ------------------------------------------------------------
+# 职责：丢弃"确定匹配某条 rule_hit"的 ai_discovered 缺陷。
+#
+# 判定条件（三重校验，避免误删）：
+#   1) origin == ai_discovered
+#   2) component 完全相同（None 视为相同）
+#   3) net 完全相同（None 视为相同）
+#   4) category 相同（额外锚点，避免"同 component/net 但不同 category"的误删）
+#
+# 为什么用 category 作为额外锚点：
+#   用户建议"必须确认是同一个规则缺陷，避免 component/net 相同就误删其他 AI 发现"。
+#   component + net + category 三者相同，能确认是"同一规则缺陷被重标"，
+#   而不是"同一元件/网络上的另一个 AI 发现"。
+#
+# 丢弃后：rule 缺陷由 review_graph._merge_rule_defects 从 RuleResult 补齐，
+#        不会丢失（见 review_graph.py）。
+# ============================================================
+def _filter_relabeled_ai_defects(
+    defects: list[Defect],
+    rule_hits: list[Any] | None,
+) -> list[Defect]:
+    """
+    过滤掉"确定匹配某条 rule_hit"的 ai_discovered 缺陷。
+
+    :param defects: 已判定的缺陷列表
+    :param rule_hits: 规则命中列表（RuleResult 对象）
+    :return: 过滤后的缺陷列表（保留 rule 缺陷 + 未被重标的 ai_discovered）
+    """
+    if not rule_hits:
+        return defects
+
+    filtered: list[Defect] = []
+    for d in defects:
+        if d.origin != "ai_discovered":
+            filtered.append(d)
+            continue
+
+        is_relabel = False
+        for rh in rule_hits:
+            rh_comp = getattr(rh, "component", None) or None
+            rh_net = getattr(rh, "net", None) or None
+            rh_cat = getattr(rh, "category", None) or None
+            if (
+                (d.component or None) == rh_comp
+                and (d.net or None) == rh_net
+                and (d.category or None) == rh_cat
+            ):
+                is_relabel = True
+                logger.warning(
+                    "ai_discovered defect %s 的 component/net/category 与规则 %s 完全相同，"
+                    "判定为重标规则命中，丢弃（rule 缺陷将由 Merge 层从 RuleResult 补齐）",
+                    d.defect_id, getattr(rh, "rule_id", "?"),
+                )
+                break
+
+        if not is_relabel:
+            filtered.append(d)
+
+    # ===== [S1-B 新增 v13] suppressed 统计 =====
+    # 不扩 Schema，只在日志里统计，便于后续模型对比。
+    # suppressed = 被过滤的重标 AI 缺陷数量。
+    # 指标：suppressed / (suppressed + len(filtered)) 反映 LLM 重标倾向。
+    # ===== [S1-B 新增 v13 END] =====
+    suppressed_count = len(defects) - len(filtered)
+    if suppressed_count > 0:
+        logger.info(
+            "_filter_relabeled_ai_defects: total=%d, suppressed=%d, kept=%d",
+            len(defects), suppressed_count, len(filtered),
+        )
+
+    return filtered
 
 # ============================================================
 # ===== [S1-C 新增] Evidence 有效性（与 benchmark_service 同口径）=====

@@ -1,9 +1,20 @@
 ingest_entries:
+  # --- Sprint 0 原有 5 份 ---
   - file: "/data/knowledge/datasheets/stc89c55rc_oscillator_crystal.md"
   - file: "/data/knowledge/datasheets/stc89c55rc_power_supply.md"
   - file: "/data/knowledge/application_notes/an_mcu_reset_circuit.md"
   - file: "/data/knowledge/reference_designs/ref_stc89c55_minimum_system.md"
   - file: "/data/knowledge/reference_designs/an_8051_io_port_feature.md"
+  # --- Sprint 1 B 类 Case 专题知识 9 份 ---
+  - file: "/data/knowledge/datasheets/lm2596_thermal.md"
+  - file: "/data/knowledge/reference_designs/gjbz35_semiconductor_derating.md"
+  - file: "/data/knowledge/application_notes/an_rc_reset_tolerance.md"
+  - file: "/data/knowledge/datasheets/intel_mcs51_reset_timing.md"
+  - file: "/data/knowledge/datasheets/i2c_bus_electrical.md"
+  - file: "/data/knowledge/reference_designs/power_sequence_design.md"
+  - file: "/data/knowledge/datasheets/ams1117_startup.md"
+  - file: "/data/knowledge/datasheets/w25q16_power_seq.md"
+  - file: "/data/knowledge/datasheets/stc89c55rc_abs_max.md"
 case_evidence_scan: null
 #  root_dir: "./data/cases"
 #  glob_pattern: "case*/evidence/**/*.md"

@@ -117,22 +117,35 @@ class Evidence(BaseModel):
                     f"rag_ref 缺必填字段: {missing}"
                     f"（三要素 source/section/reason 均必填）"
                 )
-            too_short = [
-                name for name in ("source", "section", "reason")
-                if len(getattr(self, name)) < EVIDENCE_TEXT_MIN_LEN
-            ]
-            if too_short:
-                raise ValueError(
-                    f"rag_ref 字段长度不足 {EVIDENCE_TEXT_MIN_LEN}: {too_short}"
-                )
+            # ===== [S1-B 修正] 长度不足从 Schema 硬拒绝改为 Parser 业务降级 =====
+            # 原因：LLM 偶发输出短 section（如 "p5"），Schema 硬拒绝导致整份报告
+            #      校验失败、task_status=failed，3 个 Case 全部作废。
+            #      符合 Sprint 1 §5.3「不合格不丢弃，只降级」。
+            # 修法：Schema 只校验非空（上方 missing 分支已做），长度不足交给
+            #      Parser 的 _evidence_is_valid 判定 → review_status 降级。
+            # --- 原代码（保留，已注释） ---
+            # too_short = [
+            #     name for name in ("source", "section", "reason")
+            #     if len(getattr(self, name)) < EVIDENCE_TEXT_MIN_LEN
+            # ]
+            # if too_short:
+            #     raise ValueError(
+            #         f"rag_ref 字段长度不足 {EVIDENCE_TEXT_MIN_LEN}: {too_short}"
+            #     )
+            # --- 原代码（保留，已注释） ---
+            # ===== [S1-B 修正 END] =====
         elif self.type == "ir_ref":
             if not self.detail:
                 raise ValueError("ir_ref 缺必填字段: detail")
-            if len(self.detail) < EVIDENCE_IR_REF_MIN_LEN:
-                raise ValueError(
-                    f"ir_ref.detail 长度不足 {EVIDENCE_IR_REF_MIN_LEN}"
-                    f"（实际 {len(self.detail)}）"
-                )
+            # ===== [S1-B 修正] 长度不足交给 Parser 降级，Schema 只校验非空 =====
+            # --- 原代码（保留，已注释） ---
+            # if len(self.detail) < EVIDENCE_IR_REF_MIN_LEN:
+            #     raise ValueError(
+            #         f"ir_ref.detail 长度不足 {EVIDENCE_IR_REF_MIN_LEN}"
+            #         f"（实际 {len(self.detail)}）"
+            #     )
+            # --- 原代码（保留，已注释） ---
+            # ===== [S1-B 修正 END] =====
         return self
 
 
@@ -177,6 +190,14 @@ class Defect(BaseModel):
 
     # --- Sprint 1 专家判定（§23.1）---
     expert_decision: ExpertDecision = "pending"
+
+    # ===== [S1-B 新增] provenance 标记 =====
+    # 用途：区分"LLM 原始输出"和"代码补齐（从 RuleResult 构造）"。
+    #   - synthesized=False：LLM 输出的缺陷（默认）
+    #   - synthesized=True ：Merge 层从 RuleResult 补齐的缺陷（LLM 未输出）
+    # 说明：不改变 10 字段口径，仅作为溯源标记，供 get_task / 诊断 / 前端使用。
+    # ===== [S1-B 新增 END] =====
+    synthesized: bool = False
 
     @field_validator("confidence")
     @classmethod
