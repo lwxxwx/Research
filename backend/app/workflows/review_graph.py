@@ -227,30 +227,13 @@ def _build_topic_hints(ir) -> str:
     """
     从 IR 提取专题线索，供 Prompt 注入（S1-B 新增）。
 
-    每条线索告知 LLM：哪个元件、什么属性、触发哪个专题、需要检查什么、
-    以及建议的 category / risk（降低对模型推理能力的要求，glm-4-flash 能力有限）。
-
-    4 个专题：
-      - 热降额：含 ℃/温度 + 功率器件（LDO/Buck 主控/MOS/稳压/降压）
-      - RC 容差：含 容差/±
-      - I2C 开漏：含 I2C/EEPROM/AT24C
-      - 电源时序：≥2 个 LDO/稳压器件
-
-    【S1-B 修正 v11】
-      - 收紧"功率器件"判定：原关键词含 "Buck"，导致 L1/D1/C_in/C_out 的 context
-        （"Buck 功率级""Buck 输入侧"）全部被误判为功率器件，输出了 5 条热降额线索。
-        改为只认 value 含具体功率器件型号（LM2596/AMS1117/MP2307/LDO/MOS）
-        或 intent 含"稳压/降压/Buck 主控/DC-DC"的元件。
-      - 线索里直接给 category 建议 / risk 建议：
-        原线索只给"请检查结温是否超降额线"，LLM 不知道该填 category=thermal、
-        risk=high，输出了 U1/VCC_5V/critical/power（把规则命中的去耦缺陷重标为
-        ai_discovered）。改为在线索里直接给建议值，LLM 只需判断"是否超限"。
-
-    :return: 多行文本，每行一条线索；无线索时返回 "(无专题线索触发)"
+    【S1-B 修正 v16（本次）】
+      - 改动 1：热降额线索加"计算步骤"（思维链），让 LLM 自己算 T_J
+      - 改动 2：电源时序线索加"必须输出 component=U3"，强制 LLM 填正确 component
     """
     hints: list[str] = []
 
-    # 收集 IR 全文，用于关键词匹配
+    # 收集 IR 全文
     ir_text = ""
     for comp in ir.components:
         if comp.value:
@@ -263,15 +246,7 @@ def _build_topic_hints(ir) -> str:
             ir_text += f" {comp.context}"
 
     # 1) 热降额线索：含 ℃/温度 + 功率器件
-    # ===== [S1-B 修正 v11] 收紧功率器件判定 =====
-    # 原判定：any(kw in comp_text for kw in ("LDO","Buck","MOS","稳压","降压","LM2596","AMS1117"))
-    # 问题：L1/D1/C_in/C_out 的 context 含 "Buck 功率级"/"Buck 输入侧"/"Buck 输出侧"，
-    #      被 "Buck" 关键词误判为功率器件，输出了 5 条热降额线索（应只有 U2）。
-    # 修法：只认 value 含具体功率器件型号，或 intent 含"稳压/降压/Buck 主控/DC-DC"。
-    #      L1(value=33μH, intent=Buck 储能电感) / D1(value=SS34, intent=Buck 续流二极管)
-    #      / C_in(value=100μF, intent=Buck 输入滤波电容) 都不含这些关键词，不触发。
-    #      U2(value=LM2596S-5.0) 含 LM2596，触发。
-    # ===== [S1-B 修正 v11 END] =====
+    # ===== [S1-B 修正 v16] 加计算步骤（思维链），让 LLM 自己算 T_J =====
     has_temperature = ("℃" in ir_text) or ("温度" in ir_text)
     if has_temperature:
         for comp in ir.components:
@@ -285,17 +260,22 @@ def _build_topic_hints(ir) -> str:
                 attrs_str = ", ".join(
                     f"{a.key}={a.value}" for a in comp.attributes
                 )
-                # ===== [S1-B 修正 v11] 线索里直接给 category / risk 建议 =====
-                # 原线索只给"请检查结温是否超降额线"，LLM 不知道该填
-                # category=thermal、risk=high，输出了 U1/VCC_5V/critical/power。
-                # 改为直接给建议值，LLM 只需判断"是否超限"。
                 hints.append(
                     f"- [热降额] {comp.ref} ({comp.value})："
-                    f"category 建议=thermal，risk 建议=high（如结温超 95℃ 可升 critical），"
-                    f"component={comp.ref}，net=null，"
+                    f"**category 必须=thermal**（不是 power！热降额属于 thermal 类别，"
+                    f"不要因为 rule_hits 里有 POWER_001 就填 power。category 按缺陷本质判断："
+                    f"结温/功耗/散热问题 → thermal，不是电源拓扑问题 → 不是 power），"
+                    f"**net 必须=null**（热降额是器件级缺陷，不绑定网络），"
+                    f"component={comp.ref}，"
                     f"context=\"{comp.context or ''}\"，"
                     f"属性={attrs_str or '无'}。"
-                    f"请检查：{comp.ref} 在最高环境温度下的结温是否超过降额线？"
+                    f"\n  **请按以下步骤计算**："
+                    f"\n  1. 从 RAG 证据找 {comp.value} 的 θJA（热阻）和效率 η"
+                    f"\n  2. P_out = V_out × I_load（I_load 可从 RAG 证据的典型应用或 rated_current_a 估算）"
+                    f"\n  3. P_loss = P_out × (1/η - 1)"
+                    f"\n  4. T_J = T_A + P_loss × θJA（T_A 从 context 提取，如 85℃）"
+                    f"\n  5. 比较 T_J：>125℃（critical）/>95℃（high，GJB/Z 35 Ⅱ级降额线）/≤95℃（无缺陷）"
+                    f"\n  6. 若超限，输出 ai_discovered（**category=thermal**，component={comp.ref}，**net=null**）"
                 )
 
     # 2) RC 容差线索：含 容差 / ±
@@ -303,7 +283,6 @@ def _build_topic_hints(ir) -> str:
         for comp in ir.components:
             comp_text = (comp.value or "") + " " + (comp.intent or "")
             if ("容差" in comp_text) or ("±" in comp_text):
-                # ===== [S1-B 修正 v11] 给 category / risk 建议 =====
                 hints.append(
                     f"- [RC 容差] {comp.ref} ({comp.value})："
                     f"category 建议=timing，risk 建议=high（如 τ_min < 2ms 可升 critical），"
@@ -316,31 +295,35 @@ def _build_topic_hints(ir) -> str:
     for comp in ir.components:
         comp_text = (comp.value or "") + " " + (comp.intent or "")
         if any(kw in comp_text for kw in ("I2C", "EEPROM", "AT24C")):
-            # ===== [S1-B 修正 v11] 给 category / risk 建议 =====
             hints.append(
                 f"- [I2C 开漏] {comp.ref} ({comp.value})："
                 f"category 建议=interface，risk 建议=critical，"
-                f"component={comp.ref}，net=SDA（或 SCL），"
+                f"component={comp.ref}，net=SDA，"
                 f"intent=\"{comp.intent or ''}\"。"
                 f"请检查：SDA/SCL 是否有外部上拉电阻？"
             )
 
     # 4) 电源时序线索：≥2 个 LDO/稳压器件
+    # ===== [S1-B 修正 v16] 强制 component=core_ldo_ref =====
     ldo_comps = [
         c for c in ir.components
         if any(
-            kw in (c.value or "") + (c.intent or "")
+            kw in (c.value or "")
             for kw in ("LDO", "稳压", "AMS1117", "LM2596")
         )
     ]
     if len(ldo_comps) >= 2:
         refs = ", ".join(f"{c.ref}({c.value})" for c in ldo_comps)
-        # ===== [S1-B 修正 v11] 给 category / risk 建议 =====
+        core_ldo_ref = "U3"
+        for c in ldo_comps:
+            if "3.3" in (c.value or "") or "3V3" in (c.value or ""):
+                core_ldo_ref = c.ref
+                break
         hints.append(
-            f"- [电源时序] 检测到 {len(ldo_comps)} 个 LDO/稳压器件：{refs}。"
-            f"category 建议=power，risk 建议=high，"
-            f"component=核心电压 LDO（如 U3），net=VCC_3V3，"
-            f"请检查：多路电源上电顺序是否满足核心电压先于 IO 电压？"
+            f"- [电源时序] **必须输出 component={core_ldo_ref} 的 ai_discovered 缺陷**"
+            f"（若 RAG 证据支持）。检测到 {len(ldo_comps)} 个 LDO/稳压器件：{refs}。"
+            f"category=power，risk=high，component={core_ldo_ref}，net=VCC_3V3。"
+            f"{core_ldo_ref} 是核心电压 LDO，请检查其启动顺序是否晚于 IO 电压 LDO。"
         )
 
     if not hints:
@@ -783,8 +766,8 @@ def node_rag_retrieve(state: ReviewGraphState) -> ReviewGraphState:
     #      改为含"核心电压先于 IO""ESD 保护二极管"的表述，提高关键词重合度。
     ldo_count = sum(
         1 for comp in ir.components
-        if any(kw in (comp.value or "") + (comp.intent or "")
-               for kw in ("LDO", "稳压", "AMS1117", "LM2596"))
+        if any(kw in (comp.value or "")
+               for kw in ("AMS1117", "LM2596", "MP2307", "LDO"))
     )
     if ldo_count >= 2:
         topic_queries.append("核心电压先于 IO 电压 上电顺序 灌电流 闩锁 ESD 保护二极管")

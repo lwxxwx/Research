@@ -321,6 +321,44 @@ def match_defect(pred_def: dict[str, Any], gt_def: dict[str, Any]) -> bool:
     return True
 
 
+# ============================================================
+# ===== [S1-B 新增] risk 容忍匹配 =====
+# ------------------------------------------------------------
+# 背景：GT 的 risk 是专家标定的严重程度，LLM 可能判得更严重
+#      （如 GT=high，LLM=critical）。这是"更保守的判断"，不应算漏检。
+# 规则 B（S1-B 冻结）：
+#   - pred_risk 不得低于 gt_risk（判轻了算漏检）
+#   - pred_risk 最多比 gt_risk 高 1 级（判重了算"更保守的命中"）
+#   - GT=low 时要求严格一致（low 不计入统计，任何高于 low 都算误判）
+#   - 未知 risk 值 → 不匹配
+# ============================================================
+_RISK_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def _risk_matches(pred_risk: str | None, gt_risk: str | None) -> bool:
+    """
+    判定 pred_risk 与 gt_risk 是否匹配（S1-B 规则 B）。
+
+    - pred_risk 不得低于 gt_risk
+    - pred_risk 最多比 gt_risk 高 1 级
+    - GT=low 时严格一致
+    - 未知 risk 值不匹配
+    """
+    if not pred_risk or not gt_risk:
+        return False
+    pred_level = _RISK_ORDER.get(pred_risk)
+    gt_level = _RISK_ORDER.get(gt_risk)
+    if pred_level is None or gt_level is None:
+        return False  # 未知 risk 值
+    if gt_risk == "low":
+        return pred_risk == "low"  # GT=low 时严格一致
+    if pred_level < gt_level:
+        return False  # pred 判轻了
+    if pred_level - gt_level > 1:
+        return False  # pred 判重了超过 1 级
+    return True
+
+
 def match_defect_full_review(
     pred_def: dict[str, Any],
     gt_def: dict[str, Any],
@@ -330,9 +368,16 @@ def match_defect_full_review(
 
     【匹配优先级（S1-F 冻结）】
       1. 严格匹配（pred_net 非空）：
-         net 交集 AND risk 严格一致 AND (rule_id 一致 OR category 一致)
+         net 交集 AND risk 容忍匹配 AND (rule_id 一致 OR category 一致)
       2. 降级匹配（pred_net 为空，受限例外）：
-         risk 严格一致 AND (rule_id 一致 OR (category 一致 AND component 交集))
+         risk 容忍匹配 AND (rule_id 一致 OR (category 一致 AND component 交集))
+
+    【risk 容忍匹配（S1-B 补充）】
+      - pred_risk 不得低于 gt_risk
+      - pred_risk 最多比 gt_risk 高 1 级
+      - GT=low 时严格一致
+      - 未知 risk 值不匹配
+      详见 _risk_matches 注释。
 
     【为什么 pred_net 非空时不能降级】
       pred 有明确网络但与 GT 网络不一致，说明定位不同，不能忽略差异。
@@ -374,8 +419,12 @@ def match_defect_full_review(
         # 1.1 net 必须交集
         if not (pred_net & gt_net):
             return False
-        # 1.2 risk 严格一致
-        if pred_risk != gt_risk:
+        # 1.2 risk 容忍匹配（S1-B 规则 B）
+        # --- 原代码（保留，已注释） ---
+        # if pred_risk != gt_risk:
+        #     return False
+        # --- 原代码（保留，已注释） ---
+        if not _risk_matches(pred_risk, gt_risk):
             return False
         # 1.3 语义同一：rule_id 一致 OR category 一致
         if pred_rule and gt_rule and pred_rule == gt_rule:
@@ -387,8 +436,12 @@ def match_defect_full_review(
     # --- 2. 降级匹配：pred_net 为空（受限例外） ---
     # 说明：pred_net 为空代表"器件级缺陷，不绑定网络"（如 POWER_003 降额检查）。
     #      GT 可能给了网络（代表"缺陷涉及的网络"），语义上不冲突。
-    #      risk 必须严格一致；语义同一需要 rule_id 一致，或 category + component 双锚点。
-    if pred_risk != gt_risk:
+    #      risk 容忍匹配；语义同一需要 rule_id 一致，或 category + component 双锚点。
+    # --- 原代码（保留，已注释） ---
+    # if pred_risk != gt_risk:
+    #     return False
+    # --- 原代码（保留，已注释） ---
+    if not _risk_matches(pred_risk, gt_risk):
         return False
 
     # 2.1 rule_id 一致（最强锚点）

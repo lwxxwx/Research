@@ -311,6 +311,26 @@ JSON 顶层结构：
 5. `category` 取值见 6.1 枚举
 6. `defect_id` 在本次报告内**唯一**
 
+## 6.2.1 net 字段填写规范
+
+`net` 字段表示缺陷的**定位锚点**，必须区分"网络级缺陷"和"器件级缺陷"：
+
+| 缺陷类型 | net 填法 | 判断依据 | 示例 |
+|---|---|---|---|
+| **网络级缺陷** | 填具体网络名 | 缺陷主体是"某个网络" | 去耦电容缺失 → `net=VCC_5V`；I2C 无上拉 → `net=SDA` |
+| **器件级缺陷** | 填 `null` | 缺陷主体是"器件本身" | 热降额 → `component=U2, net=null`；使能脚悬空 → `component=U2, net=null` |
+
+**判断口诀**：问自己"这个缺陷是'某个网络'的问题，还是'某个器件'的问题？"
+
+## 6.2.2 category 字段填写规范
+
+- `origin=rule`：`category` 必须与 rule_hits 的 category 一致
+- `origin=ai_discovered`：`category` 必须根据缺陷性质判断，**不得抄 rule_hits 的 category**
+  - 热降额 → `thermal`
+  - RC 容差 → `timing`
+  - I2C 开漏 → `interface`
+  - 电源时序 → `power`
+
 ## 6.3 Evidence 的硬约束
 
 | type | 必填字段 | 最小长度 |
