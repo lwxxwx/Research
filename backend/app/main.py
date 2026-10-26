@@ -29,14 +29,9 @@ app.add_middleware(
 register_exception_handlers(app)
 
 # 健康检查接口
-@app.get("/api/v1/healthz")
-async def healthz():
-    # 适度增强：返回环境信息
-    return {
-        "status": "ok",
-        "env": settings.app_env,
-        "version": "sprint0-v1.0"
-    }
+# ===== [S1-G G4] healthz 迁移到 app/api/healthz.py，通过 router 挂载 =====
+from app.api import api_router
+app.include_router(api_router)
 
 if __name__ == "__main__":
     import uvicorn

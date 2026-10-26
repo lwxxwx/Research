@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import re
 import logging
 from datetime import datetime
 from typing import Any
@@ -239,6 +240,168 @@ def list_tasks(limit: int = 20) -> list[dict[str, Any]]:
 
         return result
 
+def _infer_case_class(case_id: str | None) -> str | None:
+    """
+    从 case_id 推断 case_class（A / B）。
+
+    【G2 决策 2：不默认归 A】
+      - A 类：`^case\\d{3}$`（case001–case006）
+      - B 类：`^case_b\\d{2}_[a-z0-9_]+_B$`（case_b01–case_b04）
+      - 未知或缺失 → 返回 None（不默认归 A）
+
+    【为什么返回 None 而不是 "A"】
+      - 默认归 A 会让未知 case 被误归类为 A 类
+      - 返回 None 让上层明确知道"这个 case 分类未知"
+      - `list_tasks_filtered(case_class="A")` 只返回明确匹配 A 类的，未知分类不命中
+      - `list_tasks_filtered(case_class=None)` 时，未知分类仍返回（不丢失）
+
+    :param case_id: 业务 Case ID，可能为 None（如 schematic_case_id 为 NULL 查不到 case_id）
+    :return: "A" / "B" / None
+    """
+    if not case_id:
+        return None
+
+    # A 类：case + 3 位数字
+    if re.match(r"^case\d{3}$", case_id):
+        return "A"
+
+    # B 类：case_b + 2 位数字 + _ + 描述 + _B
+    if re.match(r"^case_b\d{2}_[a-z0-9_]+_B$", case_id):
+        return "B"
+
+    return None
+
+def list_tasks_filtered(
+    *,
+    case_class: str | None = None,
+    review_status: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """
+    按条件筛选任务列表（G2 新增，供 API 层用）。
+
+    【与 list_tasks 的区别】
+      - list_tasks(limit=20) -> list[dict]（原函数，不动，保持兼容）
+      - list_tasks_filtered(...) -> dict{total, items, errors}（新函数，支持筛选 + 分页）
+
+    【G2 决策与约束】
+      - 决策 1（status 过滤）：G2 不实现。review_result 表无 task_status 列，
+        从 review_output_json.errors 推断不可靠（errors 含非阻断 warnings，
+        非纯任务级错误标志）。S2 加真实 task_status 落库后再做。
+      - 决策 2（case_class 推断）：Python 层过滤。DB 无 case_class 列，
+        用 `_infer_case_class(case_id)` 从 case_id 前缀推断。
+        未知/缺失 case_id 返回 None，不默认归 A。
+      - 决策 3（JOIN）：用 outerjoin 避免 N+1。保留没有关联 Case 的 ReviewResult。
+      - 决策 4（参数校验）：Service 层对非法 case_class / limit / offset 抛 ValueError。
+        API 层用 Query/Literal 校验，明确参数错误转 422。
+
+    【筛选逻辑（先过滤后 total 再分页）】
+      1. DB 层：按 review_status 过滤（如果传了）
+      2. JOIN 拿 case_id（outerjoin，无关联的 case_id 为 None）
+      3. Python 层：按 case_class 过滤（如果传了）——未知分类不命中
+      4. Python 层：收集 errors（未知/缺失 case_id）
+      5. total = 过滤后的总数
+      6. 分页：items = 过滤后的 [offset:offset+limit]
+
+    【返回结构】
+      {
+        "total": int,                  # 过滤后的总数（不是分页后）
+        "items": list[dict],           # 当前页的任务
+        "errors": list[str],           # 未知/缺失 case_id 的说明
+      }
+      item 字段：task_id / case_id / case_class / defects_count / review_status / created_at
+      **不含 status 字段**（G2 决策 1：status 过滤不实现）
+
+    :param case_class: "A" / "B" / None（None 表示不过滤）
+    :param review_status: "AI_CONFIRMED" / "NEED_EXPERT_REVIEW" / "LOW_CONFIDENCE" / None
+    :param limit: 每页数量，必须 >= 0
+    :param offset: 偏移量，必须 >= 0
+    :return: {"total": int, "items": list[dict], "errors": list[str]}
+    :raises ValueError: case_class / review_status 非法值，或 limit / offset 负数
+    """
+    from app.persistence.models import ReviewResult, SchematicCase
+
+    # ===== 决策 4：Service 层参数校验（ValueError） =====
+    # 不无差别捕获所有 ValueError，只在本函数入口校验并抛；
+    # 调用方（API 层）负责将其转换为 HTTP 422。
+    _VALID_CASE_CLASS = {"A", "B"}
+    _VALID_REVIEW_STATUS = {"AI_CONFIRMED", "NEED_EXPERT_REVIEW", "LOW_CONFIDENCE"}
+
+    if case_class is not None and case_class not in _VALID_CASE_CLASS:
+        raise ValueError(
+            f"case_class 必须为 'A' / 'B' / None，实际: {case_class!r}"
+        )
+    if review_status is not None and review_status not in _VALID_REVIEW_STATUS:
+        raise ValueError(
+            f"review_status 必须为 AI_CONFIRMED / NEED_EXPERT_REVIEW / "
+            f"LOW_CONFIDENCE / None，实际: {review_status!r}"
+        )
+    if limit < 0:
+        raise ValueError(f"limit 必须 >= 0，实际: {limit}")
+    if offset < 0:
+        raise ValueError(f"offset 必须 >= 0，实际: {offset}")
+
+    # ===== 决策 3：JOIN 拿 case_id，避免 N+1 =====
+    errors: list[str] = []
+
+    with get_db_session() as db:
+        # outerjoin：保留没有关联 Case 的 ReviewResult（schematic_case_id 为 NULL 的）
+        query = (
+            db.query(ReviewResult, SchematicCase.case_id)
+            .outerjoin(
+                SchematicCase,
+                ReviewResult.schematic_case_id == SchematicCase.id,
+            )
+            .order_by(ReviewResult.id.desc())
+        )
+
+        # DB 层过滤：review_status
+        if review_status:
+            query = query.filter(ReviewResult.review_status == review_status)
+
+        rows = query.all()
+
+        # Python 层：按 case_class 过滤 + 收集 errors
+        filtered_items: list[dict[str, Any]] = []
+        for rr, case_id in rows:
+            item_case_class = _infer_case_class(case_id)
+
+            # 收集 errors（未知/缺失 case_id）
+            if case_id is None:
+                errors.append(
+                    f"task_id={rr.task_id}: schematic_case_id 为 NULL 或关联的 case 不存在"
+                )
+            elif item_case_class is None:
+                errors.append(
+                    f"task_id={rr.task_id}: case_id={case_id!r} 不符合 A/B 命名规范，"
+                    f"case_class=Unknown"
+                )
+
+            # case_class 过滤（如果传了）
+            # 决策 2：传 A/B 时，未知分类不命中；不传时，未知分类仍返回
+            if case_class is not None and item_case_class != case_class:
+                continue
+
+            filtered_items.append({
+                "task_id": rr.task_id,
+                "case_id": case_id,
+                "case_class": item_case_class,
+                "defects_count": rr.total_defects,
+                "review_status": rr.review_status,
+                "created_at": rr.created_at.isoformat() if rr.created_at else None,
+                # 决策 1：不含 status 字段
+            })
+
+        # 决策 3（后半句）：先过滤后 total 再分页
+        total = len(filtered_items)
+        paginated = filtered_items[offset: offset + limit]
+
+        return {
+            "total": total,
+            "items": paginated,
+            "errors": errors,
+        }
 
 # ============================================================
 # get_task_defects：查询任务下的缺陷明细
@@ -287,7 +450,24 @@ def get_task_defects(task_id: str) -> list[dict[str, Any]]:
                 "review_status": d.review_status,
                 "origin": d.origin,
                 "rule_id": d.rule_id,
+                # ===== [S1-G G1 修正] 补齐 §23.1 要求的 expert_decision 3 字段 =====
+                # 原因：models.py::ReviewDefect 已有 3 字段（阶段 A 迁移落地），
+                #      但 get_task_defects 序列化只带了 expert_decision，
+                #      漏了 expert_decision_updated_at / expert_decision_by，
+                #      导致 API 层无法展示"谁在什么时候做了什么判定"。
+                # 修法：只补 2 个字段，expert_decision 已有。
+                #      不改查询、不改签名，保持向后兼容。
+                # --- 原代码（保留，已注释） ---
+                # "expert_decision": d.expert_decision,
+                # --- 原代码（保留，已注释） ---
                 "expert_decision": d.expert_decision,
+                "expert_decision_updated_at": (
+                    d.expert_decision_updated_at.isoformat()
+                    if d.expert_decision_updated_at is not None
+                    else None
+                ),
+                "expert_decision_by": d.expert_decision_by,
+                # ===== [S1-G G1 修正 END] =====
             }
             for d in defects
         ]
@@ -387,10 +567,150 @@ def submit_task_feedback(
         svc = FeedbackService()
         return svc.submit_feedback(db, fb_in)
 
+# ============================================================
+# list_cases：列出所有 Case 元信息（G3 新增，供 API 层用）
+# ------------------------------------------------------------
+# 数据来源：data/cases/*/info.yaml（由 review_graph.CASES_ROOT 统一决定根路径）
+#
+# 【G3 决策（已定稿）】
+#   - 决策 1（CASES_ROOT）：复用 review_graph.CASES_ROOT；函数内 import，便于
+#                          测试 monkeypatch 原模块属性（`rg.CASES_ROOT`）
+#   - 决策 2（必填字段）：case_id + case_class 必填；case_class 先检查类型再检查
+#                        合法值（非 str / 空 str / 非 A/B 都按非法资产处理）
+#   - 决策 3（排序）：A 类在前、B 类在后，组内 case_id 字典序
+#   - 决策 4（错误处理）：只校验含 info.yaml 的目录；坏 Case 跳过 + 记 errors；
+#                        纯空目录（无 info.yaml）静默跳过
+#   - 决策 5（tags）：统一 list[str]，兼容 list / str(逗号分隔) / None
+#   - total == len(items)（恒等，不做额外过滤）
+# ============================================================
+def list_cases() -> dict[str, Any]:
+    """
+    扫描 data/cases/*/info.yaml，返回 Case 元信息列表（G3 新增）。
+
+    返回结构：
+      {
+        "total": int,                 # == len(items)
+        "items": list[dict],          # A 类在前、B 类在后，组内 case_id 字典序
+        "errors": list[str],          # 坏 Case 说明（含目录名 + 原因）
+      }
+
+    item 字段（6 个）：
+      case_id / case_class / title / description / calibration_status / tags
+
+    【case_class 校验顺序（决策 2 补充）】
+      1. 类型：必须是 str（非 str → 非法）
+      2. 非空：str.strip() 非空（空串 / 纯空白 → 非法）
+      3. 合法值：必须 in ("A", "B")（其他 → 非法）
+      任一不满足 → 跳过 + errors 记 "目录名: 原因"
+
+    【tags 归一化（决策 5）】
+      - list/tuple → 元素转 str + strip，过滤空串
+      - str        → split(",") + strip，过滤空串
+      - None/缺失  → []
+
+    :return: {"total": int, "items": list[dict], "errors": list[str]}
+    """
+    import yaml
+
+    # 决策 1：函数内 import，便于测试 monkeypatch rg.CASES_ROOT
+    from app.workflows.review_graph import CASES_ROOT
+
+    errors: list[str] = []
+    items: list[dict[str, Any]] = []
+
+    if not CASES_ROOT.exists():
+        errors.append(f"CASES_ROOT 不存在: {CASES_ROOT}")
+        return {"total": 0, "items": [], "errors": errors}
+
+    def _normalize_tags(raw: Any) -> list[str]:
+        """决策 5：tags 统一为 list[str]。"""
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            return [t.strip() for t in raw.split(",") if t.strip()]
+        if isinstance(raw, (list, tuple)):
+            return [str(t).strip() for t in raw if str(t).strip()]
+        # 其他类型保守转 str 包一层
+        return [str(raw)]
+
+    # 遍历 CASES_ROOT 下的直接子目录
+    for case_dir in sorted(CASES_ROOT.iterdir()):
+        if not case_dir.is_dir():
+            continue
+
+        info_file = case_dir / "info.yaml"
+        if not info_file.exists():
+            # 决策 4：纯空目录（无 info.yaml）静默跳过
+            continue
+
+        # 解析 YAML
+        try:
+            raw = yaml.safe_load(info_file.read_text(encoding="utf-8"))
+        except Exception as exc:
+            errors.append(
+                f"{case_dir.name}: info.yaml 解析失败: {type(exc).__name__}: {exc}"
+            )
+            continue
+
+        if not isinstance(raw, dict):
+            errors.append(
+                f"{case_dir.name}: info.yaml 顶层不是 dict，实际 {type(raw).__name__}"
+            )
+            continue
+
+        # ===== 决策 2：case_id 必填 =====
+        case_id = raw.get("case_id")
+        if not isinstance(case_id, str) or not case_id.strip():
+            errors.append(
+                f"{case_dir.name}: case_id 缺失或非法（需非空字符串），"
+                f"实际 {case_id!r}"
+            )
+            continue
+        case_id = case_id.strip()
+
+        # ===== 决策 2 补充：case_class 先类型、再非空、再合法值 =====
+        case_class = raw.get("case_class")
+        if not isinstance(case_class, str):
+            errors.append(
+                f"{case_dir.name}: case_class 类型非法（需 str），"
+                f"实际 {type(case_class).__name__}={case_class!r}"
+            )
+            continue
+        case_class = case_class.strip()
+        if not case_class:
+            errors.append(f"{case_dir.name}: case_class 为空字符串")
+            continue
+        if case_class not in ("A", "B"):
+            errors.append(
+                f"{case_dir.name}: case_class={case_class!r} 非 A/B，跳过"
+            )
+            continue
+
+        items.append({
+            "case_id": case_id,
+            "case_class": case_class,
+            "title": raw.get("title"),
+            "description": raw.get("description"),
+            "calibration_status": raw.get("calibration_status"),
+            "tags": _normalize_tags(raw.get("tags")),
+        })
+
+    # ===== 决策 3：A 类在前、B 类在后，组内 case_id 字典序 =====
+    items.sort(key=lambda it: (0 if it["case_class"] == "A" else 1, it["case_id"]))
+
+    # ===== total == len(items)（恒等） =====
+    return {
+        "total": len(items),
+        "items": items,
+        "errors": errors,
+    }
+
 __all__ = [
     "create_task",
     "get_task",
     "list_tasks",
+    "list_tasks_filtered",   # ← G2 新增（补进 __all__）
+    "list_cases",             # ← G3 新增
     "get_task_defects",
     "submit_task_feedback",
 ]
