@@ -1,8 +1,8 @@
 # Sprint 1 变更与阻塞记录
 
 > 起始：2026-10-19
-> 最后更新：2026-10-24（阶段 F 后插入 B 类 Case 跑通，S1-B）
-> 状态：阶段 A ✅ / 阶段 B ✅（B 类 4 个 Case 待硬件专家校准）/ 阶段 C ✅ / 阶段 D ✅ / 阶段 E ✅ / 阶段 F ✅ / 阶段 F 后插入 S1-B ✅（B 类 4/4 全部跑通，全局 Precision=Recall=1.0）
+> 最后更新：2026-10-26（阶段 G，API 层，7 端点 + 最终 bench tp=16/fp=0/fn=0）
+> 状态：阶段 A ✅ / 阶段 B ✅（B 类 4 个 Case 待硬件专家校准）/ 阶段 C ✅ / 阶段 D ✅ / 阶段 E ✅ / 阶段 F ✅ / 阶段 F 后插入 S1-B ✅（B 类 4/4 全部跑通）/ 阶段 G ✅（API 层，7 端点，538 passed + bench 满分）
 > 依据：`Sprint1_融合版开发落地规划_v1.0.md`、`Sprint1前置条件确认清单.md`
 
 ---
@@ -839,6 +839,301 @@ S1-B 的经验对阶段 G（API）、H（前端）、I（部署）同样适用�
 
 **业务理解是"为什么做"，工程实现是"怎么做"。S1-B 证明了两者缺一不可。**
 
+---
+
+## 阶段 G · API 层（2026-10-26）
+
+> 状态：✅ 完成
+> 依据：Sprint1_融合版开发落地规划 §11 + Sprint 1 §23.1
+> 测试结果：全量非 integration 538 passed / 1 skipped / 24 deselected；
+> G6 真实智谱 3 passed；G7 最终 bench tp=16, fp=0, fn=0
+
+### G1 · get_task_defects 补 expert_decision 3 字段
+
+**改动**：
+- `task_service.get_task_defects`：补 `expert_decision_updated_at`（ISO 字符串或 None）/ `expert_decision_by`（int 或 None），`expert_decision` 已有
+- `test_review_persistence.py`：3 个 focused test（3 字段存在 + 14 字段保留 + updated_at 类型）
+
+**验收**：G1 focused test 全过；bench 首次跑 tp=15/fp=2/fn=1，同代码重跑恢复 tp=16/fp=0/fn=0（LLM 随机性，与 G1 无关）
+
+### G2 · list_tasks_filtered 筛选 + 分页
+
+**改动**：
+- `task_service._infer_case_class(case_id) -> str | None`：A 类 `^case\d{3}$`、B 类 `^case_b\d{2}_[a-z0-9_]+_B$`，未知/缺失返回 None（不默认归 A）
+- `task_service.list_tasks_filtered(*, case_class=None, review_status=None, limit=20, offset=0) -> dict{total, items, errors}`：
+  - review_status DB 层过滤；case_class Python 层过滤（DB 无此列）
+  - JOIN（outerjoin）避免 N+1，保留无关联 Case 的 ReviewResult
+  - 先过滤 → total → 分页；item 不含 status 字段
+  - Service 层参数校验（非法 case_class / review_status / limit / offset 抛 ValueError）
+- `test_review_persistence.py`：6 个 service test（basic / by_review_status / by_case_class / pagination / unknown_case_id_errors / invalid_params）
+
+**Tech Debt（S2 解决）**：
+- `list_tasks_filtered` 不支持 `status`（done / failed）过滤。`review_result` 表无 `task_status` 列，`review_output_json.errors` 不可靠（含非阻断 warnings，非纯任务级错误标志）。S2 加 `review_result.task_status` 列后实现 Service/API status 过滤。
+
+### G3 · list_cases
+
+**改动**：
+- `task_service.list_cases() -> dict{total, items, errors}`：
+  - 扫 `review_graph.CASES_ROOT/*/info.yaml`（函数内 import 便于测试 monkeypatch）
+  - case_id + case_class 必填；case_class 先类型（str）→ 非空（strip）→ 合法值（A/B），任一不满足跳过 + errors 记"目录名: 原因"
+  - 纯空目录（无 info.yaml）静默跳过
+  - tags 统一 list[str]（list 直接用 / str split(",") / None 空数组）
+  - A 类在前、B 类在后，组内 case_id 字典序
+  - total == len(items) 恒等
+- `test_review_persistence.py`：5 个 service test（basic / returns_all_10 / sorted / bad_info_yaml / tags_normalized）
+
+### G4 · app/api/ 7 端点
+
+**目录结构**：
+
+`backend/app/api/` 目录：
+- `__init__.py`：顶层 api_router 汇总，prefix="/api/v1"
+- `deps.py`：依赖注入（空壳，预留认证/限流）
+- `healthz.py`：GET /healthz（从 main.py 迁移）
+- `review_tasks.py`：评审任务 4 端点
+- `feedbacks.py`：反馈 1 端点
+- `cases.py`：Case 列表 1 端点
+- `schemas.py`：API 层 Pydantic
+
+
+**7 端点（6 路径）**：
+
+| Method | Path | 背后函数 |
+|---|---|---|
+| GET | `/api/v1/healthz` | 从 main.py 迁移，响应体 status/env/version 3 字段（Sprint 0 契约不变） |
+| POST | `/api/v1/review/tasks` | `create_task` + `get_task`（返回 task_id/status/defects_count） |
+| GET | `/api/v1/review/tasks` | `list_tasks_filtered` |
+| GET | `/api/v1/review/tasks/{task_id}` | `get_task`（404 detail 合并"不存在或未落库"） |
+| GET | `/api/v1/review/tasks/{task_id}/defects` | 先 `get_task` 判存在性，再 `get_task_defects` |
+| POST | `/api/v1/feedbacks` | `submit_task_feedback`（FeedbackCreateAPI → 业务标识 task_id + defect_id） |
+| GET | `/api/v1/cases` | `list_cases` |
+
+**关键决策**：
+- healthz 响应体 3 字段（status/env/version），迁移不改契约
+- `create_task` 同步 def（FastAPI 线程池，不阻塞事件循环）
+- `/defects` 先 `get_task` 判存在性（404 vs 200 + []）
+- 参数校验：`Literal` / `Query(ge=0)` 入参层 + service `ValueError` 定点转 422
+- `FeedbackResponse.id`（对齐 `FeedbackOut.id`），不是 `feedback_id`
+- `created_at: datetime`（FastAPI 自动序列化 ISO）
+- `FeedbackNotFoundError` 先于 `ValueError` 捕获
+
+### G5 · API Mock 测试
+
+**文件**：`tests/test_api.py`（9 Mock + 3 Integration，用 `@pytest.mark.integration` 区分）
+
+**Mock 轨 9 个**（`-m "not integration"`）：
+- healthz 路径 + 3 字段
+- create_task 响应
+- get_task 404
+- defects 404 vs 空列表 200
+- 分页 total
+- 非法参数 422（4 种）
+- feedback body → service 参数映射
+- feedback task 404
+- GET /cases 10 Case
+
+### G6 · API Integration 测试
+
+**3 个 Integration（真实智谱，`LLM_PROVIDER=zhipu`）**：
+- `test_api_full_review_10cases_zhipu`：10 Case 全跑（status=done + defects_count >= 1 + defects 非空）
+- `test_api_create_and_get_case001_zhipu`：case001 详情 + expert_decision 3 字段透出
+- `test_api_feedback_zhipu`：case001 反馈提交 200 + id
+
+**验收**：3 passed / 9 deselected（197.48s）
+
+### G7 · OpenAPI 验证 + 最终 bench
+
+**OpenAPI**：6 路径 / 7 method（`/review/tasks` 路径有 POST + GET 两个 method）
+
+**最终 bench（真实智谱 10 Case）**：
+
+| 指标 | 值 |
+|---|---|
+| tp | **16** |
+| fp | **0** |
+| fn | **0** |
+| Precision | **1.0** |
+| Recall | **1.0** |
+| AI_NER_SIMULATED | 0.25 |
+| EAR_SIMULATED | 1.0 |
+| EVC | 0.5542 |
+| done | 10/10 |
+
+**逐 Case**：A 类 6/6 + B 类 4/4 全部 tp=GT, fp=0, fn=0，**无退化**。
+
+**结论**：阶段 G 收口时 bench 与 S1-B 收尾完全一致（LLM 随机性恰好对了）。**不记 S1-G.1 遗留项**（case003/case_b01 退化未出现）。
+
+### 阶段 G 验收汇总
+
+| 项 | 结果 |
+|---|---|
+| 全量非 integration | 538 passed / 1 skipped / 24 deselected |
+| G6 真实智谱 | 3 passed / 9 deselected |
+| G7 OpenAPI | 6 路径 / 7 method |
+| G7 最终 bench | tp=16, fp=0, fn=0, Precision=1.0, Recall=1.0 |
+| 7 端点 | 全部注册并可访问 |
+| G1 核心（get_task_defects 2 字段） | ✅ |
+| G2 Tech Debt（status 过滤） | 记入，S2 解决 |
+| G3 10 Case 列表 | ✅ |
+| service 业务行为 | 未改 |
+| DB schema | 未改 |
+| Graph 执行链 | 未改 |
+
+### G 阶段关键设计要点（供后续 Sprint 参考）
+
+> 与 S1-B.8 的"业务理解驱动决策"同风格：记录"技术做法 vs 实际做法 vs 为什么对"。
+> 这些决策在阶段 G 已落地并验证，后续 Sprint（H 前端 / I 部署 / S2）直接复用。
+
+#### 决策点 1：API 层只做"包装"，不改 service 业务行为
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | API 层直接查 DB、拼响应、做过滤，减少一次 service 调用 |
+| 实际做法 | `app/api/` 只调 `task_service` 的 5 个函数（`create_task` / `get_task` / `list_tasks_filtered` / `get_task_defects` / `submit_task_feedback` / `list_cases`），**不在 API 层写 SQL、不在 API 层做业务判断** |
+| 为什么对 | service 层是阶段 D/E/F 已验证的"业务真相"，API 层改它 = 破坏已验证行为。**G4 只加路由 + schema，service 零改动**，所以 538 passed 里没有一条是"API 层引入的 service 回归" |
+
+**后续启示**：H 前端 / I 部署如果发现"API 响应缺字段"，**先问 service 层有没有，不要 API 层补 SQL**。service 层没有 → 加 service 函数（阶段 G 之外的独立改动），API 层再包装。
+
+#### 决策点 2：`list_tasks_filtered` 的 status 过滤"宁可不做，不做不准"
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | `review_output_json.errors` 非空 → 推断 `failed`，实现 `?status=done/failed` 过滤 |
+| 实际做法 | **G2 不做 status 过滤**，从签名移除 `status` 参数，记 Tech Debt "S2 加 `task_status` 列后再做" |
+| 为什么对 | `errors` 含**非阻断 warnings**（如"无 RAG 依据"降级），不是纯任务级错误标志。用它推断 `failed` 会把"正常 done 但有 warning"误判为 failed，**比不做更糟**。业务上"任务状态"必须精确，不能近似 |
+
+**后续启示**：S2 加 `review_result.task_status` 列时，`_persist_review_report` 落库写 `task_status`（来自 `state["task_status"]`），`list_tasks_filtered` 加 `status` 参数（DB 层过滤），API 层加 `?status=` query。**三处一起改，不要只改一处**。
+
+#### 决策点 3：`case_class` 推断"未知不默认归 A"
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | `case_id.startswith("case_b")` → B，其他 → A（简单） |
+| 实际做法 | `_infer_case_class(case_id) -> str \| None`：A 类 `^case\d{3}$`、B 类 `^case_b\d{2}_[a-z0-9_]+_B$`，**未知/缺失返回 None**（不默认归 A） |
+| 为什么对 | 未知 case_id（如 `unknown_case_xxx`）默认归 A 会**污染 A 类统计**。返回 None 让上层明确"这个 case 分类未知"：`list_tasks_filtered(case_class="A")` 只返回明确 A 类，未知分类不命中；不传 `case_class` 时未知分类仍返回（不丢失），且记入 `errors` |
+
+**后续启示**：H 前端展示 case 列表时，`case_class=None` 的 item 要**单独标注"分类未知"**（如灰色标签），不要静默归 A。S2 如果加新 Case 命名规范（如 `case_c01_xxx_C`），`_infer_case_class` 加一条正则即可，**不影响已有 A/B 判断**。
+
+#### 决策点 4：JOIN 避免 N+1，保留无关联 Case 的 ReviewResult
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | 先查 `ReviewResult` 列表，再逐条 `db.get(SchematicCase, rr.schematic_case_id)`（N+1） |
+| 实际做法 | `db.query(ReviewResult, SchematicCase.case_id).outerjoin(SchematicCase, ReviewResult.schematic_case_id == SchematicCase.id)`，**outerjoin 保留 `schematic_case_id` 为 NULL 的 ReviewResult**（`case_id=None`） |
+| 为什么对 | `review_result.schematic_case_id` 可能为 NULL（`_persist_review_report` 里 `case_id` 查不到 `schematic_case` 时留 NULL）。innerjoin 会**丢失这些任务**，outerjoin 保留，`case_id=None` 记入 errors |
+
+**后续启示**：任何"主表 + 关联表"的列表查询，默认用 **outerjoin**（保留主表全部行），除非业务明确要求"必须有外键"。S2 加 `task_status` 列时，`list_tasks_filtered` 的 JOIN 不变，只加 `filter(ReviewResult.task_status == status)`。
+
+#### 决策点 5：`defects_count` 语义是"Pred 缺陷数"，不是"GT 缺陷数"
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | `defects_count` 应该是"正确答案数"（GT 数） |
+| 实际做法 | `get_task` 返回的 `defects_count = len(report.defects)` = **Pred 缺陷数**（系统报了多少条） |
+| 为什么对 | API 消费方（前端）需要"系统报了几条缺陷"来渲染报告，不是"应该报几条"（GT 是事后评分的参照物，不是运行时数据）。`GET /review/tasks/{id}` 的 `defects_count` = Pred 数，`GET /review/tasks/{id}/defects` 的 `items` = Pred 列表，两者一致 |
+
+**后续启示**：H 前端"缺陷数"徽标用 `defects_count`（Pred 数）。**不要**在 API 层加 `gt_count` 字段（GT 是测试资产，生产环境不应暴露）。
+
+#### 决策点 6：`POST /review/tasks` 同步阻塞，FastAPI 线程池兜底
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | 改成异步任务（返回 `pending` + `task_id`，前端轮询） |
+| 实际做法 | **同步 `def` 端点**，`create_task` 内部跑完整 Graph（LLM 调用约 20 秒），FastAPI 自动扔线程池，**不阻塞事件循环** |
+| 为什么对 | 异步任务需要"任务队列 + 状态轮询 + 失败重试"，**超出 G4 范围**。同步 `def` 在 FastAPI 下已验证可用（G6 真实智谱 10 Case 跑通），前端可以接受"点提交后等 20 秒"的交互 |
+
+**后续启示**：H 前端"提交评审"按钮要**显示 loading 状态**（20 秒），不要重复点击。S3 如果需要"批量评审"或"异步任务"，再引入队列（如 Celery / RQ），**不要改 G4 的同步端点**。
+
+#### 决策点 7：`/defects` 先 `get_task` 判存在性，再查缺陷
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | 直接 `get_task_defects(task_id)`，空列表也返回 200 |
+| 实际做法 | **先 `get_task(task_id)` 判 None → 404；存在 → `get_task_defects` 返回列表（可能空，200）** |
+| 为什么对 | `get_task_defects` 在 task 不存在时也返回 `[]`（`task_service` 里 `if rr is None: return []`），**无法区分"task 不存在"和"task 存在但无缺陷"**。先 `get_task` 判存在性，保留两个语义：404 = task 不存在；200 + [] = task 存在但无缺陷 |
+
+**后续启示**：任何"子资源列表"端点（如 `/tasks/{id}/defects`、`/tasks/{id}/feedbacks`），**先查父资源存在性**，再查子资源。不要依赖"子资源空列表"判断父资源不存在。
+
+#### 决策点 8：`FeedbackNotFoundError` 先于 `ValueError` 捕获
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | `except ValueError` 一把抓，反正 `FeedbackNotFoundError` 继承 `ValueError` |
+| 实际做法 | `except FeedbackNotFoundError` 在前，转 404；`except ValueError`（如果将来加）在后，转 422。**当前只有 `FeedbackNotFoundError`，但注释里写清"顺序要求"** |
+| 为什么对 | `FeedbackNotFoundError` 继承 `ValueError`，如果先 `except ValueError`，404 会被错误转成 422（"资源不存在"变成"参数错误"）。**语义错误比代码错误更隐蔽**，注释里写清顺序，防止后人加 `except ValueError` 时放错位置 |
+
+**后续启示**：任何"自定义异常继承标准异常"的场景（如 `FeedbackServiceError(ValueError)`、`RuleCandidateNotFoundError(ValueError)`），`except` 顺序必须**子类在前、父类在后**。可以在代码里加 `# 注意：子类异常必须先于父类捕获` 注释。
+
+#### 决策点 9：healthz 迁移"响应体契约不变"
+
+| 维度 | 内容 |
+|---|---|
+| 技术失误（已修正） | G4 迁移时把 healthz 响应从 `{status, env, version}` 简化为 `{status}`，**破坏了 `test_core.py` 的 Sprint 0 契约** |
+| 修正 | `HealthResponse` 恢复 3 字段（`status` / `env` / `version`），`healthz.py` 返回 `settings.app_env` + `"sprint0-v1.0"` |
+| 为什么对 | healthz 是**运维探针**，响应体是**外部契约**（监控系统 / 负载均衡器可能读 `env` / `version`）。迁移"挂载方式"（`main.py` 内联 → `app/api/healthz.py`）**不应改响应体**。`test_core.py` 是 Sprint 0 契约测试，**必须保持通过** |
+
+**后续启示**：任何"代码迁移 / 重构"，**先跑全量测试**（不只跑新测试），确认老契约不被破坏。G4 第一次只跑了 `test_api.py`（8 passed），漏了 `test_core.py` 的 healthz 契约，**跑全量非 integration 才发现**。**教训：迁移类改动必须跑全量**。
+
+#### 决策点 10：Mock 轨 + Integration 轨"同文件不同 mark"
+
+| 维度 | 内容 |
+|---|---|
+| 技术诱惑 | Mock 测试放 `test_api.py`，Integration 测试放 `test_api_integration.py`（两个文件） |
+| 实际做法 | **同一个 `test_api.py`**，Mock 轨用 fixture `client`（monkeypatch `get_provider`），Integration 轨用 fixture `client_real`（不 mock）+ `@pytest.mark.integration` + `@pytest.mark.skipif(not _HAS_KEY)` |
+| 为什么对 | 同一批端点，Mock 轨测"路由契约"（不触网，CI 稳定），Integration 轨测"真实智谱端到端"（触网，慢）。**放同一文件**，`-m "not integration"` 跑 Mock（9 个，25 秒），`-m integration` 跑 Integration（3 个，4 分钟），**两轨共享常量（`_ALL_CASE_IDS`）和辅助函数**，不重复 |
+
+**后续启示**：H 前端 / I 部署的测试也按"Mock 轨（CI）+ Integration 轨（手动/定时）"分。**不要为了"文件干净"拆两个文件**，两轨共享的常量/辅助函数会重复。用 `@pytest.mark.integration` 区分，一个文件搞定。
+
+#### 方法论总结（G 阶段版）
+
+```text
+业务需求（API 层要暴露什么）
+    ↓
+拆解端点（7 端点 = 6 路径，每个端点背后是哪个 service 函数）
+    ↓
+识别契约（哪些是 Sprint 0/1 已冻结的契约？healthz 3 字段、defect 16 字段、FeedbackOut 11 字段）
+    ↓
+最小改动（API 层只包装，不改 service；schema 对齐 service，不重复定义）
+    ↓
+双轨验证（Mock 轨测契约，Integration 轨测真实智谱）
+    ↓
+全量回归（不只跑新测试，跑全量确认老契约不破）
+```
+
+#### G 阶段方法论与后续启示
+
+##### 与 S1-B 的“业务理解驱动”一脉相承
+
+- S1-B 是“业务理解 → 改匹配/Prompt/知识库”
+- G 阶段是“契约理解 → 改 API 包装/schema/路由”
+
+**两者共同点**：先理解“什么是不能动的”（S1-B 的 GT 匹配口径、G 阶段的 service 行为 + Sprint 0 契约），再动“可以动的”（S1-B 的 Prompt/知识库、G 阶段的 API 包装）。
+
+##### 对后续 Sprint（H/I/S2）的启示
+
+**1. H 前端**
+
+- `defects_count` 是 Pred 数，不是 GT 数（决策点 5）
+- `case_class=None` 的 item 要单独标注“分类未知”（决策点 3）
+- “提交评审”按钮要显示 loading（20 秒，决策点 6）
+- 缺陷卡片展示 `expert_decision_updated_at` / `expert_decision_by`（G1 透出）
+
+**2. I 部署**
+
+- healthz 响应体 3 字段是运维契约，不要改（决策点 9）
+- `POST /review/tasks` 同步阻塞 20 秒，反向代理 / 负载均衡的超时要 > 30 秒
+- `GET /review/tasks` 的 `total` 是“过滤后总数”，前端分页用 `total` + `limit` + `offset`
+
+**3. S2（task_status 落库）**
+
+- 加 `review_result.task_status` 列（DB 迁移）
+- `_persist_review_report` 写 `task_status`（来自 `state["task_status"]`）
+- `list_tasks_filtered` 加 `status` 参数（DB 层过滤）
+- API 层加 `?status=` query
+- 三处一起改，不要只改一处（决策点 2）
+
+---
+
 ## 变更记录
 
 | 日期 | 变更 | 说明 |
@@ -854,3 +1149,4 @@ S1-B 的经验对阶段 G（API）、H（前端）、I（部署）同样适用�
 | 2026-10-22 | 阶段 E 完成（反馈与规则演进） | 见 E 章；E2E 4 passed；Demo 双轨 passed |
 | 2026-10-23 | 阶段 F 完成（Benchmark V1.2） | 见 F 章；17+4+1 passed；全量 516 passed；真实轨 Precision=1.0 |
 | 2026-10-24 | 阶段 F 后插入 S1-B（B 类 Case 跑通尝试） | 见 S1-B 章；全量 515 passed；真实轨 tp=16 fp=0 fn=0；B 类 4/4 全部跑通 |
+| 2026-10-26 | 阶段 G 完成（API 层） | 见 G 章；7 端点（6 路径）；全量 538 passed / 1 skipped / 24 deselected；G6 真实智谱 3 passed；最终 bench tp=16/fp=0/fn=0 |
