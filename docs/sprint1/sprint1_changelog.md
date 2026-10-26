@@ -602,7 +602,7 @@ psycopg.errors.NotNullViolation: null value in column "review_output_json"
 
 > 状态：✅ 完成（B 类 4/4 全部跑通；A 类 6/6 保持完美）
 > 依据：阶段 F 遗留项「B 类 Case 的 AI 辅助发现」
-> 测试结果：全量回归 515 passed / 1 skipped；真实轨 tp=14 fp=3 fn=2
+> 测试结果：全量回归 515 passed / 1 skipped；真实轨 tp=16 fp=0 fn=0
 
 ### S1-B.1 目标
 
