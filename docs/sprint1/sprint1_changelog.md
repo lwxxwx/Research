@@ -1,8 +1,8 @@
 # Sprint 1 变更与阻塞记录
 
 > 起始：2026-10-19
-> 最后更新：2026-10-26（阶段 G，API 层，7 端点 + 最终 bench tp=16/fp=0/fn=0）
-> 状态：阶段 A ✅ / 阶段 B ✅（B 类 4 个 Case 待硬件专家校准）/ 阶段 C ✅ / 阶段 D ✅ / 阶段 E ✅ / 阶段 F ✅ / 阶段 F 后插入 S1-B ✅（B 类 4/4 全部跑通）/ 阶段 G ✅（API 层，7 端点，538 passed + bench 满分）
+> 最后更新：2026-10-27（阶段 H/I 完成，全栈闭环验收通过）
+> 状态：阶段 A ✅ / B ✅ / C ✅ / D ✅ / E ✅ / F ✅ / S1-B ✅ / G ✅ / H ✅（前端 MVP）/ I ✅（部署与 Demo）
 > 依据：`Sprint1_融合版开发落地规划_v1.0.md`、`Sprint1前置条件确认清单.md`
 
 ---
@@ -1132,6 +1132,160 @@ S1-B 的经验对阶段 G（API）、H（前端）、I（部署）同样适用�
 - API 层加 `?status=` query
 - 三处一起改，不要只改一处（决策点 2）
 
+
+## 阶段 H · Web MVP 前端（2026-10-27）
+
+> 状态：✅ 完成
+> 依据：Sprint1_融合版开发落地规划 §11 + H 阶段 API 契约核对文档
+> 测试结果：`npm run type-check` 0 错误；前后端接口联调 100% 通过
+
+### H.1 交付清单
+
+| # | 交付物 | 说明 |
+|---|---|---|
+| 1 | `frontend/` 完整工程 | Vue 3 + Vite + TS + Tailwind + Pinia + Vue Router |
+| 2 | `docs/sprint1/H_Phase_API_Contract_ _Verification_Document.md` | 80 字段深度核对文档（冻结契约） |
+| 3 | `CaseListPage.vue` | 列表展示（10 Case，A/B 分组）+ 发起评审（20 秒超时保护） |
+| 4 | `TaskListPage.vue` | 任务列表 + 分页 + 筛选（`case_class` / `review_status`） |
+| 5 | `TaskDetailPage.vue` | 报告摘要 + 缺陷明细（16 字段） + 证据链 |
+| 6 | `FeedbackPanel.vue` | 专家反馈提交（6 类 + JSON 文本域校验） |
+| 7 | 通用组件 | `StatusBadge` / `ExpertDecisionBadge` / `DefectCard` / `EvidenceChain` |
+
+### H.2 关键技术决策
+
+#### H.2.1 20 秒超时语义：超时 ≠ 失败，禁止自动重试
+
+- **背景**：后端 `POST /review/tasks` 是同步阻塞的（跑真实 LLM 约 15~20 秒）。
+- **前端实现**：`http.ts` 通过 `AbortController` 设置 20 秒超时。
+- **业务处理**：如果前端超时，任务可能已在后端落库。**前端严禁自动重试**，必须弹出黄色警示框“请求超时，任务可能已在后台创建”，并引导用户点击“去任务列表确认”。
+- **价值**：彻底杜绝了用户重复点击导致后端重复扣费跑 LLM 的问题。
+
+#### H.2.2 `DefectFromReport` 与 `DefectFromAPI` 字段分离
+
+- **背景**：后端 `report.defects`（快照，15 字段）与 `GET /defects`（当前态，16 字段）相差 3 个字段。
+- **前端实现**：定义了两个不同的 TS Interface，不混用。
+- **业务价值**：`DefectCard` 统一用 `DefectFromAPI` 渲染，确保 `expert_decision_updated_at` 等审计字段永远不丢失。
+
+### H.3 踩坑与修正（前后端联调排雷）
+
+#### 坑 1：`@lucide/vue` 版本断层
+- **现象**：按 `lucide-vue-next` 的旧习惯安装了 `@lucide/vue@0.454.0`，报错找不到包。
+- **根因**：官方换包后版本号重置为 `1.x` 起步。
+- **修正**：移除旧包，安装 `@lucide/vue@^1.61.0`。
+
+#### 坑 2：`schematic_case` 表为空导致 `case_id` 全为 NULL
+- **现象**：前端列表页的 `case_id` 全显示 `—`，`case_class` 全是“未知”。
+- **根因**：G 阶段 G2 接口设计时，采用了 outerjoin 查 `schematic_case`。但开发阶段的历史数据从未往该表插入过 Case 元数据，导致关联失败。
+- **修正**：编写脚本向 `schematic_case` 插入 10 个 Case 元数据；清空旧的 738 条脏数据，后续任务重新跑即恢复正常。
+
+#### 坑 3：Vite Proxy 与跨域问题
+- **现象**：开发环境直接请求 `localhost:8000` 遇到 CORS 阻断。
+- **修正**：`VITE_API_BASE_URL` 统一设为 `/api/v1`，开发时通过 `vite.config.ts` 代理转发，生产时通过 Nginx 转发，前端代码永远只写相对路径。
+
+### H.4 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `npm run type-check` | 0 错误 |
+| 前端 E2E 手动验证 | Case 选择 -> 20s Loading -> 任务列表 -> 详情报告 -> 提交反馈全通 |
+| TS 契约对齐 | 80 个字段零偏差（详见核对文档） |
+
+### H.5 H 阶段关键设计要点（供后续 Sprint 参考）
+
+#### 决策点 1：前端只渲染，不处理业务逻辑
+- **技术做法**：前端不做 `case_class` 正则推断，不做 `review_status` 容错转换。
+- **为什么对**：后端 G 阶段已冻结了 `case_class` 为 `"A" | "B" | None`。前端只需直接判断，一旦发现未知值，说明后端契约被破坏，直接报警/打日志，而不是静默改写。
+
+#### 决策点 2：统一使用 `DefectFromAPI` 渲染卡片
+- **技术做法**：`report.defects` 只在“报告快照”页使用，缺陷列表统一用 `GET /defects`。
+- **为什么对**：`GET /defects` 来自数据库的当前态，包含 `expert_decision_updated_at` 等审计字段；而 `report.defects` 是历史快照。展示最新状态必须用前者。
+
+#### 方法论总结（H 阶段版）
+
+```text
+前端页面开发
+    ↓
+先对后端 Schema 字段（80 个字段梳理）
+    ↓
+定义 TS Interface 匹配（分离 Report 快照 和 API 当前态）
+    ↓
+定义 API 请求（统一 baseURL + 超时处理 + 错误分类）
+    ↓
+页面联调（UI 渲染、状态徽标、反馈表单）
+    ↓
+严格测试（TypeScript 严格模式 + 手动验证）
+```
+
+## 阶段 I · 部署与集成验收（2026-10-27）
+
+> 状态：✅ 完成
+> 依据：Sprint1_融合版开发落地规划 §16
+> 测试结果：终极 Demo 脚本全绿（真实 Graph + 9 项 API 契约联调）；后端全量非 integration 测试 538 passed / 1 skipped / 24 deselected
+
+### I.1 交付清单
+
+| # | 文件 | 说明 |
+|---|---|---|
+| 1 | `scripts/demo_sprint1.ps1`（重构版） | 全栈一键 Demo 脚本（Graph + API 联调） |
+| 2 | `frontend/Dockerfile` | 多阶段构建（Node 构建 + Nginx 托管） |
+| 3 | `frontend/nginx.conf` | 静态托管 + `/api` 反向代理配置 |
+| 4 | `frontend/.dockerignore` 及 `backend/.dockerignore` | 优化 Docker 构建上下文，排除缓存和依赖 |
+
+### I.2 集成验收（终极 Demo 运行结果）
+
+执行 `.\scripts\demo_sprint1.ps1`，结果如下：
+
+- **[Step 3] 真实 Graph 测试**：调真实智谱，成功产出 `POWER_001` 缺陷，生成候选规则 `RC-20261027-F05ED4`，19 秒跑完。
+- **[Step 4] API 契约测试**：7 个端点 9 个 Mock 测试（包含 404、超时、异常等场景）全绿通过。
+- **[Step 5] 产物检查**：成功生成 `report.json` 等 5 个业务产物。
+- **后端全量回归**：`538 passed / 1 skipped / 24 deselected`，与 G 阶段基线完全一致，证明前后端改动未破坏原有核心链路。
+
+### I.3 踩坑与修正
+
+#### 坑 1：Git 忽略 `node_modules` 导致构建变慢
+- **现象**：未配置 `.dockerignore`，Docker 在构建时将 `node_modules` 的十几万个文件推送到守护进程，导致 `docker build` 极慢。
+- **修正**：新建 `frontend/.dockerignore`，将 `node_modules`、`dist` 等排除出构建上下文。
+
+#### 坑 2：Demo 脚本中的 `docker compose exec` 未传递环境变量
+- **现象**：`demo_sprint1.ps1` 跑 `test_demo.py` 时，宿主机设了 `DEMO_REAL_LLM=1`，但容器里收到的却是 `0`。
+- **修正**：`docker compose exec` 默认不传宿主机环境变量，在 `pytest` 命令前显式加上 `-e DEMO_REAL_LLM=1`。
+
+### I.4 I 阶段关键设计要点（对后续部署的启示）
+
+#### 决策点 1：前端代理和 Nginx 转发规则统一
+- **技术做法**：开发时使用 Vite proxy，生产环境使用 Nginx proxy，二者都指向后端的 `/api/v1`。
+- **为什么对**：前端代码只写 `/api/v1/review/tasks`，开发和生产环境无缝切换，不写死域名和端口。
+
+#### 决策点 2：多阶段构建优化镜像体积
+- **技术做法**：`frontend/Dockerfile` 中，第一阶段用 `node:22-alpine` 构建出 `dist`，第二阶段用 `nginx:alpine` 托管静态文件。
+- **为什么对**：最终镜像只有几十 MB，不含 Node 环境，极大减少攻击面。
+
+#### 决策点 3：Demo 脚本分层校验，定位极快
+- **技术做法**：`demo_sprint1.ps1` 分为 Step 1 预检环境、Step 2 LLM 配置、Step 3 真实 Graph 测试、Step 4 API 契约联调、Step 5 产物检查。每个 Step 都打印带颜色高亮的结果。
+- **为什么对**：一旦系统出现故障，看终端输出就能直接判断是 Docker 没起、Key 没配、还是 Graph 挂了。不用去翻日志。
+
+#### 方法论总结（I 阶段版）
+
+```text
+部署与验收
+    ↓
+配置 Dockerfile 和 Nginx（多阶段构建，代理转发）
+    ↓
+写 Demo 脚本（分步校验 + 颜色高亮 + 失败降级）
+    ↓
+执行全链路集成测试（Graph + API + 前端页面）
+    ↓
+全量回归（确认原有业务逻辑未破坏）
+```
+
+## 对 Sprint 2 / 3 的工程启示（Next Steps）
+
+1. **S2 数据库变更**：需要在 `review_result` 表增加 `task_status` 列，同步修改 `_persist_review_report` 和 `list_tasks_filtered` 以及 API 参数，做到“三端一致”。
+2. **前端 SSR 与文件上传**：如果 S2 或 S3 需要真实文件上传，前端要从当前的 Vite SPA 迁移到 Next.js 或 Nuxt，或者增加 Node.js 后端，不能再单纯用 Nginx 托静态文件。
+3. **LLM 模型替换**：`glm-4-flash` 有随机性（如 B 类 Case 的 JSON 截断或 component 偏差），S2 换用 `glm-4-plus` 时，必须用本 Sprint 建立的双轨测试重新校准。
+4. **Benchmark 口径优化**：当前 `EAR_SIMULATED` 是“金标匹配精度”的占位，S2 有真实专家反馈数据后，应切到真实的 EAR 口径。
+5. **CI/CD 自动化**：S2 开始，需将 `npm run type-check` 和 `pytest tests/ -m "not integration"` 接入 GitHub Actions，防止未经测试的代码合并。
+
 ---
 
 ## 变更记录
@@ -1150,3 +1304,4 @@ S1-B 的经验对阶段 G（API）、H（前端）、I（部署）同样适用�
 | 2026-10-23 | 阶段 F 完成（Benchmark V1.2） | 见 F 章；17+4+1 passed；全量 516 passed；真实轨 Precision=1.0 |
 | 2026-10-24 | 阶段 F 后插入 S1-B（B 类 Case 跑通尝试） | 见 S1-B 章；全量 515 passed；真实轨 tp=16 fp=0 fn=0；B 类 4/4 全部跑通 |
 | 2026-10-26 | 阶段 G 完成（API 层） | 见 G 章；7 端点（6 路径）；全量 538 passed / 1 skipped / 24 deselected；G6 真实智谱 3 passed；最终 bench tp=16/fp=0/fn=0 |
+| 2026-10-27 | 阶段 H/I 完成（前端 MVP 与部署） | 见 H/I 章；前端 TS 契约零错误；后端全量回归 538 passed；终极 Demo 跑通 |
