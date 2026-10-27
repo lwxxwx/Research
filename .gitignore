@@ -31,3 +31,9 @@ commit_msg.txt
 # 临时诊断/清理脚本（不进版本库）
 scripts/_diag_*.py
 scripts/_cleanup_*.py
+
+# --- Frontend (H 阶段) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+*.tsbuildinfo
