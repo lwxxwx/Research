@@ -132,6 +132,11 @@ class ReviewResult(Base):
         BigInteger, ForeignKey("schematic_case.id", ondelete="SET NULL")
     )
     # ===== [S1-CHANGE-3 END] =====
+    # ===== [S2-A 新增] task_status：任务执行结果，与 review_status 分离 =====
+    task_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="pending"
+    )
+    # ===== [S2-A 新增 END] =====
     review_output_json: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False)
     is_rule_only: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     # V1.2 摘要字段
@@ -154,6 +159,9 @@ class ReviewResult(Base):
         Index("idx_review_result_review_status", "review_status"),
         Index("idx_review_result_category", "category"),
         Index("idx_review_result_task_id", "task_id"),
+        # ===== [S2-A 新增] =====
+        Index("idx_review_result_task_status", "task_status"),
+        # ===== [S2-A 新增 END] =====
     )
 # ============================================================
 # 8. ReviewDefect（新增：缺陷明细表）
@@ -317,6 +325,11 @@ class RuleCandidate(Base):
     severity: Mapped[Optional[str]] = mapped_column(String(16))
     evidence_refs: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     proposed_yaml: Mapped[Optional[str]] = mapped_column(Text)
+    # ===== [S2-A 新增] benchmark_result / benchmarked_at / rejected_reason =====
+    benchmark_result: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    benchmarked_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # ===== [S2-A 新增 END] =====
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="proposed")
     # ----- ✅ 对齐SQL：TIMESTAMPTZ + 触发器自动更新updated_at -----
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("NOW()"))
@@ -329,4 +342,60 @@ class RuleCandidate(Base):
         # ===== [S1-CHANGE-6] RuleCandidate 新增 schematic_case_id 索引（Sprint1 §8）=====
         Index("idx_rule_candidates_schematic_case", "schematic_case_id"),
         # ===== [S1-CHANGE-6 END] =====
+    )
+# ============================================================
+# 13. KnowledgeGap（S2-A 新增，一对多：一条反馈可派生多条缺口）
+# ============================================================
+class KnowledgeGap(Base):
+    __tablename__ = "knowledge_gap"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    gap_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    # 主来源冗余字段，不唯一（实际一对多关系由 gap_feedback_link 承载）
+    source_feedback_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("feedback_item.id", ondelete="SET NULL"), nullable=True
+    )
+    case_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    defect_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="open")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+    resolved_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"), nullable=True)
+
+    # 关系
+    source_feedback: Mapped[Optional["FeedbackItem"]] = relationship(foreign_keys=[source_feedback_id])
+    feedback_links: Mapped[List["GapFeedbackLink"]] = relationship(
+        back_populates="gap", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('open','in_progress','resolved','wontfix')",
+            name="check_knowledge_gap_status",
+        ),
+        Index("idx_knowledge_gap_status", "status"),
+        Index("idx_knowledge_gap_source_feedback", "source_feedback_id"),
+        Index("idx_knowledge_gap_case", "case_id"),
+    )
+# ============================================================
+# 14. GapFeedbackLink（S2-A 新增，中间表：支撑一对多）
+# ============================================================
+class GapFeedbackLink(Base):
+    __tablename__ = "gap_feedback_link"
+    gap_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("knowledge_gap.id", ondelete="CASCADE"), primary_key=True
+    )
+    feedback_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("feedback_item.id", ondelete="CASCADE"), primary_key=True
+    )
+
+    # 关系
+    gap: Mapped["KnowledgeGap"] = relationship(back_populates="feedback_links")
+    feedback: Mapped["FeedbackItem"] = relationship()
+
+    __table_args__ = (
+        Index("idx_gap_feedback_link_feedback", "feedback_id"),
     )

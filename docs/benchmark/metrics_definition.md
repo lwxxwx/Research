@@ -1,6 +1,6 @@
-# Benchmark Metrics Definition v3.0
+# Benchmark Metrics Definition v3.2
 
-> Business Freeze · Sprint0 业务冻结文档，Sprint1 阶段 F 升级为 v3.0
+> Business Freeze · Sprint0 业务冻结文档，Sprint1 阶段 F 升级为 v3.0，Sprint2 S2-A 升级为 v3.2
 > 适用：
 > - Sprint0：**Rule-Only Baseline 评测（A 类 Case，仅确定性规则引擎）**
 > - Sprint1 阶段 F+：**Rule Only + Full Review 双模式评测**（Rule + RAG + LLM AI 评审，启用 EVC / EVC_PRED / 模拟 AI_NER / 模拟 EAR / 完整三态）
@@ -440,9 +440,41 @@ EAR_SIMULATED = len(tp_set_pred) / len(pred_defects)
 - **模拟指标的作用**：作为“无真实反馈阶段的过渡观察指标”，以及“Prompt / RAG 优化的基线对比”。同一套 GT / 匹配 / 指标下，模拟指标的变化能反映系统改进方向。
 - **命名调整**：若后续允许改字段名，`ear_simulated` 建议改为 `gold_match_precision`，更准确表达语义。
 
+### 6.7 AI_NER 样本门槛（Sprint 2 S2-A 补冻结）
+
+> **背景**：v3.1 只冻结了 EAR 的样本门槛（≥ 20 条采纳相关反馈，见 Sprint 1 §9.6），AI_NER 只有公式、模拟值、边界，**无真实样本门槛**。Sprint 2 S2-A 补齐。
+
+**AI_NER 样本门槛：≥ 10 条 `ai_discovered` 缺陷**（以去重后的唯一缺陷实体计）。
+
+**判定规则**：
+
+- `N_ai_candidate`（去重后 `origin=ai_discovered` 的缺陷数）**< 10** 时：`AI_NER` 返回 `None`，CSV 输出 `NaN`，UI 显示 `N/A · 样本不足`。
+- `N_ai_candidate` **≥ 10** 时：按 §2 匹配 + §6.2 公式计算真实 `AI_NER`。
+
+**与 EAR 门槛的区别**：
+
+| 指标 | 样本门槛 | 统计单位 | 门槛依据 |
+| :--- | :--- | :--- | :--- |
+| EAR | ≥ 20 条采纳相关反馈 | 唯一 `defect_id` | 采纳率统计稳定性 |
+| AI_NER | ≥ 10 条 `ai_discovered` 缺陷 | 去重后唯一缺陷实体 | AI 发现能力统计稳定性（分母是 AI 候选，基数比 EAR 小，门槛相应降低） |
+
+**Seed / simulated 数据不计入门槛**：只有真实 `expert_decision=confirmed` 的 `ai_discovered` 缺陷才计入 `N_ai_candidate`。`AI_NER_SIMULATED` 的计算不受本门槛影响（模拟指标口径不变）。
+
+**字段落地**：
+
+- `summary_metrics.sample_info.ai_ner_sample_size`：真实 `ai_discovered` 缺陷数（去重后）。
+- `summary_metrics.sample_info.ai_ner_sample_threshold`：固定 `10`，由后端指标定义输出，前端不硬编码。
+- 两者均写入 `docs/benchmark/metrics_definition.md` 与 `app/api/schemas.py` 的 `SummaryMetrics` schema。
+
+**实现位置**：
+
+- `benchmark_service.compute_real_ai_ner(pred_defects, expert_decisions)`：加门槛判断，`N_ai_candidate < 10` 返回 `None`。
+- `task_service.get_task_summary_metrics(task_id)`：`sample_info` 填真实值。
+- `tests/test_benchmark.py`：加 `test_ai_ner_threshold_below_10_returns_none` / `test_ai_ner_threshold_at_10_returns_value`。
+
 ---
 
-## 7. CSV 输出字段（v3.0 · 24 列）
+## 7. CSV 输出字段（24 列，v3.0 起沿用）
 
 输出路径：
 - Rule Only：`out/bench_ruleonly_sprint0.csv`（Sprint 0 兼容路径）
@@ -735,6 +767,7 @@ def _fmt(v: Optional[float], ndigits: int = 4) -> Any:
 | v2.0 | 2026-09-15 | M1 `rule_id` 弱校验；M2 贪心策略显式化；M3 `IR_REF_EXEMPT` 开关；M4 CSV ↔ V1.2 §8.2 映射表；S1 三态列；S2 Overall 预留列；S3 `notes` 字段 |
 | v3.0 | 2026-10-23 | Sprint 1 阶段 F 升级：<br>1. 新增 `full_review` 运行模式<br>2. 新增 `BenchmarkResult` 统一结构<br>3. 新增 `EVC_PRED` / `EVC_COMPLETE_RATE`<br>4. 新增 `AI_NER_SIMULATED` / `EAR_SIMULATED`（金标模拟）<br>5. 新增 `match_defect_full_review`（严格 + 降级路径）<br>6. 新增 `_resolve_rule_fields`（`origin=rule` 的 `category` / `risk` 以 `RuleResult` 为准）<br>7. 新增 `net='-'` / `component='-'` 归一化<br>8. CSV 从 18 列扩展到 24 列，删除 `Overall_*` 三列<br>9. 新增汇总行 `__SUMMARY__`<br>10. 新增“模拟指标边界”章节（§6.4） |
 | v3.1 | 2026-10-24 | S1-B 后升级：<br>1. §1.3 补 `defect_id` 格式说明（`DEF-RULE-*` vs LLM 原始）<br>2. §2.1.2 补 rule 缺陷来源（RuleResult 构造，不依赖 LLM）<br>3. §2.1.2 补 risk 容忍匹配规则（规则 B：pred_risk 不低于 gt_risk，最多高 1 级，GT=low 严格一致）<br>4. §8.3.1 追加 S1-B 最终基线（tp=16 fp=0 fn=0, Precision=1.0, Recall=1.0）<br>5. 新增 §8.3.1 逐 B 类 Case 对比（B 类 4/4 全部跑通） |
+| v3.2 | 2026-10-28 | Sprint 2 S2-A 升级：<br>1. 新增 §6.7「AI_NER 样本门槛」，冻结 ≥ 10 条 `ai_discovered` 缺陷<br>2. 补 `summary_metrics.sample_info.ai_ner_sample_size` / `ai_ner_sample_threshold` 字段定义<br>3. 明确 Seed / simulated 不计入 AI_NER 门槛<br>4. 与 v3.1 的 EAR 门槛（≥ 20 条）形成对照表 |
 
 ---
 

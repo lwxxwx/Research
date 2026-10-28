@@ -32,6 +32,9 @@ commit_msg.txt
 scripts/_diag_*.py
 scripts/_cleanup_*.py
 
+# ===== S2 临时调试脚本（不进版本库，本地保留）=====
+scripts/_tmp_*.py
+
 # --- Frontend (H 阶段) ---
 frontend/node_modules/
 frontend/dist/
