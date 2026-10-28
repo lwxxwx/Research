@@ -337,11 +337,14 @@ def test_get_task_defects_expert_decision_updated_at_is_iso_or_none(mock_llm_cus
 #   3. by_case_class：Python 层过滤（A/B）
 #   4. pagination：limit/offset 生效，先过滤后分页
 #   5. unknown/missing case_id：errors 收集，不丢弃任务
-# 不含 status 测试（G2 决策 1：status 过滤不实现）
+# ===== [S2-C] status 测试已加入（S2-A 加 task_status 列，G2 决策 1 已解除） =====
 # ============================================================
 def test_list_tasks_filtered_basic():
     """
     G2 basic：list_tasks_filtered 返回 {total, items, errors} 结构。
+
+    【S2-C 变更】item 从 6 字段扩为 7 字段（加 status），
+    S2-A 加 task_status 列后，status 可真实透出，G2 决策 1「不含 status」已过时。
     """
     from app.services.task_service import list_tasks_filtered
 
@@ -353,18 +356,24 @@ def test_list_tasks_filtered_basic():
     assert isinstance(result["items"], list)
     assert isinstance(result["errors"], list)
 
-    # item 必须含 6 字段（不含 status）
+    # item 必须含 7 字段（S2-C 起含 status）
     if result["items"]:
         item = result["items"][0]
         expected_fields = {
             "task_id", "case_id", "case_class",
             "defects_count", "review_status", "created_at",
+            # ===== [S2-C] status 字段（S2-A 加 task_status 列后透出） =====
+            "status",
+            # ===== [S2-C END] =====
         }
         assert expected_fields.issubset(set(item.keys())), (
             f"item 缺字段: {expected_fields - set(item.keys())}"
         )
-        # 不含 status 字段
-        assert "status" not in item, "G2 决策 1：item 不应含 status 字段"
+        # ===== [S2-C] status 字段值合法（pending/done/failed） =====
+        assert item["status"] in ("pending", "done", "failed"), (
+            f"status 应为 pending/done/failed，实际 {item['status']!r}"
+        )
+        # ===== [S2-C END] =====
 
 
 def test_list_tasks_filtered_by_review_status():
@@ -847,3 +856,174 @@ def test_update_expert_decision_service():
         db.query(ReviewResult).filter(ReviewResult.task_id == task_id).delete()
         db.commit()
 
+# ============================================================
+# S2-C：get_task_summary_metrics + list_tasks_filtered(status=)
+# ============================================================
+def test_get_task_summary_metrics_aggregates():
+    """get_task_summary_metrics 聚合 review_result + review_defect + feedback_item。"""
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import (
+        FeedbackItem, ReviewDefect, ReviewResult,
+    )
+    from app.services.task_service import get_task_summary_metrics
+
+    task_id = f"TEST-S2C-SUM-{uuid.uuid4().hex[:8].upper()}"
+    defect_ids = [f"TEST-S2C-DEF-{uuid.uuid4().hex[:8].upper()}" for _ in range(3)]
+
+    try:
+        with get_db_session() as db:
+            rr = ReviewResult(
+                task_id=task_id,
+                review_output_json={"defects": []},
+                is_rule_only=False,
+                task_status="done",
+                evidence_coverage=0.75,
+            )
+            db.add(rr)
+            db.flush()
+
+            # 2 条 AI 缺陷 + 1 条 rule 缺陷
+            db.add(ReviewDefect(
+                review_result_id=rr.id, defect_id=defect_ids[0],
+                location={"sheet": "P1", "path": "U1"}, root_cause="x", suggestion="y",
+                category="power", risk="high", evidence=[],
+                review_status="AI_CONFIRMED", origin="ai_discovered",
+                expert_decision="confirmed",
+            ))
+            db.add(ReviewDefect(
+                review_result_id=rr.id, defect_id=defect_ids[1],
+                location={"sheet": "P1", "path": "U1"}, root_cause="x", suggestion="y",
+                category="power", risk="high", evidence=[],
+                review_status="NEED_EXPERT_REVIEW", origin="ai_discovered",
+                expert_decision="rejected",
+            ))
+            db.add(ReviewDefect(
+                review_result_id=rr.id, defect_id=defect_ids[2],
+                location={"sheet": "P1", "path": "U1"}, root_cause="x", suggestion="y",
+                category="power", risk="high", evidence=[],
+                review_status="AI_CONFIRMED", origin="rule",
+                expert_decision="pending",
+            ))
+            # ===== [S2-C 修正] flush 拿 defect DB id，供 feedback 关联 =====
+            db.flush()
+            defect_db_ids = {
+                d.defect_id: d.id
+                for d in db.query(ReviewDefect)
+                .filter(ReviewDefect.review_result_id == rr.id)
+                .all()
+            }
+
+            # 2 条 correct_defect 关联不同 defect + 1 条 knowledge_gap
+            db.add(FeedbackItem(
+                review_result_id=rr.id, review_defect_id=defect_db_ids[defect_ids[0]],
+                feedback_type="correct_defect",
+                comment="real", suggestion_adopted=None,
+                suggestion_diff_json=[], attached_refs=[],
+            ))
+            db.add(FeedbackItem(
+                review_result_id=rr.id, review_defect_id=defect_db_ids[defect_ids[1]],
+                feedback_type="correct_defect",
+                comment="real", suggestion_adopted=None,
+                suggestion_diff_json=[], attached_refs=[],
+            ))
+            db.add(FeedbackItem(
+                review_result_id=rr.id, review_defect_id=defect_db_ids[defect_ids[0]],
+                feedback_type="knowledge_gap",
+                comment="real", suggestion_adopted=None,
+                suggestion_diff_json=[], attached_refs=[],
+            ))
+            # ===== [S2-C 修正 END] =====
+            db.commit()
+
+        # 调用
+        result = get_task_summary_metrics(task_id)
+        assert result is not None
+        assert result["evidence_coverage"] == 0.75
+        assert result["review_status_distribution"] == {
+            "AI_CONFIRMED": 2, "NEED_EXPERT_REVIEW": 1, "LOW_CONFIDENCE": 0,
+        }
+        # EAR：分母 2（2 条 correct_defect），分子 2 → 1.0；但分母 < 20 → None
+        assert result["expert_adoption_rate"] is None, (
+            "分母 < 20 时 EAR 应返回 None"
+        )
+        # AI_NER：ai_candidates=2 < 10 → None
+        assert result["ai_new_effective_rate"] is None
+        # sample_info
+        assert result["sample_info"]["ear_sample_size"] == 2
+        assert result["sample_info"]["ear_sample_threshold"] == 20
+        assert result["sample_info"]["ai_ner_sample_size"] == 2
+        assert result["sample_info"]["ai_ner_sample_threshold"] == 10
+
+    finally:
+        with get_db_session() as db:
+            db.query(FeedbackItem).filter(
+                FeedbackItem.review_result_id == ReviewResult.id
+            ).filter(ReviewResult.task_id == task_id).delete(synchronize_session=False)
+            db.query(ReviewDefect).filter(
+                ReviewDefect.review_result_id == ReviewResult.id
+            ).filter(ReviewResult.task_id == task_id).delete(synchronize_session=False)
+            db.query(ReviewResult).filter(ReviewResult.task_id == task_id).delete()
+            db.commit()
+
+
+def test_get_task_summary_metrics_task_not_found():
+    """task 不存在 → None。"""
+    from app.services.task_service import get_task_summary_metrics
+    assert get_task_summary_metrics("NONEXISTENT-S2C") is None
+
+
+def test_list_tasks_filtered_by_status():
+    """list_tasks_filtered(status="done") 只返回 task_status=done 的任务。"""
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import ReviewResult
+    from app.services.task_service import list_tasks_filtered
+
+    done_tid = f"TEST-S2C-DONE-{uuid.uuid4().hex[:8].upper()}"
+    failed_tid = f"TEST-S2C-FAILED-{uuid.uuid4().hex[:8].upper()}"
+
+    try:
+        with get_db_session() as db:
+            db.add(ReviewResult(
+                task_id=done_tid, review_output_json={"defects": []},
+                is_rule_only=True, task_status="done",
+            ))
+            db.add(ReviewResult(
+                task_id=failed_tid, review_output_json={"defects": []},
+                is_rule_only=True, task_status="failed",
+            ))
+            db.commit()
+
+        # 过滤 done
+        result_done = list_tasks_filtered(status="done", limit=1000)
+        tids_done = {it["task_id"] for it in result_done["items"]}
+        assert done_tid in tids_done
+        assert failed_tid not in tids_done
+
+        # 过滤 failed
+        result_failed = list_tasks_filtered(status="failed", limit=1000)
+        tids_failed = {it["task_id"] for it in result_failed["items"]}
+        assert failed_tid in tids_failed
+        assert done_tid not in tids_failed
+
+        # 不传 status：两条都返回
+        result_all = list_tasks_filtered(status=None, limit=1000)
+        tids_all = {it["task_id"] for it in result_all["items"]}
+        assert done_tid in tids_all
+        assert failed_tid in tids_all
+
+        # item 含 status 字段
+        for it in result_all["items"]:
+            assert "status" in it
+
+        # 非法 status → ValueError
+        with pytest.raises(ValueError, match="status"):
+            list_tasks_filtered(status="invalid_status")
+
+    finally:
+        with get_db_session() as db:
+            db.query(ReviewResult).filter(
+                ReviewResult.task_id.in_([done_tid, failed_tid])
+            ).delete(synchronize_session=False)
+            db.commit()

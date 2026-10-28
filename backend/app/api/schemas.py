@@ -32,6 +32,25 @@ class HealthResponse(BaseModel):
 # ============================================================
 # 评审任务
 # ============================================================
+# ===== [S2-C] SampleInfo / SummaryMetrics 前置定义（TaskDetailResponse 依赖） =====
+class SampleInfo(BaseModel):
+    """summary_metrics.sample_info：样本数与门槛（前端不硬编码阈值）。"""
+    ear_sample_size: int
+    ear_sample_threshold: int
+    ai_ner_sample_size: int
+    ai_ner_sample_threshold: int
+
+
+class SummaryMetrics(BaseModel):
+    """GET /review/tasks/{task_id} 的 summary_metrics（S2-C 新增）。"""
+    evidence_coverage: float | None = None
+    ai_new_effective_rate: float | None = None
+    expert_adoption_rate: float | None = None
+    review_status_distribution: dict[str, int] = Field(default_factory=dict)
+    sample_info: SampleInfo
+# ===== [S2-C END] =====
+
+
 class CreateTaskRequest(BaseModel):
     """POST /api/v1/review/tasks 请求体。"""
     case_id: str = Field(..., min_length=1, description="Case ID，如 case001")
@@ -53,6 +72,9 @@ class TaskDetailResponse(BaseModel):
     errors: list[str]
     created_at: str | None
     defects_count: int
+    # ===== [S2-C] summary_metrics =====
+    summary_metrics: SummaryMetrics | None = None
+    # ===== [S2-C END] =====
 
 
 class TaskListItem(BaseModel):
@@ -63,6 +85,9 @@ class TaskListItem(BaseModel):
     defects_count: int
     review_status: str
     created_at: str | None
+    # ===== [S2-C] task_status 透出 =====
+    status: Literal["pending", "done", "failed"] | None = None
+    # ===== [S2-C END] =====
 
 
 class TaskListResponse(BaseModel):
@@ -165,3 +190,31 @@ class ExpertDecisionResponse(BaseModel):
     expert_decision: ExpertDecisionLiteral
     expert_decision_updated_at: datetime
     expert_decision_by: int | None = None
+
+
+# ============================================================
+# S2-C：任务详情指标
+# ============================================================
+class SampleInfo(BaseModel):
+    """summary_metrics.sample_info：样本数与门槛（前端不硬编码阈值）。"""
+    ear_sample_size: int
+    ear_sample_threshold: int
+    ai_ner_sample_size: int
+    ai_ner_sample_threshold: int
+
+
+class SummaryMetrics(BaseModel):
+    """GET /review/tasks/{task_id} 的 summary_metrics（S2-C 新增）。
+
+    指标口径严格对齐 docs/benchmark/metrics_definition.md v3.2：
+      - EAR  : 真实专家采纳率（≥ 20 条样本门槛）
+      - AI_NER : 真实 AI 新增有效发现率（≥ 10 条样本门槛）
+      - EVC  : GT 侧证据完整率
+
+    字段为 None 时 UI 显示 "N/A" + 具体原因（N/A · 样本不足 / N/A · 待专家反馈）。
+    """
+    evidence_coverage: float | None = None
+    ai_new_effective_rate: float | None = None
+    expert_adoption_rate: float | None = None
+    review_status_distribution: dict[str, int] = Field(default_factory=dict)
+    sample_info: SampleInfo

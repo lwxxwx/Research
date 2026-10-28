@@ -75,13 +75,19 @@ def create_review_task(body: CreateTaskRequest) -> CreateTaskResponse:
 # ============================================================
 @router.get("/{task_id}", response_model=TaskDetailResponse)
 def get_review_task(task_id: str) -> TaskDetailResponse:
-    """任务详情。task 不存在或未落库 → 404。"""
+    """任务详情。task 不存在或未落库 → 404。
+
+    【S2-C 新增】响应体含 summary_metrics（实时聚合）。
+    """
     task = task_service.get_task(task_id)
     if task is None:
         raise HTTPException(
             status_code=404,
             detail=_NOT_FOUND_DETAIL.format(task_id=task_id),
         )
+    # ===== [S2-C] 实时聚合 summary_metrics =====
+    task["summary_metrics"] = task_service.get_task_summary_metrics(task_id)
+    # ===== [S2-C END] =====
     return TaskDetailResponse(**task)
 
 
@@ -94,6 +100,9 @@ def list_review_tasks(
     review_status: Literal[
         "AI_CONFIRMED", "NEED_EXPERT_REVIEW", "LOW_CONFIDENCE"
     ] | None = Query(default=None),
+    # ===== [S2-C] status 过滤（S2-A 已加 task_status 列） =====
+    status: Literal["pending", "done", "failed"] | None = Query(default=None),
+    # ===== [S2-C END] =====
     limit: int = Query(default=20, ge=0),
     offset: int = Query(default=0, ge=0),
 ) -> TaskListResponse:
@@ -107,6 +116,7 @@ def list_review_tasks(
         result = task_service.list_tasks_filtered(
             case_class=case_class,
             review_status=review_status,
+            status=status,   # ← [S2-C]
             limit=limit,
             offset=offset,
         )

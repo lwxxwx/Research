@@ -39,6 +39,14 @@ from app.schemas.feedback import (
 )
 from app.services.feedback_service import FeedbackNotFoundError
 from app.services.feedback_service import FeedbackService   # ← 新增
+# ===== [S2-C] 真实指标函数在 get_task_summary_metrics 内 import，避免循环 =====
+# ===== [S2-C] 真实指标聚合 =====
+from app.services.benchmark_service import (
+    compute_real_ai_ner,
+    compute_real_ear,
+    compute_sample_info,
+)
+# ===== [S2-C END] =====
 from app.workflows.review_graph import run_review_graph
 from app.workflows.state import (
     TASK_STATUS_DONE,
@@ -275,6 +283,7 @@ def list_tasks_filtered(
     *,
     case_class: str | None = None,
     review_status: str | None = None,
+    status: str | None = None,   # ← [S2-C] 任务状态过滤（pending/done/failed）
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -327,6 +336,8 @@ def list_tasks_filtered(
     # 调用方（API 层）负责将其转换为 HTTP 422。
     _VALID_CASE_CLASS = {"A", "B"}
     _VALID_REVIEW_STATUS = {"AI_CONFIRMED", "NEED_EXPERT_REVIEW", "LOW_CONFIDENCE"}
+    # ===== [S2-C] status 校验 =====
+    _VALID_STATUS = {"pending", "done", "failed"}
 
     if case_class is not None and case_class not in _VALID_CASE_CLASS:
         raise ValueError(
@@ -337,6 +348,12 @@ def list_tasks_filtered(
             f"review_status 必须为 AI_CONFIRMED / NEED_EXPERT_REVIEW / "
             f"LOW_CONFIDENCE / None，实际: {review_status!r}"
         )
+    # ===== [S2-C] status 校验 =====
+    if status is not None and status not in _VALID_STATUS:
+        raise ValueError(
+            f"status 必须为 'pending' / 'done' / 'failed' / None，实际: {status!r}"
+        )
+    # ===== [S2-C END] =====
     if limit < 0:
         raise ValueError(f"limit 必须 >= 0，实际: {limit}")
     if offset < 0:
@@ -359,6 +376,11 @@ def list_tasks_filtered(
         # DB 层过滤：review_status
         if review_status:
             query = query.filter(ReviewResult.review_status == review_status)
+
+        # ===== [S2-C] DB 层过滤：task_status（S2-A 已加列） =====
+        if status:
+            query = query.filter(ReviewResult.task_status == status)
+        # ===== [S2-C END] =====
 
         rows = query.all()
 
@@ -390,7 +412,9 @@ def list_tasks_filtered(
                 "defects_count": rr.total_defects,
                 "review_status": rr.review_status,
                 "created_at": rr.created_at.isoformat() if rr.created_at else None,
-                # 决策 1：不含 status 字段
+                # ===== [S2-C] task_status 透出（S2-A 已加列，S2-C 补字段） =====
+                "status": rr.task_status,
+                # ===== [S2-C END] =====
             })
 
         # 决策 3（后半句）：先过滤后 total 再分页
@@ -781,6 +805,130 @@ def update_expert_decision(
             "expert_decision_by": rd.expert_decision_by,
         }
 
+# ============================================================
+# get_task_summary_metrics：任务详情指标聚合（S2-C）
+# ------------------------------------------------------------
+# 设计理由：
+#   1. 实时聚合，不写 review_result 静态列（S2-C 冻结：反馈异步产生，落库会过期）
+#   2. 指标口径严格对齐 metrics_definition.md v3.2
+#   3. sample_info 供前端显示「N/A · 样本不足」时拿具体样本数 / 门槛
+# ============================================================
+def get_task_summary_metrics(task_id: str) -> dict[str, Any] | None:
+    """
+    聚合任务详情指标（S2-C）。
+
+    返回：
+      {
+        "evidence_coverage": float | None,
+        "ai_new_effective_rate": float | None,
+        "expert_adoption_rate": float | None,
+        "review_status_distribution": {
+          "AI_CONFIRMED": int,
+          "NEED_EXPERT_REVIEW": int,
+          "LOW_CONFIDENCE": int,
+        },
+        "sample_info": {
+          "ear_sample_size": int,
+          "ear_sample_threshold": 20,
+          "ai_ner_sample_size": int,
+          "ai_ner_sample_threshold": 10,
+        },
+      }
+
+    task 不存在 → None。
+
+    【数据来源】
+      - evidence_coverage      : review_result.evidence_coverage
+      - review_status_distribution : review_defect.review_status 计数
+      - expert_adoption_rate   : feedback_item 聚合（compute_real_ear）
+      - ai_new_effective_rate  : review_defect 聚合（compute_real_ai_ner）
+      - sample_info            : compute_sample_info
+    """
+    # 函数内 import 避免循环依赖（benchmark_service 已 import task_service）
+    from app.services.benchmark_service import (
+        compute_real_ai_ner,
+        compute_real_ear,
+        compute_sample_info,
+    )
+    from app.persistence.models import FeedbackItem
+
+    with get_db_session() as db:
+        rr = (
+            db.query(ReviewResult)
+            .filter(ReviewResult.task_id == task_id)
+            .order_by(ReviewResult.id.desc())
+            .first()
+        )
+        if rr is None:
+            return None
+
+        # 1. 缺陷列表（S2-C 的 review_defect 已含 expert_decision 3 字段）
+        defects = (
+            db.query(ReviewDefect)
+            .filter(ReviewDefect.review_result_id == rr.id)
+            .all()
+        )
+        defect_dicts = [
+            {
+                "defect_id": d.defect_id,
+                "review_status": d.review_status,
+                "origin": d.origin,
+                "expert_decision": d.expert_decision,
+                "feedback_type": d.feedback_type,
+            }
+            for d in defects
+        ]
+
+        # 2. 三态分布
+        distribution = {
+            "AI_CONFIRMED": 0,
+            "NEED_EXPERT_REVIEW": 0,
+            "LOW_CONFIDENCE": 0,
+        }
+        for d in defects:
+            if d.review_status in distribution:
+                distribution[d.review_status] += 1
+
+        # 3. 反馈列表（用于 EAR）
+        feedbacks = (
+            db.query(FeedbackItem)
+            .filter(FeedbackItem.review_result_id == rr.id)
+            .all()
+        )
+        # ===== [S2-C 修正] 把 review_defect_id 翻译成业务 defect_id =====
+        # compute_real_ear / compute_sample_info 期望业务 ID（str），
+        # 不是 DB 外键 id（int）。
+        defect_id_map = {d.id: d.defect_id for d in defects}
+        feedback_dicts = [
+            {
+                "id": fb.id,
+                "defect_id": (
+                    defect_id_map.get(fb.review_defect_id)
+                    if fb.review_defect_id is not None
+                    else None
+                ),
+                "feedback_type": fb.feedback_type,
+                "suggestion_adopted": fb.suggestion_adopted,
+                "comment": fb.comment,
+                "created_at": fb.created_at.isoformat() if fb.created_at else None,
+            }
+            for fb in feedbacks
+        ]
+        # ===== [S2-C 修正 END] =====
+
+        # 4. 真实指标
+        expert_adoption_rate = compute_real_ear(feedback_dicts, defect_dicts)
+        ai_new_effective_rate = compute_real_ai_ner(defect_dicts)
+        sample_info = compute_sample_info(feedback_dicts, defect_dicts)
+
+        return {
+            "evidence_coverage": rr.evidence_coverage,
+            "ai_new_effective_rate": ai_new_effective_rate,
+            "expert_adoption_rate": expert_adoption_rate,
+            "review_status_distribution": distribution,
+            "sample_info": sample_info,
+        }
+
 __all__ = [
     "create_task",
     "get_task",
@@ -790,4 +938,5 @@ __all__ = [
     "get_task_defects",
     "submit_task_feedback",
     "update_expert_decision",  # ← S2-B 新增
+    "get_task_summary_metrics",  # ← S2-C 新增
 ]

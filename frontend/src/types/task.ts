@@ -8,7 +8,31 @@ import type { ReviewStatus, DefectFromReport } from "./defect";
  * 注意：后端 Pydantic 声明允许 "pending"，但 get_task 实际只返回 "done" / "failed"。
  * "pending" 场景 = task 不存在 → API 层返回 404。
  */
-export type TaskStatus = "done" | "failed";
+
+// ===== [S2-C] 加 pending（S2-A 已加 task_status 列，默认 pending） =====
+export type TaskStatus = "pending" | "done" | "failed";
+// ===== [S2-C END] =====
+
+// ===== [S2-C] summary_metrics 类型（对齐后端 SummaryMetrics / SampleInfo） =====
+export interface SampleInfo {
+  ear_sample_size: number;
+  ear_sample_threshold: number;
+  ai_ner_sample_size: number;
+  ai_ner_sample_threshold: number;
+}
+
+export interface SummaryMetrics {
+  evidence_coverage: number | null;
+  ai_new_effective_rate: number | null;
+  expert_adoption_rate: number | null;
+  review_status_distribution: {
+    AI_CONFIRMED: number;
+    NEED_EXPERT_REVIEW: number;
+    LOW_CONFIDENCE: number;
+  };
+  sample_info: SampleInfo;
+}
+// ===== [S2-C END] =====
 
 /** 报告摘要（对齐 ReviewReportSummary） */
 export interface ReviewReportSummary {
@@ -42,6 +66,9 @@ export interface TaskDetail {
   errors: string[];
   created_at: string | null;
   defects_count: number;
+  // ===== [S2-C] summary_metrics =====
+  summary_metrics?: SummaryMetrics | null;
+  // ===== [S2-C END] =====
 }
 
 /** GET /api/v1/review/tasks 列表项（对齐 TaskListItem） */
@@ -52,6 +79,9 @@ export interface TaskListItem {
   defects_count: number;
   review_status: ReviewStatus;
   created_at: string | null;
+  // ===== [S2-C] task_status 透出 =====
+  status?: TaskStatus | null;
+  // ===== [S2-C END] =====
 }
 
 /** GET /api/v1/review/tasks 响应体（对齐 TaskListResponse） */

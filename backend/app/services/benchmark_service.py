@@ -1307,3 +1307,251 @@ def print_console_summary(res: CaseBenchResult) -> None:
           f"NEED_EXPERT_REVIEW={res.need_expert_review_n} "
           f"LOW_CONFIDENCE={res.low_confidence_n}")
     print("=" * 72)
+
+
+# ==================== 真实指标（S2-C 新增） ====================
+# 【与模拟指标的区别】
+#   compute_ai_ner_simulated / compute_ear_simulated : 模拟指标，金标匹配口径
+#   compute_real_ai_ner / compute_real_ear           : 真实指标，专家反馈口径
+#
+# 【数据来源】
+#   compute_real_ear      : feedback_item 表（排除 [SEED] 前缀）
+#   compute_real_ai_ner   : review_defect 表的 origin=ai_discovered + expert_decision=confirmed
+#
+# 【指标定义】
+#   严格对齐 docs/benchmark/metrics_definition.md v3.2：
+#     - EAR      : §9.6（Sprint 1 计划）+ 本文件实现
+#     - AI_NER   : §6.7（v3.2 补冻结）+ 本文件实现
+# ============================================================
+
+# AI_NER 样本门槛（v3.2 §6.7 冻结）
+AI_NER_SAMPLE_THRESHOLD = 10
+
+# EAR 样本门槛（Sprint 1 §9.6 冻结）
+EAR_SAMPLE_THRESHOLD = 20
+
+# 采纳相关反馈（计入 EAR 分母）
+_EAR_RELEVANT_FEEDBACK_TYPES = frozenset({
+    "correct_defect",
+    "suggestion_update",
+    "false_positive",
+    "false_negative",
+})
+
+# Seed 过滤前缀（Sprint 1 E.2.4 约定）
+_SEED_COMMENT_PREFIX = "[SEED]"
+
+
+def _is_seed_feedback(comment: str | None) -> bool:
+    """判断 feedback 是否为 Seed 模拟数据（comment 前缀 [SEED]）。"""
+    if not comment:
+        return False
+    return comment.lstrip().startswith(_SEED_COMMENT_PREFIX)
+
+
+def compute_real_ear(
+    feedbacks: list[dict[str, Any]],
+    defects: list[dict[str, Any]],
+) -> Optional[float]:
+    """
+    计算真实 EAR（专家采纳率），严格对齐 Sprint 1 §9.6。
+
+    【公式】
+      EAR = N_adopted / N_defect_with_feedback
+
+    【分母 N_defect_with_feedback】
+      至少存在 1 条「采纳相关反馈」的唯一 defect 数。
+      采纳相关反馈类型：correct_defect / suggestion_update / false_positive / false_negative。
+      无关反馈（knowledge_gap / new_rule_candidate）不进分母，不覆盖分子。
+
+    【分子 N_adopted】
+      在分母范围内，该 defect 的「最新一条采纳相关反馈」表明：
+        - feedback_type == "correct_defect"，或
+        - feedback_type == "suggestion_update" 且 suggestion_adopted ∈ {"yes", "partial"}
+      排序依据：created_at + id（同类型采纳相关反馈之间比较）。
+
+    【Seed 过滤】
+      comment 前缀 [SEED] 的反馈不计入（既不入分母，也不入分子）。
+
+    【无样本】
+      分母 0 → None。
+
+    :param feedbacks: feedback_item 列表（dict，需含 defect_id / feedback_type / suggestion_adopted / comment / created_at / id）
+    :param defects: 未使用（保留参数，便于后续按 defect 维度扩展）
+    :return: 真实 EAR；分母 0 或样本不足 20 时 None
+    """
+    # 1. 过滤 Seed
+    real_feedbacks = [
+        fb for fb in feedbacks
+        if not _is_seed_feedback(fb.get("comment"))
+    ]
+
+    # 2. 只保留采纳相关反馈
+    relevant = [
+        fb for fb in real_feedbacks
+        if fb.get("feedback_type") in _EAR_RELEVANT_FEEDBACK_TYPES
+    ]
+
+    if not relevant:
+        return None
+
+    # 3. 按 defect_id 分组，取每条 defect 的最新一条采纳相关反馈
+    #    排序依据：created_at（字符串可比，ISO 格式）+ id（作为 tie-breaker）
+    by_defect: dict[str, dict[str, Any]] = {}
+    for fb in relevant:
+        defect_id = fb.get("defect_id")
+        if not defect_id:
+            continue
+        prev = by_defect.get(defect_id)
+        cur_key = (
+            str(fb.get("created_at") or ""),
+            int(fb.get("id") or 0),
+        )
+        if prev is None:
+            by_defect[defect_id] = fb
+        else:
+            prev_key = (
+                str(prev.get("created_at") or ""),
+                int(prev.get("id") or 0),
+            )
+            if cur_key > prev_key:
+                by_defect[defect_id] = fb
+
+    # 4. 分母
+    n_defect_with_feedback = len(by_defect)
+    if n_defect_with_feedback == 0:
+        return None
+
+    # 5. 分母 < 20 时返回 None（Sprint 1 §9.6 样本门槛）
+    if n_defect_with_feedback < EAR_SAMPLE_THRESHOLD:
+        return None
+
+    # 6. 分子
+    n_adopted = 0
+    for fb in by_defect.values():
+        ft = fb.get("feedback_type")
+        if ft == "correct_defect":
+            n_adopted += 1
+        elif ft == "suggestion_update":
+            if fb.get("suggestion_adopted") in ("yes", "partial"):
+                n_adopted += 1
+
+    return n_adopted / n_defect_with_feedback
+
+
+def compute_real_ai_ner(
+    pred_defects: list[dict[str, Any]],
+    expert_decisions: dict[str, str] | None = None,
+) -> Optional[float]:
+    """
+    计算真实 AI_NER（AI 新增有效发现率），严格对齐 metrics_definition.md v3.2 §6.7。
+
+    【公式】
+      AI_NER = N_ai_effective / (N_rule_effective + N_ai_effective)
+
+    【分子 N_ai_effective】
+      origin == "ai_discovered" 且 expert_decision == "confirmed" 的缺陷数（去重后）。
+
+    【分母 N_rule_effective + N_ai_effective】
+      N_rule_effective : origin == "rule" 的缺陷数（专家确认，S2 暂以 origin=rule 全计，
+                         后续如需严格口径可加 expert_decision 过滤）。
+      N_ai_effective   : 同上。
+
+    【样本门槛 v3.2 §6.7】
+      N_ai_candidate（去重后 origin=ai_discovered 的缺陷数）< 10 → None。
+      注意：门槛看的是「AI 候选总数」，不是「AI 有效数」。
+
+    【去重】
+      按 defect_id 去重（同一条缺陷多次出现只计一次）。
+
+    【无样本】
+      分母 0 → None；门槛不足 → None。
+
+    :param pred_defects: review_defect 列表（dict，需含 defect_id / origin / expert_decision）
+    :param expert_decisions: 可选，外部传入的 {defect_id: expert_decision} 映射；
+                             不传时用 pred_defects 自身的 expert_decision 字段
+    :return: 真实 AI_NER；门槛不足或分母 0 时 None
+    """
+    # 1. 去重 + 提取 origin / expert_decision
+    seen: set[str] = set()
+    ai_candidates = 0
+    ai_effective = 0
+    rule_effective = 0
+
+    for d in pred_defects:
+        defect_id = d.get("defect_id")
+        if not defect_id or defect_id in seen:
+            continue
+        seen.add(defect_id)
+
+        origin = d.get("origin", "rule")
+        # expert_decision 优先取外部映射，否则取自身字段
+        if expert_decisions is not None:
+            ed = expert_decisions.get(defect_id, "pending")
+        else:
+            ed = d.get("expert_decision", "pending")
+
+        if origin == "ai_discovered":
+            ai_candidates += 1
+            if ed == "confirmed":
+                ai_effective += 1
+        elif origin == "rule":
+            rule_effective += 1
+
+    # 2. 样本门槛：AI 候选 < 10 → None
+    if ai_candidates < AI_NER_SAMPLE_THRESHOLD:
+        return None
+
+    # 3. 分母
+    denom = rule_effective + ai_effective
+    if denom == 0:
+        return None
+
+    return ai_effective / denom
+
+
+def compute_sample_info(
+    feedbacks: list[dict[str, Any]],
+    pred_defects: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    计算 summary_metrics.sample_info（S2-C 新增）。
+
+    返回：
+      {
+        "ear_sample_size": 有效采纳相关反馈唯一缺陷数（排除 Seed），
+        "ear_sample_threshold": 20,
+        "ai_ner_sample_size": 去重后 origin=ai_discovered 缺陷数,
+        "ai_ner_sample_threshold": 10,
+      }
+
+    用途：
+      - 前端显示「N/A · 样本不足」时，能拿到具体样本数 / 门槛
+      - 前端不硬编码阈值，由后端输出
+    """
+    # EAR 样本数
+    real_feedbacks = [
+        fb for fb in feedbacks
+        if not _is_seed_feedback(fb.get("comment"))
+    ]
+    relevant = [
+        fb for fb in real_feedbacks
+        if fb.get("feedback_type") in _EAR_RELEVANT_FEEDBACK_TYPES
+    ]
+    ear_defect_ids = {
+        fb.get("defect_id") for fb in relevant if fb.get("defect_id")
+    }
+
+    # AI_NER 样本数（去重后 origin=ai_discovered）
+    ai_ner_defect_ids = {
+        d.get("defect_id")
+        for d in pred_defects
+        if d.get("origin") == "ai_discovered" and d.get("defect_id")
+    }
+
+    return {
+        "ear_sample_size": len(ear_defect_ids),
+        "ear_sample_threshold": EAR_SAMPLE_THRESHOLD,
+        "ai_ner_sample_size": len(ai_ner_defect_ids),
+        "ai_ner_sample_threshold": AI_NER_SAMPLE_THRESHOLD,
+    }

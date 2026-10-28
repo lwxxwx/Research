@@ -269,6 +269,65 @@ Content-Type: application/json
 | `ExpertDecisionResponse` | 4 字段（`defect_id` / `expert_decision` / `expert_decision_updated_at` / `expert_decision_by`） | S2-D 前端乐观更新后覆盖徽标 |
 | `expert_decision` 枚举 | `pending / confirmed / rejected / needs_verification` | S2-D 三按钮映射 |
 
+---
+
+## S2-C：任务筛选 + 真实指标聚合（2026-10-28）
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §4.2 + §14 S2-C 行
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/app/services/benchmark_service.py` | 追加 `compute_real_ear` / `compute_real_ai_ner` / `compute_sample_info` + `AI_NER_SAMPLE_THRESHOLD=10` / `EAR_SAMPLE_THRESHOLD=20` |
+| 2 | `backend/app/services/task_service.py` | 追加 `get_task_summary_metrics`；`list_tasks_filtered` 加 `status` 参数 + item 透出 `status`；`feedback_dicts` 修正 `review_defect_id → defect_id` 映射 |
+| 3 | `backend/app/api/schemas.py` | 追加 `SampleInfo` / `SummaryMetrics`（前置定义）；`TaskDetailResponse.summary_metrics`；`TaskListItem.status` |
+| 4 | `backend/app/api/review_tasks.py` | `GET /review/tasks` 加 `?status=`；`GET /review/tasks/{id}` 组装 `summary_metrics` |
+| 5 | `backend/tests/test_benchmark.py` | 追加 7 条（EAR 3 + AI_NER 3 + sample_info 1） |
+| 6 | `backend/tests/test_review_persistence.py` | 追加 3 条，修 1 条老测试 |
+| 7 | `frontend/src/types/task.ts` | `TaskStatus` 加 `"pending"`；加 `SampleInfo` / `SummaryMetrics`；`TaskDetail.summary_metrics`；`TaskListItem.status` |
+
+### 指标口径（严格对齐 metrics_definition.md v3.2）
+
+| 指标 | 公式 | 样本门槛 | 无样本时 |
+|---|---|---|---|
+| EAR | `N_adopted / N_defect_with_feedback` | ≥ 20 | `None` |
+| AI_NER | `N_ai_effective / (N_rule_effective + N_ai_effective)` | ≥ 10 条 `ai_discovered` | `None` |
+
+**关键边界**：
+- `knowledge_gap` / `new_rule_candidate` 不进 EAR 分母、不覆盖分子。
+- `comment` 前缀 `[SEED]` 的反馈被排除（Sprint 1 E.2.4 约定，不加 `simulated` 列）。
+- 实时聚合，不写 `review_result` 静态列。
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `test_benchmark.py -k "real_ear or real_ai_ner or sample_info"` | **7 passed** |
+| 全量 `test_benchmark.py` | **24 passed**（17 现有 + 7 新增） |
+| `test_review_persistence.py -k "summary_metrics or filtered_by_status or filtered_basic"` | **4 passed** |
+| 全量非 integration | **553 passed / 1 skipped / 24 deselected**（543 + 10，无回归） |
+| `npm run type-check` | **0 错误** |
+
+### 踩坑与修正
+
+| 坑 | 现象 | 修正 |
+|---|---|---|
+| `review_defect_id` vs `defect_id` | `compute_real_ear` 期望业务 ID（str），`get_task_summary_metrics` 传 DB 外键 id（int），`ear_sample_size = 0` | `get_task_summary_metrics` 用 `defect_id_map = {d.id: d.defect_id}` 翻译 |
+| 测试 FeedbackItem 未关联 defect | 3 条 feedback 的 `review_defect_id=None` | 先 `db.flush()` 拿 defect DB id，再关联 |
+| Sprint 1 G2 老测试断言过时 | `test_list_tasks_filtered_basic` 断言「不含 status」，S2-C 加了 | 改为「含 status + 值合法」，改注释 2 处 |
+
+### 对 S2-D / S2-E 的输入
+
+| 输入 | 内容 | 用途 |
+|---|---|---|
+| `SummaryMetrics` 类型 | 5 字段 | S2-E 的 `TaskSummaryCard` 渲染 |
+| `sample_info` | 4 字段（样本数 + 门槛） | S2-E 显示「N/A · 样本不足」 |
+| `TaskStatus` 加 `pending` | 前端 `task.ts` | S2-D/S2-E 渲染 `task_status` 徽标 |
+| `?status=` | `GET /review/tasks?status=done/failed/pending` | S2-D 前端任务列表筛选 |
+
+
 
 
 

@@ -612,6 +612,158 @@ def test_match_full_review_degraded_rule_id_match():
     }
     assert match_defect_full_review(pred, gt) is True
 
+# ============================================================
+# S2-C：真实指标测试（compute_real_ear / compute_real_ai_ner）
+# ============================================================
+def test_compute_real_ear_denominator_zero_returns_none():
+    """EAR 分母 0（无采纳相关反馈）→ None。"""
+    from app.services.benchmark_service import compute_real_ear
+
+    # 空列表
+    assert compute_real_ear([], []) is None
+    # 只有无关反馈（knowledge_gap / new_rule_candidate）
+    feedbacks = [
+        {"id": 1, "defect_id": "D1", "feedback_type": "knowledge_gap", "comment": "x"},
+        {"id": 2, "defect_id": "D1", "feedback_type": "new_rule_candidate", "comment": "x"},
+    ]
+    assert compute_real_ear(feedbacks, []) is None
+
+
+def test_compute_real_ear_knowledge_gap_not_in_denominator():
+    """knowledge_gap 不进 EAR 分母，不覆盖分子。"""
+    from app.services.benchmark_service import compute_real_ear
+
+    # 构造 20 条 correct_defect + 5 条 knowledge_gap（同一 defect）
+    feedbacks = []
+    for i in range(20):
+        feedbacks.append({
+            "id": i + 1,
+            "defect_id": f"D{i}",
+            "feedback_type": "correct_defect",
+            "suggestion_adopted": None,
+            "comment": "real",
+            "created_at": "2026-10-28T00:00:00",
+        })
+    # 额外 5 条 knowledge_gap，defect_id 不属于 D0~D19
+    for i in range(5):
+        feedbacks.append({
+            "id": 100 + i,
+            "defect_id": f"KG{i}",
+            "feedback_type": "knowledge_gap",
+            "comment": "gap",
+            "created_at": "2026-10-28T00:00:00",
+        })
+
+    # 分母 = 20（只有 correct_defect），分子 = 20 → EAR = 1.0
+    ear = compute_real_ear(feedbacks, [])
+    assert ear == 1.0, f"期望 1.0，实际 {ear}（knowledge_gap 不应进分母）"
+
+
+def test_compute_real_ear_suggestion_update_adopted_in_numerator():
+    """suggestion_update(adopted=yes/partial) 计入分子。"""
+    from app.services.benchmark_service import compute_real_ear
+
+    # 20 条 suggestion_update，其中 10 条 adopted=yes，10 条 adopted=no
+    feedbacks = []
+    for i in range(20):
+        adopted = "yes" if i < 10 else "no"
+        feedbacks.append({
+            "id": i + 1,
+            "defect_id": f"D{i}",
+            "feedback_type": "suggestion_update",
+            "suggestion_adopted": adopted,
+            "comment": "real",
+            "created_at": "2026-10-28T00:00:00",
+        })
+
+    ear = compute_real_ear(feedbacks, [])
+    # 分母 20，分子 10 → 0.5
+    assert ear == 0.5, f"期望 0.5，实际 {ear}"
+
+
+def test_compute_real_ai_ner_threshold_below_10_returns_none():
+    """AI_NER：ai_discovered 候选 < 10 → None。"""
+    from app.services.benchmark_service import compute_real_ai_ner
+
+    # 9 条 ai_discovered（confirmed）+ 20 条 rule
+    pred_defects = []
+    for i in range(9):
+        pred_defects.append({
+            "defect_id": f"AI{i}",
+            "origin": "ai_discovered",
+            "expert_decision": "confirmed",
+        })
+    for i in range(20):
+        pred_defects.append({
+            "defect_id": f"R{i}",
+            "origin": "rule",
+            "expert_decision": "pending",
+        })
+
+    assert compute_real_ai_ner(pred_defects) is None, "9 < 10，应返回 None"
+
+
+def test_compute_real_ai_ner_threshold_at_10_returns_value():
+    """AI_NER：ai_discovered 候选 = 10 → 有值。"""
+    from app.services.benchmark_service import compute_real_ai_ner
+
+    # 10 条 ai_discovered（5 confirmed + 5 rejected）+ 20 条 rule
+    pred_defects = []
+    for i in range(10):
+        pred_defects.append({
+            "defect_id": f"AI{i}",
+            "origin": "ai_discovered",
+            "expert_decision": "confirmed" if i < 5 else "rejected",
+        })
+    for i in range(20):
+        pred_defects.append({
+            "defect_id": f"R{i}",
+            "origin": "rule",
+            "expert_decision": "confirmed",
+        })
+
+    ai_ner = compute_real_ai_ner(pred_defects)
+    # N_ai_effective = 5（confirmed），N_rule_effective = 20
+    # AI_NER = 5 / (20 + 5) = 0.2
+    assert ai_ner is not None, "10 >= 10，应有值"
+    assert abs(ai_ner - 0.2) < 1e-9, f"期望 0.2，实际 {ai_ner}"
+
+
+def test_compute_real_ai_ner_zero_denominator_returns_none():
+    """AI_NER：分母 0（无 rule + 无 confirmed AI）→ None。"""
+    from app.services.benchmark_service import compute_real_ai_ner
+
+    # 10 条 ai_discovered 全部 rejected（N_ai_effective=0）+ 0 条 rule
+    pred_defects = [
+        {"defect_id": f"AI{i}", "origin": "ai_discovered", "expert_decision": "rejected"}
+        for i in range(10)
+    ]
+    assert compute_real_ai_ner(pred_defects) is None
+
+
+def test_compute_sample_info():
+    """compute_sample_info 返回正确样本数与门槛。"""
+    from app.services.benchmark_service import compute_sample_info
+
+    feedbacks = [
+        {"id": 1, "defect_id": "D1", "feedback_type": "correct_defect", "comment": "real", "created_at": "2026-10-28"},
+        {"id": 2, "defect_id": "D2", "feedback_type": "suggestion_update", "suggestion_adopted": "yes", "comment": "real", "created_at": "2026-10-28"},
+        {"id": 3, "defect_id": "D3", "feedback_type": "knowledge_gap", "comment": "real", "created_at": "2026-10-28"},
+        {"id": 4, "defect_id": "D4", "feedback_type": "correct_defect", "comment": "[SEED] 模拟", "created_at": "2026-10-28"},
+    ]
+    pred_defects = [
+        {"defect_id": "AI1", "origin": "ai_discovered"},
+        {"defect_id": "AI2", "origin": "ai_discovered"},
+        {"defect_id": "AI3", "origin": "ai_discovered"},
+        {"defect_id": "R1", "origin": "rule"},
+    ]
+
+    info = compute_sample_info(feedbacks, pred_defects)
+    assert info["ear_sample_size"] == 2, f"期望 2（D1 + D2，D3 是 knowledge_gap，D4 是 SEED），实际 {info['ear_sample_size']}"
+    assert info["ear_sample_threshold"] == 20
+    assert info["ai_ner_sample_size"] == 3, f"期望 3（AI1+AI2+AI3），实际 {info['ai_ner_sample_size']}"
+    assert info["ai_ner_sample_threshold"] == 10
+
 
 if __name__ == "__main__":
     main()
