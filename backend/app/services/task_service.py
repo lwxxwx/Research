@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from app.persistence.db import get_db_session
@@ -705,6 +705,82 @@ def list_cases() -> dict[str, Any]:
         "errors": errors,
     }
 
+# ============================================================
+# update_expert_decision：专家判定 PATCH（S2-B）
+# ------------------------------------------------------------
+# 设计理由：
+#   1. 与 get_task_defects / submit_task_feedback 一致，用 task_id + defect_id
+#      业务标识，不暴露 DB 外键。
+#   2. 双校验：task 存在 + defect 属于该 task，防越权。
+#   3. 只更新 expert_decision 3 字段，不改 review_status（AI 质量状态）。
+# ============================================================
+def update_expert_decision(
+    task_id: str,
+    defect_id: str,
+    expert_decision: str,
+    updated_by: int | None = None,
+) -> dict[str, Any]:
+    """
+    更新单条缺陷的专家最终判定（S2-B）。
+
+    校验：
+      - task 存在（按 task_id 查 review_result）
+      - defect 存在且属于该 task（review_defect.review_result_id == review_result.id）
+      - expert_decision 枚举合法
+
+    返回：{defect_id, expert_decision, expert_decision_updated_at, expert_decision_by}
+
+    异常：
+      - task 不存在 → FeedbackNotFoundError
+      - defect 不存在或不属于该 task → FeedbackNotFoundError
+      - expert_decision 非法 → ValueError
+    """
+    #from datetime import datetime, timezone
+
+    _ALLOWED = {"pending", "confirmed", "rejected", "needs_verification"}
+    if expert_decision not in _ALLOWED:
+        raise ValueError(f"非法 expert_decision: {expert_decision!r}")
+
+    with get_db_session() as db:
+        # 1. 查 review_result
+        rr = (
+            db.query(ReviewResult)
+            .filter(ReviewResult.task_id == task_id)
+            .order_by(ReviewResult.id.desc())
+            .first()
+        )
+        if rr is None:
+            raise FeedbackNotFoundError(f"review_result task_id={task_id} 不存在")
+
+        # 2. 查 review_defect，校验归属
+        rd = (
+            db.query(ReviewDefect)
+            .filter(
+                ReviewDefect.defect_id == defect_id,
+                ReviewDefect.review_result_id == rr.id,
+            )
+            .first()
+        )
+        if rd is None:
+            raise FeedbackNotFoundError(
+                f"review_defect defect_id={defect_id} "
+                f"(review_result_id={rr.id}) 不存在"
+            )
+
+        # 3. 更新 3 字段
+        rd.expert_decision = expert_decision
+        rd.expert_decision_updated_at = datetime.now(timezone.utc)
+        rd.expert_decision_by = updated_by
+        db.commit()
+        db.refresh(rd)
+
+        return {
+            "defect_id": rd.defect_id,
+            "expert_decision": rd.expert_decision,
+            "expert_decision_updated_at": rd.expert_decision_updated_at,
+            "expert_decision_by": rd.expert_decision_by,
+        }
+
 __all__ = [
     "create_task",
     "get_task",
@@ -713,4 +789,5 @@ __all__ = [
     "list_cases",             # ← G3 新增
     "get_task_defects",
     "submit_task_feedback",
+    "update_expert_decision",  # ← S2-B 新增
 ]

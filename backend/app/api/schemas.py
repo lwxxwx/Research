@@ -146,3 +146,22 @@ class FeedbackResponse(BaseModel):
     rule_candidate_ref: str | None = None
     created_by: int | None = None
     created_at: datetime
+
+# ============================================================
+# S2-B：专家判定 PATCH
+# ============================================================
+ExpertDecisionLiteral = Literal["pending", "confirmed", "rejected", "needs_verification"]
+
+
+class UpdateExpertDecisionRequest(BaseModel):
+    """PATCH /api/v1/review/tasks/{task_id}/defects/{defect_id} 请求体。"""
+    expert_decision: ExpertDecisionLiteral
+    expert_decision_by: int | None = None
+
+
+class ExpertDecisionResponse(BaseModel):
+    """PATCH 响应体：返回更新后的 3 字段 + 审计信息。"""
+    defect_id: str
+    expert_decision: ExpertDecisionLiteral
+    expert_decision_updated_at: datetime
+    expert_decision_by: int | None = None

@@ -22,10 +22,13 @@ from app.api.schemas import (
     CreateTaskRequest,
     CreateTaskResponse,
     DefectsResponse,
+    ExpertDecisionResponse,          # ← S2-B 新增
     TaskDetailResponse,
     TaskListResponse,
+    UpdateExpertDecisionRequest,     # ← S2-B 新增
 )
 from app.services import task_service
+from app.services.feedback_service import FeedbackNotFoundError  # ← S2-B 新增
 
 router = APIRouter(prefix="/review/tasks", tags=["review_tasks"])
 
@@ -138,3 +141,43 @@ def get_review_task_defects(task_id: str) -> DefectsResponse:
     # 第 2 步：任务存在，查缺陷（可能空列表，200）
     defects = task_service.get_task_defects(task_id)
     return DefectsResponse(items=defects)
+
+
+# ============================================================
+# PATCH /review/tasks/{task_id}/defects/{defect_id}（S2-B）
+# ============================================================
+@router.patch(
+    "/{task_id}/defects/{defect_id}",
+    response_model=ExpertDecisionResponse,
+)
+def patch_expert_decision(
+    task_id: str,
+    defect_id: str,
+    body: UpdateExpertDecisionRequest,
+) -> ExpertDecisionResponse:
+    """更新单条缺陷的专家最终判定。
+
+    【状态码语义】
+      - 200：更新成功，返回 3 字段 + 审计
+      - 404：task 不存在 / defect 不存在 / defect 不属于 task
+      - 422：expert_decision 枚举非法（由 Literal 保证）+ Service ValueError 兜底
+
+    【约束】
+      - 不改 review_status（AI 质量状态）
+      - 不隐式创建 feedback_item（过程记录）
+      - expert_decision_by 允许 None（Sprint 2 无用户系统）
+    """
+    try:
+        result = task_service.update_expert_decision(
+            task_id=task_id,
+            defect_id=defect_id,
+            expert_decision=body.expert_decision,
+            updated_by=body.expert_decision_by,
+        )
+    except FeedbackNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        # Service 层枚举兜底（正常不会到，入参 Literal 已校验）
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return ExpertDecisionResponse(**result)

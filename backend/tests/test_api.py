@@ -383,3 +383,58 @@ def test_api_feedback_zhipu(client_real):
     assert data["defect_id"] == defect_id
     assert data["feedback_type"] == "correct_defect"
     assert data["expert_suggestion"] == "G6 integration 测试反馈"
+
+# ============================================================
+# S2-B：专家判定 PATCH
+# ============================================================
+def test_patch_expert_decision_200(client, monkeypatch):
+    """合法更新返回 200，响应含 3 字段 + 审计。"""
+    from datetime import datetime, timezone
+    from app.services import task_service
+
+    def fake_update(task_id, defect_id, expert_decision, updated_by=None):
+        return {
+            "defect_id": defect_id,
+            "expert_decision": expert_decision,
+            "expert_decision_updated_at": datetime.now(timezone.utc),
+            "expert_decision_by": updated_by,
+        }
+
+    monkeypatch.setattr(task_service, "update_expert_decision", fake_update)
+
+    resp = client.patch(
+        "/api/v1/review/tasks/T-1/defects/D-1",
+        json={"expert_decision": "confirmed", "expert_decision_by": None},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["defect_id"] == "D-1"
+    assert data["expert_decision"] == "confirmed"
+    assert data["expert_decision_by"] is None
+    assert "expert_decision_updated_at" in data
+
+
+def test_patch_expert_decision_422_invalid_enum(client):
+    """非法 expert_decision 枚举返回 422。"""
+    resp = client.patch(
+        "/api/v1/review/tasks/T-1/defects/D-1",
+        json={"expert_decision": "invalid_value"},
+    )
+    assert resp.status_code == 422
+
+
+def test_patch_expert_decision_404(client, monkeypatch):
+    """task 或 defect 不存在返回 404。"""
+    from app.services import task_service
+    from app.services.feedback_service import FeedbackNotFoundError
+
+    def fake_update(task_id, defect_id, expert_decision, updated_by=None):
+        raise FeedbackNotFoundError("task_id 不存在")
+
+    monkeypatch.setattr(task_service, "update_expert_decision", fake_update)
+
+    resp = client.patch(
+        "/api/v1/review/tasks/T-404/defects/D-404",
+        json={"expert_decision": "confirmed"},
+    )
+    assert resp.status_code == 404

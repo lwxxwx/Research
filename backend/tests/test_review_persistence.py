@@ -777,3 +777,73 @@ def test_list_cases_tags_normalized(tmp_path, monkeypatch):
         assert isinstance(it["tags"], list), (
             f"{it['case_id']} 的 tags 应为 list，实际 {type(it['tags'])}"
         )
+
+# ============================================================
+# S2-B：update_expert_decision Service 测试
+# ============================================================
+def test_update_expert_decision_service():
+    """update_expert_decision 正确更新 3 字段。"""
+    from datetime import datetime
+    from app.persistence.db import get_db_session
+    from app.persistence.models import ReviewDefect, ReviewResult
+    from app.services.task_service import update_expert_decision
+
+    task_id = "TEST-S2B-TASK"
+    defect_id = "TEST-S2B-DEF"
+
+    # 清理可能残留
+    with get_db_session() as db:
+        old_rr = db.query(ReviewResult).filter(ReviewResult.task_id == task_id).first()
+        if old_rr:
+            db.query(ReviewDefect).filter(
+                ReviewDefect.review_result_id == old_rr.id
+            ).delete()
+            db.delete(old_rr)
+            db.commit()
+
+    # 构造 task + defect
+    with get_db_session() as db:
+        rr = ReviewResult(
+            task_id=task_id,
+            review_output_json={"defects": []},
+            is_rule_only=True,
+            task_status="done",
+        )
+        db.add(rr)
+        db.flush()
+
+        rd = ReviewDefect(
+            review_result_id=rr.id,
+            defect_id=defect_id,
+            location={"sheet": "P1", "path": "U1", "coords": {"x": 0, "y": 0}},
+            root_cause="test",
+            suggestion="test",
+            category="power",
+            risk="medium",
+            evidence=[],
+            review_status="AI_CONFIRMED",
+            origin="rule",
+        )
+        db.add(rd)
+        db.commit()
+
+    # 调用
+    result = update_expert_decision(
+        task_id=task_id,
+        defect_id=defect_id,
+        expert_decision="confirmed",
+        updated_by=None,
+    )
+
+    # 断言
+    assert result["defect_id"] == defect_id
+    assert result["expert_decision"] == "confirmed"
+    assert result["expert_decision_by"] is None
+    assert isinstance(result["expert_decision_updated_at"], datetime)
+
+    # 清理
+    with get_db_session() as db:
+        db.query(ReviewDefect).filter(ReviewDefect.defect_id == defect_id).delete()
+        db.query(ReviewResult).filter(ReviewResult.task_id == task_id).delete()
+        db.commit()
+
