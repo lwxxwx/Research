@@ -1,28 +1,23 @@
-// frontend/vite.config.ts
-import { fileURLToPath, URL } from "node:url";
-import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import path from 'path'
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [vue()],
   resolve: {
     alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      '@': path.resolve(__dirname, './src'),
     },
   },
   server: {
     port: 5173,
-    strictPort: true,
     proxy: {
-      // ===== [H 阶段] /api → 后端 FastAPI（localhost:8000） =====
-      // 开发时前端 fetch /api/v1/cases → Vite proxy → http://localhost:8000/api/v1/cases
-      // 同源请求（浏览器看是 localhost:5173/api/v1/...），无 CORS
-      "/api": {
-        target: "http://localhost:8000",
+      // ===== [修复] 代理 /api 请求到后端 =====
+      '/api': {
+        target: 'http://localhost:8000', // 指向本地 Docker 的 backend
         changeOrigin: true,
-        // 不 rewrite：/api/v1/review/tasks → http://localhost:8000/api/v1/review/tasks
-      },
-    },
-  },
-});
+        // 不需要 rewrite，因为后端本身就有 /api/v1 前缀
+      }
+    }
+  }
+})

@@ -1,6 +1,6 @@
 <!-- frontend/src/components/ExpertDecisionPanel.vue -->
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { AlertCircle, Check, HelpCircle, Loader2, X } from "@lucide/vue";
 
 import { updateExpertDecision } from "@/api/review";
@@ -19,15 +19,17 @@ const emit = defineEmits<{
   (e: "updated", response: UpdateExpertDecisionResponse): void;
 }>();
 
-// 当前显示的判定（初始 = props.currentDecision，乐观更新时临时改）
 const displayedDecision = ref<ExpertDecision>(props.currentDecision);
 const displayedUpdatedAt = ref<string | null>(props.updatedAt);
 const displayedDecisionBy = ref<number | null>(props.decisionBy);
 
+watch(() => props.currentDecision, (val) => { displayedDecision.value = val; });
+watch(() => props.updatedAt, (val) => { displayedUpdatedAt.value = val; });
+watch(() => props.decisionBy, (val) => { displayedDecisionBy.value = val; });
+
 const loading = ref(false);
 const errorMsg = ref<string | null>(null);
 
-// 当前态按钮 disabled（避免重复提交相同判定）
 const isCurrent = (d: ExpertDecision) => displayedDecision.value === d;
 
 const buttons: { value: ExpertDecision; label: string; icon: any; className: string }[] = [
@@ -49,17 +51,17 @@ const auditText = computed(() => {
 async function handleClick(target: ExpertDecision) {
   if (loading.value || isCurrent(target)) return;
 
+  console.log(`[专家判定] 用户点击了「${target}」, 当前缺陷: ${props.defectId}`);
+
   errorMsg.value = null;
   loading.value = true;
 
-  // 乐观更新快照
   const prev = {
     decision: displayedDecision.value,
     updatedAt: displayedUpdatedAt.value,
     by: displayedDecisionBy.value,
   };
 
-  // 乐观更新：只改徽标 + 审计行，不改其他字段
   displayedDecision.value = target;
 
   try {
@@ -67,22 +69,23 @@ async function handleClick(target: ExpertDecision) {
       props.taskId,
       props.defectId,
       target,
-      null, // S2 无用户系统，传 null
+      null,
     );
 
-    // 200：用响应体覆盖（以服务端为准）
     displayedDecision.value = resp.expert_decision;
     displayedUpdatedAt.value = resp.expert_decision_updated_at;
     displayedDecisionBy.value = resp.expert_decision_by;
 
+    console.log(`[专家判定] 接口返回成功，审计时间: ${resp.expert_decision_updated_at}`);
     emit("updated", resp);
   } catch (e) {
-    // 失败回滚
     displayedDecision.value = prev.decision;
     displayedUpdatedAt.value = prev.updatedAt;
     displayedDecisionBy.value = prev.by;
 
     const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[专家判定] 更新失败，已回滚。原因:`, msg);
+
     if (msg.includes("404")) {
       errorMsg.value = "缺陷不存在或不属于该任务";
     } else if (msg.includes("422")) {
@@ -105,7 +108,6 @@ async function handleClick(target: ExpertDecision) {
       <ExpertDecisionBadge :decision="displayedDecision" />
     </div>
 
-    <!-- 三按钮组 -->
     <div class="flex gap-2">
       <button
         v-for="b in buttons"
@@ -125,10 +127,8 @@ async function handleClick(target: ExpertDecision) {
       </button>
     </div>
 
-    <!-- 审计行 -->
     <p v-if="auditText" class="text-xs text-gray-500 mt-2">{{ auditText }}</p>
 
-    <!-- 错误提示 -->
     <div v-if="errorMsg" class="mt-2 p-2 bg-red-50 border border-red-200 rounded flex items-start">
       <AlertCircle class="w-4 h-4 text-red-600 mt-0.5 mr-1 flex-shrink-0" />
       <p class="text-xs text-red-800">{{ errorMsg }}</p>

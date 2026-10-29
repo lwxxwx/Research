@@ -370,7 +370,59 @@ Content-Type: application/json
 | `ExpertDecisionPanel` 组件 | 已完成 | 后续无改动 |
 | `onExpertDecisionUpdated` 父组件回调 | 已完成 | 后续无改动 |
 
+---
 
+## S2-E：前端摘要卡片与表单增强（2026-10-29）
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §5.2 / §5.7 + §14 S2-E 行
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `frontend/src/types/feedback.ts` | 加 `SuggestionDiffItem` / `RuleCandidateInput` |
+| 2 | `frontend/src/components/TaskSummaryCard.vue` | **新建**：EVC / AI_NER / EAR / 质量分布四格卡片（支持 N/A 语义） |
+| 3 | `frontend/src/components/SuggestionDiffEditor.vue` | **新建**：旧建议 / 新建议双列对比表单 |
+| 4 | `frontend/src/components/RuleCandidateForm.vue` | **新建**：标题 / 描述 / severity 结构化表单 |
+| 5 | `frontend/src/components/FeedbackPanel.vue` | 改用 `SuggestionDiffEditor` / `RuleCandidateForm`，加前端必填校验 |
+| 6 | `frontend/src/api/feedback.ts` | 适配后端 `RuleCandidate` 必填字段（`severity_hint` → `severity`，兜底 `rule_id` 等） |
+| 7 | `frontend/src/pages/TaskDetailPage.vue` | 顶部集成 `TaskSummaryCard` |
+| 8 | `frontend/src/api/http.ts` | 修复路径拼接（去掉双斜杠），加 DEV 环境 URL 日志打印 |
+| 9 | `frontend/vite.config.ts` | 补全 `server.proxy` 代理配置（修复 API 请求被 Vite 路由拦截） |
+| 10 | `frontend/src/components/ExpertDecisionPanel.vue` | 加 `watch` 同步 props，加请求链路 console 日志 |
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `npm run type-check` | **0 错误** |
+| `TaskSummaryCard` 渲染 | ✅ 四格布局，`null` 值正确显示 `N/A · 样本不足` |
+| `SuggestionDiffEditor` | ✅ 双列表单 + 增删按钮 |
+| `RuleCandidateForm` | ✅ 三字段表单 |
+| `FeedbackPanel` 提交 | ✅ 成功提交，无 422 报错，控制台显示 `[API 成功] POST /api/v1/feedbacks` |
+| `ExpertDecisionPanel` | ✅ 点击确认后乐观更新、`[API 成功] PATCH` 日志正常 |
+
+---
+
+### 踩坑与修正（S2-D & S2-E 核心排障记录）
+
+| 坑 | 现象 | 修正 |
+|---|---|---|
+| **Vite HMR 失效** | 修改代码或 `vite.config.ts` 后页面无变化，或请求被错误路由 | 终端 `Ctrl+C` 停 Vite，必要时 `taskkill /F /IM node.exe` 清理进程，重启 `npm run dev` + 浏览器 `Ctrl+F5` 强刷。 |
+| **API 请求返回 HTML** | Network 里请求 Type 为 `document`，返回 `<html>` 而非 JSON | 未配代理导致被 Vite 路由拦截。在 `vite.config.ts` 补全 `server.proxy['/api']` 指向 `http://localhost:8000`，重启 Vite。 |
+| **组件状态不响应** | 专家判定后，徽标颜色不更新 / 外部折叠区列表不同步 | `ExpertDecisionBadge` 改用 `computed` 响应 prop 变化；父组件 `TaskDetailPage` 更新数组改用 `splice(idx, 1, updated)` 强触发 Vue 响应式。 |
+| **后端 Pydantic 422** | 提交「新规则候选」报 `Extra inputs are not permitted` | 前端表单是轻量级（title/desc），后端要求全字段（rule_id/severity）。在 `api/feedback.ts` 做适配层拦截并映射 `severity_hint`，填入默认占位。 |
+| **`TaskSummaryCard` 消失** | 后端 `evidence_coverage` 为 `null` 时，整个卡片消失 | 去掉外壳的 `v-if="metrics"` 使其常驻；内部单格处理 `null` 显示为 `N/A`，严守口径不伪造 `0%`。 |
+| **提交后“无反应”错觉** | 点击提交后，界面瞬间恢复原样（Network 其实 200 成功） | 父组件监听了 `@success` 瞬间折叠了面板，导致绿框提示被销毁。目前需看 Network 确认，后续可加 Toast 提示优化体验。 |
+
+### 开发者调试利器（全链路 Console 日志）
+
+为了快速定位前后端交互问题，S2-D/E 阶段在关键路径埋了 `import.meta.env.DEV` 的日志：
+- **`http.ts`**：打印 `[API 请求开始]` / `[API 成功]`（含耗时、状态码）/ `[API 失败]`（含 error detail）。
+- **`ExpertDecisionPanel.vue`**：打印 `[专家判定]` 按钮点击及接口回包。
+- **`TaskDetailPage.vue`**：打印 `[页面状态更新]` 数组渲染。
+- **排障建议**：联调时按 `F12` 打开 Console，过滤 `[API` 即可追踪完整的请求生命周期。
 
 
 

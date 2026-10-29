@@ -58,3 +58,19 @@ export interface FeedbackResponse {
   /** FastAPI 序列化为 ISO 8601 字符串 */
   created_at: string;
 }
+
+// ============================================================
+// S2-E：结构化表单类型
+// ============================================================
+/** 建议修改对比条目（suggestion_update 用） */
+export interface SuggestionDiffItem {
+  old: string;
+  new: string;
+}
+
+/** 规则候选表单输入（new_rule_candidate 用） */
+export interface RuleCandidateInput {
+  title: string;
+  description: string;
+  severity_hint?: string | null;
+}

@@ -10,6 +10,7 @@ import type { DefectFromAPI } from "@/types/defect";
 import DefectCard from "@/components/DefectCard.vue";
 import FeedbackPanel from "@/components/FeedbackPanel.vue";
 import StatusBadge from "@/components/StatusBadge.vue";
+import TaskSummaryCard from "@/components/TaskSummaryCard.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -20,18 +21,15 @@ const defects = ref<DefectFromAPI[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 
-// 当前展开反馈面板的 defectId
 const feedbackDefectId = ref<string | null>(null);
 
 async function loadData() {
   loading.value = true;
   error.value = null;
   try {
-    // 1. 先查 task (如果 404 则中断)
     const t = await getTask(taskId);
     task.value = t;
 
-    // 2. 只有 done 且 report 存在才查 defects
     if (t.status === "done" && t.report) {
       const d = await getDefects(taskId);
       defects.value = d.items;
@@ -47,12 +45,13 @@ function toggleFeedback(id: string) {
   feedbackDefectId.value = feedbackDefectId.value === id ? null : id;
 }
 
-// ===== [S2-D] 专家判定更新后，用响应体更新本地 defects 数组（不重新拉全量） =====
 function onExpertDecisionUpdated(defectId: string, response: {
   expert_decision: string;
   expert_decision_updated_at: string;
   expert_decision_by: number | null;
 }) {
+  console.log(`[页面状态更新] 收到子组件 emitter 事件，更新缺陷: ${defectId}`);
+  
   const idx = defects.value.findIndex((d) => d.defect_id === defectId);
   if (idx >= 0) {
     defects.value[idx] = {
@@ -61,9 +60,9 @@ function onExpertDecisionUpdated(defectId: string, response: {
       expert_decision_updated_at: response.expert_decision_updated_at,
       expert_decision_by: response.expert_decision_by,
     };
+    console.log(`[页面状态更新] 本地 defects 数组已更新完毕`);
   }
 }
-// ===== [S2-D END] =====
 
 onMounted(loadData);
 watch(() => route.params.taskId, (newId) => {
@@ -76,20 +75,17 @@ watch(() => route.params.taskId, (newId) => {
 
 <template>
   <div class="space-y-6">
-    <!-- 返回按钮 -->
     <div>
       <button class="flex items-center text-sm text-gray-500 hover:text-gray-900" @click="router.push('/tasks')">
         <ArrowLeft class="w-4 h-4 mr-1" /> 返回任务列表
       </button>
     </div>
 
-    <!-- 加载中 -->
     <div v-if="loading" class="flex items-center justify-center py-20 text-gray-500">
       <Loader2 class="w-6 h-6 animate-spin mr-2 text-blue-600" />
       加载任务详情中...
     </div>
 
-    <!-- 错误 -->
     <div v-else-if="error" class="card p-6 border-red-200 bg-red-50 text-center">
       <AlertCircle class="w-12 h-12 text-red-500 mx-auto mb-3" />
       <h3 class="text-lg font-medium text-red-900">加载失败</h3>
@@ -97,9 +93,9 @@ watch(() => route.params.taskId, (newId) => {
       <button class="btn-secondary mt-4" @click="loadData">重试</button>
     </div>
 
-    <!-- 详情主体 -->
     <template v-else-if="task">
-      <!-- 头部摘要 -->
+      <TaskSummaryCard :metrics="task.summary_metrics" />
+
       <div class="card p-6 border-l-4 border-blue-500">
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -125,7 +121,6 @@ watch(() => route.params.taskId, (newId) => {
           </div>
         </div>
 
-        <!-- 三态分布 (如果有) -->
         <div v-if="task.report?.summary?.review_status_distribution" class="mt-4 pt-4 border-t border-gray-100 flex gap-6">
           <div class="text-sm"><span class="text-gray-500">AI 已确认：</span><span class="font-bold text-emerald-600">{{ task.report.summary.review_status_distribution.AI_CONFIRMED }}</span></div>
           <div class="text-sm"><span class="text-gray-500">需专家复核：</span><span class="font-bold text-amber-600">{{ task.report.summary.review_status_distribution.NEED_EXPERT_REVIEW }}</span></div>
@@ -133,7 +128,6 @@ watch(() => route.params.taskId, (newId) => {
         </div>
       </div>
 
-      <!-- 失败提示 (如果 status=failed) -->
       <div v-if="task.status === 'failed'" class="card p-6 border-red-200 bg-red-50">
         <h3 class="text-lg font-medium text-red-900 flex items-center">
           <AlertCircle class="w-5 h-5 mr-2" /> 评审执行失败
@@ -143,12 +137,10 @@ watch(() => route.params.taskId, (newId) => {
         </ul>
       </div>
 
-      <!-- 报告为空 -->
       <div v-else-if="!task.report || Object.keys(task.report).length === 0" class="card p-12 text-center text-gray-500">
         报告未生成或为空。
       </div>
 
-      <!-- 缺陷列表 -->
       <div v-else class="space-y-4">
         <h3 class="text-lg font-medium text-gray-900 border-b pb-2">缺陷明细 ({{ defects.length }})</h3>
         <div v-if="defects.length === 0" class="text-gray-500 text-center py-8">无缺陷。</div>
@@ -160,13 +152,11 @@ watch(() => route.params.taskId, (newId) => {
               :task-id="task.task_id"
               @expert-decision-updated="onExpertDecisionUpdated"
             />
-            <!-- 快速反馈入口 -->
             <div class="mt-2 text-right">
               <button @click="toggleFeedback(d.defect_id)" class="text-sm text-blue-600 hover:text-blue-800 underline">
                 {{ feedbackDefectId === d.defect_id ? '收起反馈' : '快速反馈' }}
               </button>
             </div>
-            <!-- 反馈面板 -->
             <FeedbackPanel 
               v-if="feedbackDefectId === d.defect_id" 
               :task-id="task.task_id" 
