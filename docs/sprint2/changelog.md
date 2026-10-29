@@ -327,6 +327,51 @@ Content-Type: application/json
 | `TaskStatus` 加 `pending` | 前端 `task.ts` | S2-D/S2-E 渲染 `task_status` 徽标 |
 | `?status=` | `GET /review/tasks?status=done/failed/pending` | S2-D 前端任务列表筛选 |
 
+---
+
+## S2-D：前端专家判定交互（2026-10-29）
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §5.1 + §14 S2-D 行
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `frontend/src/api/review.ts` | 加 `updateExpertDecision` 函数 |
+| 2 | `frontend/src/types/defect.ts` | 加 `UpdateExpertDecisionRequest` / `UpdateExpertDecisionResponse` |
+| 3 | `frontend/src/components/ExpertDecisionPanel.vue` | **新建**：三按钮 + 乐观更新 + 失败回滚 + 审计行 |
+| 4 | `frontend/src/components/DefectCard.vue` | 展开区集成 `ExpertDecisionPanel`，`props` 加 `taskId` + `emit` |
+| 5 | `frontend/src/components/ExpertDecisionBadge.vue` | **修复**：`const badge` → `computed(() => ...)`，解决 props 变化样式不更新 |
+| 6 | `frontend/src/pages/TaskDetailPage.vue` | `<DefectCard>` 加 `:task-id` + `@expert-decision-updated`，加 `onExpertDecisionUpdated` 用 `splice` 触发响应式 |
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `npm run type-check` | **0 错误** |
+| 展开缺陷卡片 | 显示「专家判定」三按钮 + 当前徽标 |
+| 点「确认」 | 徽标变绿 + 审计行出现「判定于 … · 操作者 未记录」 |
+| 折叠区徽标同步 | 右上角 `专家确认` 同步变绿 |
+| 当前态按钮禁用 | `✓ 确认` 变灰 disabled |
+| 刷新页面 | 徽标仍为「专家确认」，审计行仍在 |
+
+### 踩坑与修正
+
+| 坑 | 现象 | 修正 |
+|---|---|---|
+| `ExpertDecisionBadge` 样式不更新 | 点击确认后，内部徽标颜色不变（依然灰色） | `const badge = DECISION_MAP[props.decision]` → `const badge = computed(() => DECISION_MAP[props.decision])`，使响应式生效 |
+| 折叠区徽标不同步 | 内部变了，外部没变 | 父组件 `onExpertDecisionUpdated` 用 `defects.value.splice(idx, 1, updated)` 替换元素，强触发 Vue 数组响应式 |
+
+### 对 S2-E 的输入
+
+| 输入 | 内容 | 用途 |
+|---|---|---|
+| `ExpertDecisionPanel` 组件 | 已完成 | 后续无改动 |
+| `onExpertDecisionUpdated` 父组件回调 | 已完成 | 后续无改动 |
+
+
+
 
 
 

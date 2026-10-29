@@ -1,5 +1,6 @@
 <!-- frontend/src/components/ExpertDecisionBadge.vue -->
 <script setup lang="ts">
+import { computed } from "vue";
 import type { ExpertDecision } from "@/types/defect";
 
 const props = defineProps<{
@@ -29,11 +30,13 @@ const DECISION_MAP: Record<
   },
 };
 
-const badge =
-  DECISION_MAP[props.decision] ?? {
+// ===== 关键修复：使用 computed 使其响应 props 变化 =====
+const badge = computed(() => {
+  return DECISION_MAP[props.decision] ?? {
     label: `未知 (${props.decision})`,
     className: "bg-gray-100 text-gray-600 border-gray-200",
   };
+});
 </script>
 
 <template>

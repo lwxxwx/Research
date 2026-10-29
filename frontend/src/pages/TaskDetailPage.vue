@@ -47,6 +47,24 @@ function toggleFeedback(id: string) {
   feedbackDefectId.value = feedbackDefectId.value === id ? null : id;
 }
 
+// ===== [S2-D] 专家判定更新后，用响应体更新本地 defects 数组（不重新拉全量） =====
+function onExpertDecisionUpdated(defectId: string, response: {
+  expert_decision: string;
+  expert_decision_updated_at: string;
+  expert_decision_by: number | null;
+}) {
+  const idx = defects.value.findIndex((d) => d.defect_id === defectId);
+  if (idx >= 0) {
+    defects.value[idx] = {
+      ...defects.value[idx],
+      expert_decision: response.expert_decision as any,
+      expert_decision_updated_at: response.expert_decision_updated_at,
+      expert_decision_by: response.expert_decision_by,
+    };
+  }
+}
+// ===== [S2-D END] =====
+
 onMounted(loadData);
 watch(() => route.params.taskId, (newId) => {
   if (newId) {
@@ -137,7 +155,11 @@ watch(() => route.params.taskId, (newId) => {
         
         <div v-else class="space-y-4">
           <div v-for="d in defects" :key="d.defect_id" class="relative">
-            <DefectCard :defect="d" />
+            <DefectCard
+              :defect="d"
+              :task-id="task.task_id"
+              @expert-decision-updated="onExpertDecisionUpdated"
+            />
             <!-- 快速反馈入口 -->
             <div class="mt-2 text-right">
               <button @click="toggleFeedback(d.defect_id)" class="text-sm text-blue-600 hover:text-blue-800 underline">

@@ -7,11 +7,27 @@ import type { DefectFromAPI } from "@/types/defect";
 import EvidenceChain from "./EvidenceChain.vue";
 import StatusBadge from "./StatusBadge.vue";
 import ExpertDecisionBadge from "./ExpertDecisionBadge.vue";
+// ===== [S2-D] 专家判定面板 =====
+import ExpertDecisionPanel from "./ExpertDecisionPanel.vue";
+// ===== [S2-D END] =====
 
 const props = defineProps<{
   defect: DefectFromAPI;
   defaultExpanded?: boolean;
+  // ===== [S2-D] 传递 taskId，供 ExpertDecisionPanel 调 PATCH =====
+  taskId: string;
+  // ===== [S2-D END] =====
 }>();
+
+// ===== [S2-D] 专家判定更新后，emit 给父组件刷新本地状态 =====
+const emit = defineEmits<{
+  (e: "expert-decision-updated", defectId: string, response: any): void;
+}>();
+
+function onExpertDecisionUpdated(response: any) {
+  emit("expert-decision-updated", props.defect.defect_id, response);
+}
+// ===== [S2-D END] =====
 
 const isExpanded = ref(props.defaultExpanded ?? false);
 
@@ -95,6 +111,17 @@ const originText = computed(() => {
         <h4 class="text-xs font-semibold text-gray-700 mb-2">证据链（Evidence Chain）</h4>
         <EvidenceChain :evidence="defect.evidence" />
       </div>
+
+      <!-- ===== [S2-D] 专家判定面板（展开区显示） ===== -->
+      <ExpertDecisionPanel
+        :task-id="taskId"
+        :defect-id="defect.defect_id"
+        :current-decision="defect.expert_decision"
+        :updated-at="defect.expert_decision_updated_at"
+        :decision-by="defect.expert_decision_by"
+        @updated="onExpertDecisionUpdated"
+      />
+      <!-- ===== [S2-D END] ===== -->
     </div>
   </div>
 </template>

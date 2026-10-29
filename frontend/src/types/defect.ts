@@ -73,3 +73,20 @@ export interface DefectFromReport {
 export interface DefectsResponse {
   items: DefectFromAPI[];
 }
+
+// ============================================================
+// S2-D：专家判定 PATCH（请求 / 响应）
+// ============================================================
+/** PATCH /review/tasks/{task_id}/defects/{defect_id} 请求体 */
+export interface UpdateExpertDecisionRequest {
+  expert_decision: ExpertDecision;
+  expert_decision_by?: number | null;
+}
+
+/** PATCH 响应体（对齐后端 ExpertDecisionResponse） */
+export interface UpdateExpertDecisionResponse {
+  defect_id: string;
+  expert_decision: ExpertDecision;
+  expert_decision_updated_at: string;
+  expert_decision_by: number | null;
+}

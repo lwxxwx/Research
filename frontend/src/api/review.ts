@@ -49,3 +49,37 @@ export function getDefects(taskId: string): Promise<DefectsResponse> {
     `/review/tasks/${encodeURIComponent(taskId)}/defects`,
   );
 }
+
+// ============================================================
+// S2-D：专家判定 PATCH
+// ============================================================
+import type {
+  ExpertDecision,
+  UpdateExpertDecisionResponse,
+} from "@/types/defect";
+
+/**
+ * PATCH /api/v1/review/tasks/{task_id}/defects/{defect_id}
+ * 更新单条缺陷的专家最终判定（S2-B 后端接口）。
+ *
+ * - 200：返回 4 字段（defect_id / expert_decision / expert_decision_updated_at / expert_decision_by）
+ * - 404：task 不存在 / defect 不存在 / defect 不属于 task
+ * - 422：expert_decision 枚举非法
+ */
+export function updateExpertDecision(
+  taskId: string,
+  defectId: string,
+  decision: ExpertDecision,
+  by: number | null = null,
+): Promise<UpdateExpertDecisionResponse> {
+  return request<UpdateExpertDecisionResponse>(
+    `/review/tasks/${encodeURIComponent(taskId)}/defects/${encodeURIComponent(defectId)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        expert_decision: decision,
+        expert_decision_by: by,
+      }),
+    },
+  );
+}
