@@ -2,13 +2,16 @@
 <script setup lang="ts">
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import { computed } from "vue";
-import { FileText, ListChecks } from "@lucide/vue";
+// ===== [S2-G] 引入图标 =====
+import { FileText, ListChecks, Sparkles } from "@lucide/vue";
 
 const route = useRoute();
 
 // 导航高亮：当前路由是否在某前缀下
 const isCasesActive = computed(() => route.path.startsWith("/cases"));
 const isTasksActive = computed(() => route.path.startsWith("/tasks"));
+// ===== [S2-G] 规则候选路由高亮 =====
+const isRuleCandidatesActive = computed(() => route.path.startsWith("/rule-candidates"));
 </script>
 
 <template>
@@ -24,7 +27,7 @@ const isTasksActive = computed(() => route.path.startsWith("/tasks"));
               原理图评审系统
             </h1>
             <span class="text-xs px-2 py-0.5 bg-blue-100 text-blue-700 rounded">
-              Sprint 1
+              Sprint 2
             </span>
           </div>
 
@@ -54,6 +57,20 @@ const isTasksActive = computed(() => route.path.startsWith("/tasks"));
               <ListChecks class="w-4 h-4 mr-1.5" />
               任务列表
             </RouterLink>
+            <!-- ===== [S2-G] 规则候选导航 ===== -->
+            <RouterLink
+              to="/rule-candidates"
+              class="flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors"
+              :class="
+                isRuleCandidatesActive
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+              "
+            >
+              <Sparkles class="w-4 h-4 mr-1.5" />
+              规则候选
+            </RouterLink>
+            <!-- ===== [S2-G END] ===== -->
           </nav>
         </div>
       </div>

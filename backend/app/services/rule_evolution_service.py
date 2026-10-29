@@ -198,6 +198,98 @@ class RuleEvolutionService:
             })
         return out
 
+    # ============================================================
+    # S2-G：Web API 所需的 3 个方法
+    # ============================================================
+    def get_all_candidates(
+        self, db: Session, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """查询候选规则列表（S2-G）。"""
+        query = db.query(RuleCandidate)
+        if status:
+            query = query.filter(RuleCandidate.status == status)
+        rows = query.order_by(RuleCandidate.created_at.desc()).all()
+
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append({
+                "candidate_id": r.candidate_id,
+                "from_feedback_id": r.from_feedback_id,
+                "case_id": r.case_id,
+                "title": r.title,
+                "description": r.description,
+                "severity": r.severity,
+                "status": r.status,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            })
+        return out
+
+    def get_candidate(
+        self, db: Session, candidate_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """查询单条候选规则详情（S2-G）。"""
+        rc: Optional[RuleCandidate] = (
+            db.query(RuleCandidate)
+            .filter(RuleCandidate.candidate_id == candidate_id)
+            .first()
+        )
+        if rc is None:
+            return None
+
+        return {
+            "candidate_id": rc.candidate_id,
+            "from_feedback_id": rc.from_feedback_id,
+            "case_id": rc.case_id,
+            "title": rc.title,
+            "description": rc.description,
+            "severity": rc.severity,
+            "status": rc.status,
+            "proposed_yaml": rc.proposed_yaml,
+            "evidence_refs": rc.evidence_refs,
+            "benchmark_result": rc.benchmark_result,
+            "benchmarked_at": (
+                rc.benchmarked_at.isoformat() if rc.benchmarked_at else None
+            ),
+            "rejected_reason": rc.rejected_reason,
+            "created_at": rc.created_at.isoformat() if rc.created_at else None,
+            "updated_at": rc.updated_at.isoformat() if rc.updated_at else None,
+        }
+
+    def update_candidate_status(
+        self,
+        db: Session,
+        candidate_id: str,
+        status: str,
+        rejected_reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """更新候选规则状态（S2-G，approve / reject）。"""
+        _ALLOWED = {"accepted", "rejected"}
+        if status not in _ALLOWED:
+            raise ValueError(
+                f"status 必须为 'accepted' / 'rejected'，实际: {status!r}"
+            )
+
+        rc: Optional[RuleCandidate] = (
+            db.query(RuleCandidate)
+            .filter(RuleCandidate.candidate_id == candidate_id)
+            .first()
+        )
+        if rc is None:
+            raise ValueError(f"rule_candidate candidate_id={candidate_id} not found")
+
+        rc.status = status
+        if status == "rejected":
+            rc.rejected_reason = rejected_reason
+        db.commit()
+        db.refresh(rc)
+
+        return {
+            "candidate_id": rc.candidate_id,
+            "status": rc.status,
+            "rejected_reason": rc.rejected_reason,
+            "updated_at": rc.updated_at.isoformat() if rc.updated_at else None,
+        }    
+
     def export_candidate_yaml(self, db: Session, candidate_id: str, out_path: str | Path) -> None:
         rc: Optional[RuleCandidate] = db.query(RuleCandidate).filter(RuleCandidate.candidate_id == candidate_id).first()
         if rc is None:

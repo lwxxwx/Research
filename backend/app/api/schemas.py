@@ -191,30 +191,57 @@ class ExpertDecisionResponse(BaseModel):
     expert_decision_updated_at: datetime
     expert_decision_by: int | None = None
 
-
 # ============================================================
-# S2-C：任务详情指标
+# S2-G：规则候选审核
 # ============================================================
-class SampleInfo(BaseModel):
-    """summary_metrics.sample_info：样本数与门槛（前端不硬编码阈值）。"""
-    ear_sample_size: int
-    ear_sample_threshold: int
-    ai_ner_sample_size: int
-    ai_ner_sample_threshold: int
+RuleCandidateStatusLiteral = Literal["accepted", "rejected"]
 
 
-class SummaryMetrics(BaseModel):
-    """GET /review/tasks/{task_id} 的 summary_metrics（S2-C 新增）。
+class RuleCandidateListItem(BaseModel):
+    """GET /api/v1/rule-candidates 列表项。"""
+    candidate_id: str
+    from_feedback_id: int | None = None
+    case_id: str | None = None
+    title: str
+    description: str
+    severity: str | None = None
+    status: str
+    created_at: str | None = None
 
-    指标口径严格对齐 docs/benchmark/metrics_definition.md v3.2：
-      - EAR  : 真实专家采纳率（≥ 20 条样本门槛）
-      - AI_NER : 真实 AI 新增有效发现率（≥ 10 条样本门槛）
-      - EVC  : GT 侧证据完整率
 
-    字段为 None 时 UI 显示 "N/A" + 具体原因（N/A · 样本不足 / N/A · 待专家反馈）。
-    """
-    evidence_coverage: float | None = None
-    ai_new_effective_rate: float | None = None
-    expert_adoption_rate: float | None = None
-    review_status_distribution: dict[str, int] = Field(default_factory=dict)
-    sample_info: SampleInfo
+class RuleCandidateListResponse(BaseModel):
+    """GET /api/v1/rule-candidates 响应体。"""
+    total: int
+    items: list[RuleCandidateListItem]
+
+
+class RuleCandidateDetail(BaseModel):
+    """GET /api/v1/rule-candidates/{candidate_id} 响应体。"""
+    candidate_id: str
+    from_feedback_id: int | None = None
+    case_id: str | None = None
+    title: str
+    description: str
+    severity: str | None = None
+    status: str
+    proposed_yaml: str | None = None
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    benchmark_result: dict[str, Any] | None = None
+    benchmarked_at: str | None = None
+    rejected_reason: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class UpdateCandidateStatusRequest(BaseModel):
+    """POST /api/v1/rule-candidates/{candidate_id}/status 请求体。"""
+    status: RuleCandidateStatusLiteral
+    rejected_reason: str | None = None
+
+
+class UpdateCandidateStatusResponse(BaseModel):
+    """状态更新响应体。"""
+    candidate_id: str
+    status: str
+    rejected_reason: str | None = None
+    updated_at: str | None = None

@@ -27,6 +27,14 @@ const router = createRouter({
       meta: { title: "任务详情" },
       props: true,
     },
+    // ===== [S2-G] 规则候选审核页 =====
+    {
+      path: "/rule-candidates",
+      name: "rule-candidates",
+      component: () => import("@/pages/RuleCandidatePage.vue"),
+      meta: { title: "规则候选审核" },
+    },
+    // ===== [S2-G END] =====
     {
       path: "/:pathMatch(.*)*",
       name: "not-found",

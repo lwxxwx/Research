@@ -425,6 +425,40 @@ Content-Type: application/json
 - **排障建议**：联调时按 `F12` 打开 Console，过滤 `[API` 即可追踪完整的请求生命周期。
 
 
+---
 
+## S2-G：规则候选审核页（2026-10-29）
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §4.4 + §14 S2-G 行
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/app/services/rule_evolution_service.py` | 补充 `get_all_candidates` / `get_candidate` / `update_candidate_status` 3 个 API 方法 |
+| 2 | `backend/app/api/schemas.py` | 追加 4 个 Pydantic 模型；清理了末尾重复的 `SampleInfo` / `SummaryMetrics` 定义 |
+| 3 | `backend/app/api/rule_candidates.py` | **新建**：3 个 API 端点（列表 / 详情 / 状态更新） |
+| 4 | `backend/app/api/__init__.py` | 注册 `rule_candidates` 路由 |
+| 5 | `frontend/src/types/rule_candidate.ts` | **新建**：类型定义 |
+| 6 | `frontend/src/api/rule_candidate.ts` | **新建**：前端 API 封装 |
+| 7 | `frontend/src/pages/RuleCandidatePage.vue` | **新建**：列表 + YAML 预览 + 批准/驳回交互 |
+| 8 | `frontend/src/router/index.ts` | 新增 `/rule-candidates` 路由 |
+| 9 | `frontend/src/App.vue` | 导航栏加「规则候选」入口 |
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `npm run type-check` | 0 错误 |
+| Swagger `/api/v1/rule-candidates` | 3 个接口注册成功 |
+| 前端页面加载列表 | 成功渲染 `proposed` 状态的候选 |
+| YAML 预览 | 正确显示并高亮 |
+| 批准/驳回 | 点击后调用后端成功，状态变更 |
+
+### 关键约束（守住 S2 底线）
+
+- **批准 ≠ 发布**：前端点击「批准」仅将状态改为 `accepted`，**不会自动写入 `data/rules/`**。正式规则的合入必须人工手动操作（Sprint 2 冻结）。
+- **驳回必须有理由**：前端弹窗和后端 Schema 双重校验了 `rejected_reason` 不为空。
 
 

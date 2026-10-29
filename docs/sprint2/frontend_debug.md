@@ -12,7 +12,8 @@
 4. [后端 Pydantic 422 校验报错（Extra inputs are not permitted）](#4-后端-pydantic-422-校验报错extra-inputs-are-not-permitted)
 5. [指标数据缺失与 UI 组件消失](#5-指标数据缺失与-ui-组件消失)
 6. [提交反馈后"无反应"的错觉](#6-提交反馈后无反应的错觉)
-7. [开发者调试利器：全链路 Console 日志](#7-开发者调试利器全链路-console-日志)
+7. [Sprint 1 规则候选 ID 包含特殊连字符](#7-sprint-1-规则候选-id-包含特殊连字符)
+8. [开发者调试利器：全链路 Console 日志](#8-开发者调试利器全链路-console-日志)
 
 ---
 
@@ -54,7 +55,6 @@ server: {
   }
 }
 ```
-
 2. 修改完配置后，必须重启 Vite。
 3. 排查 `frontend/.env.development` 中的 `VITE_API_BASE_URL` 是否为 `/api/v1`，禁止在开发环境写死 `http://localhost:8000`。
 
@@ -62,7 +62,7 @@ server: {
 
 ## 3. 组件数据不响应 / 样式不更新
 
-**现象 A：徽标颜色点完不变化**
+### 现象 A：徽标颜色点完不变化
 点击「专家确认」按钮，后端返回 200，但页面徽标依然是灰色的「待判定」。
 
 **根因**：`ExpertDecisionBadge.vue` 中使用了 `const badge = DECISION_MAP[props.decision]`，这是非响应式的静态对象，props 改变时不会重新计算。
@@ -72,7 +72,7 @@ server: {
 const badge = computed(() => DECISION_MAP[props.decision] ?? defaultBadge);
 ```
 
-**现象 B：外部列表状态不同步**
+### 现象 B：外部列表状态不同步
 内部面板点击确认后，外面折叠状态的徽标没有变绿。
 
 **根因**：Vue 3 对于数组内部对象的替换，有时响应式 Proxy 不会强触发 v-for 更新。
@@ -141,18 +141,33 @@ if (body.rule_candidate) {
 
 ---
 
-## 7. 开发者调试利器：全链路 Console 日志
+## 7. Sprint 1 规则候选 ID 包含特殊连字符
 
-为了快速定位前后端交互问题，S2-D/E 阶段在关键路径埋了 DEV 环境的日志：
+### 现象
+在 S2-G 的前端页面请求详情 `GET /api/v1/rule-candidates/RC-20261029-...` 时，可能会报 404 或找不到。查看控制台 Network，发现 URL 变成了 `RC%E2%80%80%91...`（一堆乱码字符）。
+
+### 根因
+Sprint 1 的 `_make_candidate_id()` 在生成候选 ID 时，使用了一个特殊的非 ASCII 连字符（`RC‑...`，看起来像减号，但实际上是全角或非断行连字符）。浏览器和 HTTP 协议对 URL 中的非 ASCII 字符会进行编码，导致路径匹配失败。
+
+### 解决
+1. **前端兜底**：在 `frontend/src/api/rule_candidate.ts` 中，使用 `encodeURIComponent(id)` 对 ID 进行编码，确保特殊字符能正确传给后端。
+2. **后续治理**：Sprint 3 需要修复 `rule_evolution_service.py` 的 `_make_candidate_id()`，强制使用标准 ASCII 的短横线 `-`（U+002D），清理存量脏数据。
+
+---
+
+## 8. 开发者调试利器：全链路 Console 日志
+
+为了快速定位前后端交互问题，S2-D/E/G 阶段在关键路径埋了 DEV 环境的日志：
 - `http.ts`：打印 `[API 请求开始]`、`[API 成功]`、`[API 失败]`，并附带耗时和 payload。
 - `ExpertDecisionPanel.vue`：打印 `[专家判定]` 按钮点击和接口回包。
 - `TaskDetailPage.vue`：打印 `[页面状态更新]` 数组渲染。
 
-**建议**：在后续的 S2-G（规则候选审核）、S2-H（导出与批量）中，继续保持这种「关键请求+关键状态变更」的日志规范，利用浏览器的 Console 面板过滤 `[API` 或 `[State` 即可迅速排障。
+**建议**：在后续的 S2-H（导出与批量）中，继续保持这种「关键请求+关键状态变更」的日志规范，利用浏览器的 Console 面板过滤 `[API` 或 `[State` 即可迅速排障。
 
 ---
 
-> **附：版本与适用范围**
-> - 前端：Vue 3 + Vite + TypeScript
-> - 后端：FastAPI + Pydantic
-> - 适用范围：Sprint 2 开发联调阶段（S2-D / S2-E 为主）
+## 附：版本与适用范围
+
+- 前端：Vue 3 + Vite + TypeScript
+- 后端：FastAPI + Pydantic
+- 适用范围：Sprint 2 开发联调阶段（S2-D / S2-E / S2-G 为主）
