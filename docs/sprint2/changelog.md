@@ -496,6 +496,36 @@ Content-Type: application/json
 |---|---|---|
 | 旧任务头部显示 `评审状态: pending` | Sprint 1 遗留的历史数据无 `task_status` 列，使用默认值 | Sprint 3 做数据迁移或清洗 |
 
+---
 
+## S2-H（二）：批量评审（2026-10-30）
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §14 S2-H 行
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/app/api/schemas.py` | 追加 `BatchReviewRequest` / `BatchReviewItem` / `BatchReviewResponse` |
+| 2 | `backend/app/api/review_tasks.py` | 新增 `POST /review/tasks/batch` 接口，限制最大 5 个，异常隔离不中断 |
+| 3 | `frontend/src/api/review.ts` | `createTask` 超时由 20s 调整为 30s（给 LLM 留足时间，避免批量时大面积 TIMEOUT） |
+| 4 | `frontend/src/pages/CaseListPage.vue` | 增加卡片多选、底部悬浮操作栏、全屏批量进度遮罩 |
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 前端多选限制 | ✅ 超过 5 个弹窗拦截 |
+| 批量执行 | ✅ 进度条实时显示（1/3 → 3/3） |
+| 批量结果 | ✅ 3 个 Case 全部成功，无 TIMEOUT |
+| 跳转 | ✅ 跑完自动跳转到任务列表 |
+
+### 踩坑与修正
+
+| 坑 | 现象 | 修正 |
+|---|---|---|
+| 批量时部分 Case 报 `TIMEOUT` | 前端单次请求超时 20 秒，但实际 LLM 跑 20~25 秒，导致批量前半段被截断 | `review.ts` 的 `createTask` 超时调整为 30 秒；批量执行文案提示预计总耗时，避免用户焦虑 |
+| 模板嵌套标签未闭合 | 替换代码时报 `Element is missing end tag` | 全量覆盖 `CaseListPage.vue`，修复标签嵌套 |
 
 

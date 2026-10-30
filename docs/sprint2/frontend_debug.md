@@ -6,18 +6,54 @@
 ---
 
 ## 目录
-1. [Vite HMR 失效 / 前端代码更新不生效](#1-vite-hmr-失效--前端代码更新不生效)
-2. [API 请求返回 HTML（被 Vite 路由拦截）](#2-api-请求返回-html被-vite-路由拦截)
-3. [组件数据不响应 / 样式不更新](#3-组件数据不响应--样式不更新)
-4. [后端 Pydantic 422 校验报错（Extra inputs are not permitted）](#4-后端-pydantic-422-校验报错extra-inputs-are-not-permitted)
-5. [指标数据缺失与 UI 组件消失](#5-指标数据缺失与-ui-组件消失)
-6. [提交反馈后"无反应"的错觉](#6-提交反馈后无反应的错觉)
-7. [Sprint 1 规则候选 ID 包含特殊连字符](#7-sprint-1-规则候选-id-包含特殊连字符)
-8. [开发者调试利器：全链路 Console 日志](#8-开发者调试利器全链路-console-日志)
+1. [S2-H（二）：批量评审交付记录](#s2-h二批量评审交付记录)
+2. [Vite HMR 失效 / 前端代码更新不生效](#vite-hmr-失效--前端代码更新不生效)
+3. [API 请求返回 HTML（被 Vite 路由拦截）](#api-请求返回-html被-vite-路由拦截)
+4. [组件数据不响应 / 样式不更新](#组件数据不响应--样式不更新)
+5. [后端 Pydantic 422 校验报错（Extra inputs are not permitted）](#后端-pydantic-422-校验报错extra-inputs-are-not-permitted)
+6. [指标数据缺失与 UI 组件消失](#指标数据缺失与-ui-组件消失)
+7. [提交反馈后"无反应"的错觉](#提交反馈后无反应的错觉)
+8. [Sprint 1 规则候选 ID 包含特殊连字符](#sprint-1-规则候选-id-包含特殊连字符)
+9. [前后端超时限制不一致导致批量任务失败](#前后端超时限制不一致导致批量任务失败)
+10. [Vue 模板标签未闭合导致编译失败](#vue-模板标签未闭合导致编译失败)
+11. [开发者调试利器：全链路 Console 日志](#开发者调试利器全链路-console-日志)
+12. [附：版本与适用范围](#附版本与适用范围)
 
 ---
 
-## 1. Vite HMR 失效 / 前端代码更新不生效
+## 1. S2-H（二）：批量评审（2026-10-30）
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §14 S2-H 行
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/app/api/schemas.py` | 追加 `BatchReviewRequest` / `BatchReviewItem` / `BatchReviewResponse` |
+| 2 | `backend/app/api/review_tasks.py` | 新增 `POST /review/tasks/batch` 接口，限制最大 5 个，异常隔离不中断 |
+| 3 | `frontend/src/api/review.ts` | `createTask` 超时由 20s 调整为 30s（给 LLM 留足时间，避免批量时大面积 TIMEOUT） |
+| 4 | `frontend/src/pages/CaseListPage.vue` | 增加卡片多选、底部悬浮操作栏、全屏批量进度遮罩 |
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 前端多选限制 | ✅ 超过 5 个弹窗拦截 |
+| 批量执行 | ✅ 进度条实时显示（1/3 → 3/3） |
+| 批量结果 | ✅ 3 个 Case 全部成功，无 TIMEOUT |
+| 跳转 | ✅ 跑完自动跳转到任务列表 |
+
+### 踩坑与修正
+
+| 坑 | 现象 | 修正 |
+|---|---|---|
+| 批量时部分 Case 报 `TIMEOUT` | 前端单次请求超时 20 秒，但实际 LLM 跑 20~25 秒，导致批量前半段被截断 | `review.ts` 的 `createTask` 超时调整为 30 秒；批量执行文案提示预计总耗时，避免用户焦虑 |
+| 模板嵌套标签未闭合 | 替换代码时报 `Element is missing end tag` | 全量覆盖 `CaseListPage.vue`，修复标签嵌套 |
+
+---
+
+## 2. Vite HMR 失效 / 前端代码更新不生效
 
 ### 现象
 修改了 Vue 组件或 `vite.config.ts` 后，浏览器页面没有发生变化，或者请求路径被错误转发。
@@ -34,7 +70,7 @@
 
 ---
 
-## 2. API 请求返回 HTML（被 Vite 路由拦截）
+## 3. API 请求返回 HTML（被 Vite 路由拦截）
 
 ### 现象
 前端发起 `GET /api/v1/review/tasks/xxx`，但在 Network 面板中，该请求的 `Type` 显示为 `document`，`Response` 是一段 `<!doctype html>`，导致 JSON 解析失败，页面数据无法渲染。
@@ -60,7 +96,7 @@ server: {
 
 ---
 
-## 3. 组件数据不响应 / 样式不更新
+## 4. 组件数据不响应 / 样式不更新
 
 ### 现象 A：徽标颜色点完不变化
 点击「专家确认」按钮，后端返回 200，但页面徽标依然是灰色的「待判定」。
@@ -84,7 +120,7 @@ defects.value.splice(idx, 1, updatedDefect);
 
 ---
 
-## 4. 后端 Pydantic 422 校验报错（Extra inputs are not permitted）
+## 5. 后端 Pydantic 422 校验报错（Extra inputs are not permitted）
 
 ### 现象
 前端提交「新规则候选」反馈时，抛出 422 错误：`"loc": ["body", "rule_candidate", "severity_hint"], "msg": "Extra inputs are not permitted"` 以及缺少 `rule_id`、`rule_name` 等字段。
@@ -108,7 +144,7 @@ if (body.rule_candidate) {
 
 ---
 
-## 5. 指标数据缺失与 UI 组件消失
+## 6. 指标数据缺失与 UI 组件消失
 
 ### 现象
 后端接口返回了 `summary_metrics`，但前端页面顶部的「任务摘要指标」卡片直接消失不渲染。
@@ -125,7 +161,7 @@ if (body.rule_candidate) {
 
 ---
 
-## 6. 提交反馈后"无反应"的错觉
+## 7. 提交反馈后"无反应"的错觉
 
 ### 现象
 点击提交反馈后，页面瞬间似乎回到了原样，用户以为提交失败。
@@ -141,7 +177,7 @@ if (body.rule_candidate) {
 
 ---
 
-## 7. Sprint 1 规则候选 ID 包含特殊连字符
+## 8. Sprint 1 规则候选 ID 包含特殊连字符
 
 ### 现象
 在 S2-G 的前端页面请求详情 `GET /api/v1/rule-candidates/RC-20261029-...` 时，可能会报 404 或找不到。查看控制台 Network，发现 URL 变成了 `RC%E2%80%80%91...`（一堆乱码字符）。
@@ -155,19 +191,50 @@ Sprint 1 的 `_make_candidate_id()` 在生成候选 ID 时，使用了一个特�
 
 ---
 
-## 8. 开发者调试利器：全链路 Console 日志
+## 9. 前后端超时限制不一致导致批量任务失败
 
-为了快速定位前后端交互问题，S2-D/E/G 阶段在关键路径埋了 DEV 环境的日志：
+### 现象
+在 S2-H 批量评审时，勾选 5 个 Case 串行执行，前端弹窗提示部分 Case 报 TIMEOUT 失败。
+
+### 根因
+1. 前端 `http.ts` 里的 `DEFAULT_TIMEOUT_MS` 写死为 20 秒。
+2. 单个 Case 的 LLM 耗时如果在 20~25 秒之间，前端就会单方面断开连接并抛出 TIMEOUT。
+3. 因为批量是串行调用，所以导致后面的请求大面积报错。
+
+### 解决
+1. 在 `frontend/src/api/review.ts` 的 `createTask` 中，将单次请求的超时时间显式调整为 30 秒，给 LLM 留足时间。
+2. 前端批量遮罩层上提示"系统正在串行执行，预计耗时 XX 秒，请勿关闭页面"，安抚用户等待情绪。
+
+---
+
+## 10. Vue 模板标签未闭合导致编译失败
+
+### 现象
+修改 `CaseListPage.vue` 或 `TaskDetailPage.vue` 的嵌套 div 时，保存后页面白屏，终端报错 `[plugin:vite:vue] Element is missing end tag`。
+
+### 根因
+使用替换的方式增加嵌套结构（如在外层包一个 flex 容器）时，由于只替换了开头 `<div>`，没同步移动结尾的 `</div>`，导致标签不配对。
+
+### 解决
+1. 遇到该报错，直接在终端看报错指向的 `.vue` 文件及行号。
+2. 找到对应的行，手动补齐 `</div>`。
+3. 或者直接全量覆盖对应的 `.vue` 文件，避免局部替换产生配对误差。
+
+---
+
+## 11. 开发者调试利器：全链路 Console 日志
+
+为了快速定位前后端交互问题，S2-D/E/G/H 阶段在关键路径埋了 DEV 环境的日志：
 - `http.ts`：打印 `[API 请求开始]`、`[API 成功]`、`[API 失败]`，并附带耗时和 payload。
 - `ExpertDecisionPanel.vue`：打印 `[专家判定]` 按钮点击和接口回包。
 - `TaskDetailPage.vue`：打印 `[页面状态更新]` 数组渲染。
 
-**建议**：在后续的 S2-H（导出与批量）中，继续保持这种「关键请求+关键状态变更」的日志规范，利用浏览器的 Console 面板过滤 `[API` 或 `[State` 即可迅速排障。
+**建议**：在后续的 S2-H（RAG 管理）中，继续保持这种「关键请求+关键状态变更」的日志规范，利用浏览器的 Console 面板过滤 `[API` 或 `[State` 即可迅速排障。
 
 ---
 
-## 附：版本与适用范围
+## 12. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite + TypeScript
 - 后端：FastAPI + Pydantic
-- 适用范围：Sprint 2 开发联调阶段（S2-D / S2-E / S2-G 为主）
+- 适用范围：Sprint 2 开发联调阶段（S2-D / S2-E / S2-G / S2-H 为主）

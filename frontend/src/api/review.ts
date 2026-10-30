@@ -20,10 +20,14 @@ export interface ListTasksParams {
  * 发起评审（同步阻塞约 20 秒，超时抛 TIMEOUT_ERROR）
  */
 export function createTask(caseId: string): Promise<CreateTaskResponse> {
-  return request<CreateTaskResponse>("/review/tasks", {
-    method: "POST",
-    body: JSON.stringify({ case_id: caseId }),
-  });
+  return request<CreateTaskResponse>(
+    "/review/tasks",
+    {
+      method: "POST",
+      body: JSON.stringify({ case_id: caseId }),
+    },
+    30_000, // ← 单任务超时改为 30 秒，给 LLM 留足时间
+  );
 }
 
 /** GET /api/v1/review/tasks/{task_id} */
