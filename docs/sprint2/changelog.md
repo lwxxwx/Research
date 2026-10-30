@@ -674,3 +674,15 @@ Content-Type: application/json
 
 ### 环境备注
 - 本机已具备 RTX 5090，硬件满足 vLLM 运行条件；Sprint 2 不投入时间做环境搭建，留待 Sprint 3。
+
+## [S2-I] 2026-10-30 - 资产治理与 CI/CD 预研
+
+### 交付内容
+- **vLLM 占位契约测试**：新增 `test_llm_vllm.py`，3 条用例验证工厂分发、占位语义、settings 兜底。
+- **Benchmark CSV 导出**：新增 `scripts/export_benchmark_csv.py`，支持 rule_only / full_review 模式导出，产物格式符合 S1-F 冻结契约。
+- **data 资产治理**：新增 `data/README.md`，约定 Case / 知识库 / 规则文件的命名与新增流程。
+- **诊断脚本隔离**：`.gitignore` 已忽略 `scripts/_diag_*.py`、`scripts/_cleanup_*.py`、`scripts/_tmp_*.py`，避免误提交。
+- **CI 预研**：确认 CI 需跑全量非 integration 测试（562 passed）+ 前端 build；Benchmark CSV 可作为 artifact。
+
+### 已知问题
+- CI 平台尚未最终确认（待定）。
