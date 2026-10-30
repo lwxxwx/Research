@@ -650,3 +650,27 @@ Content-Type: application/json
 - 前端 `npm run type-check`：0 错误。
 - 前端 `npm run build`：构建成功（1988 modules transformed）。
 - 浏览器人工验收：5 块区域正确渲染，Seed 提示逻辑正常，`/dashboard` 路由畅通。
+
+## [S2-I 预研] 2026-10-30 - vLLM 兼容验证（占位）
+
+### 现状与决策
+- **决策**：Sprint 2 不实装 vLLM，仅保留占位。主用路径为智谱（`ZhipuProvider`），已通过全量测试验证。
+- **占位基础**：`backend/app/llm/provider.py` 中 `VLLMProvider` 已存在，`get_provider("vllm")` 可返回实例，但 `_do_complete()` 抛 `NotImplementedError`（含实装指引）。
+- **抽象层就绪**：`LLMProvider` 基类统一了计时（`latency_ms`）、重试（`LLM_MAX_RETRIES=1`，仅网络类）、异常分类（`_RetryableError` / `_NonRetryableError`），实装 vLLM 只需填 `_do_complete`。
+- **工厂分发**：`get_provider()` 按 `settings.llm_provider` 支持 `mock` / `zhipu` / `openai` / `vllm` 四路。
+
+### 契约测试
+- 新增 `backend/tests/test_llm_vllm.py`，3 条用例：
+  1. 工厂按 name 正确返回 `VLLMProvider` 实例
+  2. 未实装时 `complete()` 抛 `NotImplementedError`，信息包含“尚未实装”
+  3. 未传参时从 `settings` 兜底 `default_model`
+- 不依赖任何外部服务，CI 稳定可跑。
+
+### 实装路径（Sprint 3 计划）
+1. 部署 vLLM 服务。**RTX 5090（Blackwell sm_120）需按 `torch_cuda_arch_list="12.0 12.1"` 单独编译**，官方预编译镜像默认不含该 kernel，直接 `docker run vllm/vllm-openai` 会报 `no kernel image`。
+2. 将 `VLLMProvider._do_complete` 改为基于 `openai.OpenAI(base_url=..., api_key="EMPTY")` 的调用，复用 `_try_parse_json`、`finish_reason`、`request_id` 语义。
+3. 设 `LLM_PROVIDER=vllm` + `LLM_BASE_URL` + `LLM_MODEL`，把 `test_llm_vllm.py` 的占位测试升级为 `@pytest.mark.integration` 真实调用。
+4. CI 对 vLLM 集成测试默认 skip（需 GPU runner），仅在本地 GPU 机器手动跑。
+
+### 环境备注
+- 本机已具备 RTX 5090，硬件满足 vLLM 运行条件；Sprint 2 不投入时间做环境搭建，留待 Sprint 3。

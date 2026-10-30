@@ -126,7 +126,8 @@ def test_get_provider_vllm_placeholder_raises():
     p = get_provider("vllm")
     resp = p.complete("ping", json_mode=False)
     assert resp.error is not None
-    assert "VLLM Provider 尚未启用" in resp.error
+    assert "NotImplementedError" in resp.error
+    assert "尚未" in resp.error
 
 
 def test_get_provider_unknown_raises():

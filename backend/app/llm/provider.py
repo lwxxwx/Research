@@ -419,8 +419,17 @@ class VLLMProvider(LLMProvider):
 
     def _do_complete(self, prompt: str, *, json_mode: bool) -> LLMResponse:
         raise NotImplementedError(
-            "VLLM Provider 尚未启用，Sprint 1 不部署 vLLM；"
-            "如需启用，按 OpenAI-compatible base_url 实现"
+            "VLLMProvider 尚未实装（S2-I 占位）。实装步骤：\n"
+            "  1) 部署 vLLM 服务（需 GPU，RTX 5090 需按 Blackwell 架构单独编译）\n"
+            "  2) 配置 settings.llm_base_url 指向 vLLM 的 OpenAI 兼容端点\n"
+            "  3) 将本方法改为：\n"
+            "     from openai import OpenAI\n"
+            "     client = OpenAI(base_url=self.base_url, api_key='EMPTY')\n"
+            "     resp = client.chat.completions.create(\n"
+            "         model=self.default_model, messages=[...],\n"
+            "         response_format={'type':'json_object'} if json_mode else None,\n"
+            "     )\n"
+            "  4) 设 LLM_PROVIDER=vllm，跑集成测试验证"
         )
 
 
