@@ -8,6 +8,9 @@ from . import cases, feedbacks, healthz, review_tasks
 # ===== [S2-G] 规则候选 =====
 from . import rule_candidates
 # ===== [S2-G END] =====
+# ===== [S2-H] 知识库 =====
+from . import knowledge_docs
+# ===== [S2-H END] =====
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -18,5 +21,8 @@ api_router.include_router(feedbacks.router)
 # ===== [S2-G] 规则候选 =====
 api_router.include_router(rule_candidates.router)
 # ===== [S2-G END] =====
+# ===== [S2-H] 知识库 =====
+api_router.include_router(knowledge_docs.router)
+# ===== [S2-H END] =====
 
 __all__ = ["api_router"]

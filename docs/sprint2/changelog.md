@@ -528,4 +528,80 @@ Content-Type: application/json
 | 批量时部分 Case 报 `TIMEOUT` | 前端单次请求超时 20 秒，但实际 LLM 跑 20~25 秒，导致批量前半段被截断 | `review.ts` 的 `createTask` 超时调整为 30 秒；批量执行文案提示预计总耗时，避免用户焦虑 |
 | 模板嵌套标签未闭合 | 替换代码时报 `Element is missing end tag` | 全量覆盖 `CaseListPage.vue`，修复标签嵌套 |
 
+---
+
+## S2-H（三）：RAG 知识库管理方案确认（2026-10-30）
+
+> 状态：🟡 方案已冻结，待开发
+> 依据：`Sprint2_详细执行计划_V1.0.md` §14 S2-H 行
+
+### 1. 需求边界与范围（S2 冻结）
+
+**本期交付（In Scope）**：
+1. **知识文档列表查看**：Web 端展示 `knowledge_doc` 表的数据（ID、标题、来源、入库时间）。
+2. **Markdown 上传与切片入库**：支持上传 `.md` 文件，后端自动走切片（Chunking）与向量化（Embedding），落库到 `knowledge_doc` 和 `knowledge_chunk`。
+
+**明确不做（Out of Scope / 遗留 Sprint 3）**：
+1. **知识文档启停（Enable/Disable）**：当前 `knowledge_doc` 表无 `enabled` 字段。为避免 S2 引入 DB 迁移，S2 不接受“禁用知识”需求，所有入库知识默认全局生效。启停功能留 Sprint 3。
+2. **物理删除**：Web 端不提供一键删除按钮，防止误删导致 RAG 库瘫痪。高危清理交由 CLI。
+3. **PDF / Word 解析**：仅支持标准 Markdown 格式（`.md`），不支持 PDF/OCR 解析。
+
+### 2. 技术实现路径
+
+**后端 API**：
+- `GET /api/v1/knowledge-docs`：返回 `KnowledgeDoc` 列表。
+- `POST /api/v1/knowledge-docs/upload`：接收 `multipart/form-data`，校验后缀后写入容器临时目录 `/tmp/upload_<uuid>.md`，调用 `app/rag/ingest.py::ingest_single_file()` 落库，最后删除临时文件并返回新文档 ID。
+
+**前端页面 `KnowledgeBasePage.vue`**：
+- 顶部「上传 Markdown」按钮。
+- 下方表格展示已入库文档（标题、来源类型、入库时间）。
+- 上传期间显示 Loading（因涉及真实 Embedding 调用，耗时约 3~5 秒）。
+
+### 3. 踩坑预判
+| 风险点 | 应对方案 |
+|---|---|
+| 临时文件残留 | `ingest_single_file` 必须包在 `try/finally` 中，确保 `os.remove()` 执行 |
+| Embedding 失败 | 若 API Key 错误或欠费，接口返回 500，前端提示“向量化失败” |
+| 大文件阻塞 | 前端限制 5MB 以内，避免大文件直接撑爆内存 |
+
+---
+
+## S2-H（三）：RAG 知识库管理（2026-10-30）
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §14 S2-H 行
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/pyproject.toml` | 新增 `python-multipart` 依赖 |
+| 2 | `backend/app/api/schemas.py` | 追加 `KnowledgeDocItem` / `KnowledgeDocListResponse` / `KnowledgeUploadResponse` |
+| 3 | `backend/app/api/knowledge_docs.py` | **新建**：`GET /knowledge-docs` 列表、`POST /knowledge-docs/upload` 上传切片入库 |
+| 4 | `backend/app/api/__init__.py` | 注册 `knowledge_docs` 路由 |
+| 5 | `frontend/src/types/knowledge.ts` | **新建**：知识库类型定义 |
+| 6 | `frontend/src/api/knowledge.ts` | **新建**：API 封装 |
+| 7 | `frontend/src/pages/KnowledgeBasePage.vue` | **新建**：表格展示 + 上传交互 + 异常提示 |
+| 8 | `frontend/src/router/index.ts` | 新增 `/knowledge-base` 路由 |
+| 9 | `frontend/src/App.vue` | 导航栏加「知识库」入口 |
+| 10 | `frontend/src/api/http.ts` | 修复 `FormData` 请求头，避免 JSON 解析报错；增加格式错误友好提示 |
+| 11 | `scripts/bootstrap.ps1` | **优化**：启动成功后自动执行 `uv sync`，防依赖漂移 |
+| 12 | `scripts/dev.ps1` | **优化**：启动/重启后自动执行 `uv sync`，防依赖漂移 |
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 上传合法 Markdown（`ams1117_startup.md`） | ✅ 成功提示，列表刷新 |
+| 上传无元数据文件（`test.md`） | ✅ 拦截并友好提示「缺失 YAML frontmatter」 |
+| 表格列表 | ✅ 正确展示 15 条 |
+| `bootstrap.ps1` / `dev.ps1` | ✅ 均带 `uv sync` 自动同步且执行正常 |
+
+### 踩坑与修正
+
+| 坑 | 现象 | 修正 |
+|---|---|---|
+| `python-multipart` 缺失 | 后端崩溃 `RuntimeError: Form data requires...` | 加入 `pyproject.toml`；修改 `dev.ps1` / `bootstrap.ps1` 自动跑 `uv lock` + `uv sync` |
+| `FormData` 序列化失败 | 报错 `Unexpected token 'F'` | `http.ts` 动态判断 `options.body`，不打 JSON 日志，不强制设 `Content-Type` |
+| 上传非规范文件 | 报错 `缺失 YAML frontmatter` | 后端保留原报错，前端转换为友好提示 |
 

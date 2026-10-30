@@ -21,18 +21,33 @@ export async function request<T>(
   
   // 开发者提示：打印请求开始
   if (import.meta.env.DEV) {
-    console.log(`[API 请求开始] ${method} ${url}`, options.body ? JSON.parse(options.body as string) : "");
+    let logBody: any = options.body;
+    if (options.body instanceof FormData) {
+      logBody = "[FormData]";
+    } else if (typeof options.body === "string" && options.body.startsWith("{")) {
+      try { logBody = JSON.parse(options.body); } catch { logBody = options.body; }
+    }
+    console.log(`[API 请求开始] ${method} ${url}`, logBody || "");
   }
   
   const startTime = performance.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+  // ===== 动态处理 Content-Type =====
+  const headers: Record<string, string> = {
+    ...(options.headers as Record<string, string> || {}),
+  };
+  // 如果 body 不是 FormData，且没有手动指定 Content-Type，默认设为 application/json
+  if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+    headers["Content-Type"] = "application/json";
+  }
+
   try {
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...options.headers },
+      headers,
     });
 
     clearTimeout(timer);

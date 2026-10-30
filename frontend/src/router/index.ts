@@ -35,6 +35,14 @@ const router = createRouter({
       meta: { title: "规则候选审核" },
     },
     // ===== [S2-G END] =====
+    // ===== [S2-H] RAG 知识库管理 =====
+    {
+      path: "/knowledge-base",
+      name: "knowledge-base",
+      component: () => import("@/pages/KnowledgeBasePage.vue"),
+      meta: { title: "知识库管理" },
+    },
+    // ===== [S2-H END] =====
     {
       path: "/:pathMatch(.*)*",
       name: "not-found",

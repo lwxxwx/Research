@@ -245,3 +245,28 @@ class UpdateCandidateStatusResponse(BaseModel):
     status: str
     rejected_reason: str | None = None
     updated_at: str | None = None
+
+# ============================================================
+# S2-H（三）：RAG 知识库管理
+# ============================================================
+class KnowledgeDocItem(BaseModel):
+    """GET /api/v1/knowledge-docs 列表项。"""
+    id: int
+    title: str
+    source: str | None = None
+    source_type: str | None = None
+    created_at: str | None = None
+
+
+class KnowledgeDocListResponse(BaseModel):
+    """GET /api/v1/knowledge-docs 响应体。"""
+    total: int
+    items: list[KnowledgeDocItem]
+
+
+class KnowledgeUploadResponse(BaseModel):
+    """POST /api/v1/knowledge-docs/upload 响应体。"""
+    doc_id: int
+    title: str
+    chunk_count: int
+    message: str = "上传并向量化成功"

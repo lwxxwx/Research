@@ -2,6 +2,7 @@
 
 > **用途**：沉淀 Sprint 2 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-10-29
+> **最后更新**：2026-10-30（补充 S2-H RAG 上传相关调试）
 
 ---
 
@@ -17,7 +18,9 @@
 9. [前后端超时限制不一致导致批量任务失败](#前后端超时限制不一致导致批量任务失败)
 10. [Vue 模板标签未闭合导致编译失败](#vue-模板标签未闭合导致编译失败)
 11. [开发者调试利器：全链路 Console 日志](#开发者调试利器全链路-console-日志)
-12. [附：版本与适用范围](#附版本与适用范围)
+12. [FastAPI 启动报错 python-multipart 缺失](#fastapi-启动报错-python-multipart-缺失)
+13. [前端上传文件报错 Unexpected token 'F', "[object FormData]"](#前端上传文件报错-unexpected-token-f-object-formdata)
+14. [附：版本与适用范围](#附版本与适用范围)
 
 ---
 
@@ -233,7 +236,70 @@ Sprint 1 的 `_make_candidate_id()` 在生成候选 ID 时，使用了一个特�
 
 ---
 
-## 12. 附：版本与适用范围
+## 12. FastAPI 启动报错 python-multipart 缺失
+
+### 现象
+新增了处理文件上传的接口（`@router.post("/upload")`），重启后端时容器直接崩溃退出，日志报错：
+
+```
+RuntimeError: Form data requires "python-multipart" to be installed.
+```
+
+### 根因分析
+1. **FastAPI 底层依赖缺失**
+   FastAPI 在解析 `UploadFile` 或 `Form` 表单数据时，底层依赖 `python-multipart` 库；Sprint 0/1 阶段没有文件上传需求，所以 `pyproject.toml` 里没有这个依赖，接口一挂载即崩溃。
+
+2. **Docker 缓存机制（层缓存导致新依赖没进镜像）**
+   修改 `pyproject.toml` 加上 `python-multipart>=0.0.9` 后，单纯执行 `docker compose up -d --build` 依然报错。根因在于：Docker 为加速构建，会按 Dockerfile 指令逐层比对，**只要前面的指令（拉取基础镜像、复制源码、安装系统依赖等）没变，就复用上一层的缓存**，导致执行依赖安装的 `uv sync` 步骤被整体跳过。因此新依赖根本没有进入镜像，运行时环境里依然没有 `python-multipart`。
+
+3. **UV 的环境隔离与锁文件（uv.lock）滞后**
+   - 通过 `docker exec` 进去用 `uv pip install python-multipart` 临时装包、`uv pip list` 也能看到，但 **uvicorn 启动用的是 `/opt/venv` 虚拟环境**；如果临时包被装到了系统 Python 或其它环境（位置不对），它依然找不到，uvicorn 进程照样 import 失败。
+   - 更致命的是：项目依赖由 `uv.lock` 锁定。只改 `pyproject.toml` 而不跑 `uv lock`，锁文件里没有新记录；即使跑 `uv sync`，若加了 `--frozen`，它会严格按旧锁文件执行，**甚至把环境中临时多出来的包（刚才手动装的）卸载掉**，导致改动反复失效。
+
+> 小结：表面是「缺一个库」，实际是 **Docker 层缓存 + uv 锁文件/虚拟环境隔离** 两层机制叠加。只改配置或临时装包都不够，必须让锁文件、虚拟环境与镜像三层同步刷新，才能让 `python-multipart` 真正进入 uvicorn 运行环境。
+
+### 解决思路与最终步骤
+1. 打开 `backend/pyproject.toml`，在 `dependencies` 中添加 `"python-multipart>=0.0.9"`。
+2. **核心解决**：进入容器重新生成锁文件并同步环境。
+```bash
+docker compose exec backend uv lock
+docker compose exec backend uv sync
+```
+3. 重启后端容器（`restart backend`）。
+4. 进容器验证：`docker compose exec backend python -c "import multipart; print(multipart.__file__)"`，必须能输出版本路径。
+
+---
+
+## 13. 前端上传文件报错 Unexpected token 'F', "[object FormData]"
+
+### 现象
+在 Web 端点击「上传 Markdown」选择文件时，页面出现红色报错：
+
+```
+Unexpected token 'F', "[object FormData]" is not valid JSON
+```
+
+### 根因分析
+1. 前端 `http.ts` 封装了一个全局的 `request` 函数，里面默认设置了请求头 `"Content-Type": "application/json"`。
+2. 当传入 `FormData` 对象时，浏览器发现 Content-Type 被手动写死了，导致它无法自动生成带 boundary 的 `multipart/form-data` 头。
+3. `fetch` 底层把 `FormData` 强制转成了字符串 `"[object FormData]"` 发送给后端。后端返回了 400/422，前端尝试用 `JSON.parse` 去解析这个非 JSON 字符串，直接抛出语法错误。
+
+### 解决思路与最终代码
+1. **动态判断请求头**：在 `http.ts` 的 `request` 函数中，判断如果 `options.body` 是 `FormData` 实例，则绝对不设置 Content-Type 头。
+2. **修复日志解析报错**：在开发日志打印处，如果是 FormData，不要去 `JSON.parse`，直接打印 `[FormData]`。
+```typescript
+// http.ts 修复片段
+const headers: Record<string, string> = {
+  ...(options.headers as Record<string, string> || {}),
+};
+if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+  headers["Content-Type"] = "application/json";
+}
+```
+
+---
+
+## 14. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite + TypeScript
 - 后端：FastAPI + Pydantic

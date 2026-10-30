@@ -2,8 +2,8 @@
 <script setup lang="ts">
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import { computed } from "vue";
-// ===== [S2-G] 引入图标 =====
-import { FileText, ListChecks, Sparkles } from "@lucide/vue";
+// ===== [S2-G / S2-H] 引入图标 =====
+import { FileText, ListChecks, Sparkles, Database } from "@lucide/vue";
 
 const route = useRoute();
 
@@ -12,6 +12,8 @@ const isCasesActive = computed(() => route.path.startsWith("/cases"));
 const isTasksActive = computed(() => route.path.startsWith("/tasks"));
 // ===== [S2-G] 规则候选路由高亮 =====
 const isRuleCandidatesActive = computed(() => route.path.startsWith("/rule-candidates"));
+// ===== [S2-H] 知识库路由高亮 =====
+const isKnowledgeBaseActive = computed(() => route.path.startsWith("/knowledge-base"));
 </script>
 
 <template>
@@ -71,6 +73,20 @@ const isRuleCandidatesActive = computed(() => route.path.startsWith("/rule-candi
               规则候选
             </RouterLink>
             <!-- ===== [S2-G END] ===== -->
+            <!-- ===== [S2-H] 知识库导航 ===== -->
+            <RouterLink
+              to="/knowledge-base"
+              class="flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors"
+              :class="
+                isKnowledgeBaseActive
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+              "
+            >
+              <Database class="w-4 h-4 mr-1.5" />
+              知识库
+            </RouterLink>
+            <!-- ===== [S2-H END] ===== -->
           </nav>
         </div>
       </div>
