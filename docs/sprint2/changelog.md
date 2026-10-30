@@ -616,3 +616,37 @@ Content-Type: application/json
 - Fix：bootstrap.ps1 删除 [2.5/5] uv sync（防 dev 依赖被卸）
 - Fix：test_db_schema.py 触发器测试 t1 改从 DB 读（修既有时间采样缺陷）
 - 已知问题：前端 4 格卡高度在空数据时略不齐（Sprint 3 视觉打磨）
+
+## [S2-H（四）] 2026-10-30 - 指标看板与全局统计口径落地
+
+### 交付内容
+- **后端**：
+  - 新增 `backend/app/services/dashboard_service.py`：全局指标聚合逻辑，内部使用 `get_db_session()` 独立管理事务。
+  - 新增 `backend/app/api/dashboard.py`：提供 `GET /api/v1/dashboard/summary` 端点。
+  - 追加 `backend/app/api/schemas.py`：定义 `DashboardSummaryResponse` 及相关子模型。
+- **前端**：
+  - 新增 `frontend/src/pages/DashboardPage.vue`：包含 5 块指标区域展示。
+  - 新增 `frontend/src/api/dashboard.ts` 与 `types/dashboard.ts`。
+  - 修改 `App.vue` 和 `router/index.ts`：挂载指标看板导航与路由。
+- **测试**：
+  - 新增 `backend/tests/test_dashboard.py`：覆盖 EVC 算术平均、Seed 检测、状态独立统计等 6 个用例。
+
+### 核心契约与统计口径（冻结）
+严格遵循 S2-H（四）编码前的四项最终确认：
+1. **API 契约**：固定返回 `scope`、`metrics`、`rule_candidates`、`knowledge_gaps` 四个顶层对象。`sample_info` 复用现有 `SampleInfo` 模型。不引入 `metric_source` 字段，不设时间范围筛选。
+2. **EVC 全局口径**：仅对 `task_status='done'` 且 `evidence_coverage IS NOT NULL` 的任务取**算术平均**。不按缺陷数加权，不重新计算 GT 缺陷级 EVC。未来如需加权，作为后续版本变更。
+3. **has_seed_data 双路径检测**：仅检查当前 done 任务范围的反馈。既检查 `feedback_item.review_result_id` 直接关联，也检查 `review_defect_id → review_defect.review_result_id` 间接关联。该字段仅作警告提示，EAR/AI_NER 的 Seed 排除由底层计算函数自动处理，不在此层复制过滤逻辑。
+4. **前端 5 块区域**：仅实现指标卡片、review_status 分布、expert_decision 分布、规则候选统计、知识缺口统计。保持纯数字表格，不引入图表、时间筛选、下钻或复杂筛选。
+5. **独立统计原则**：规则候选（rule_candidates）和知识缺口（knowledge_gaps）完全独立统计，不套用 `task_status='done'` 过滤。
+6. **空值语义**：所有未达到样本门槛的真实指标返回 `null`，前端必须显示 `N/A · 样本不足`，绝不渲染为 `0%`。
+
+### 基础设施与修复项
+- **Dockerfile 容灾**：新增 `UV_HTTP_TIMEOUT=120` / `UV_HTTP_RETRIES=5`，并将 final 阶段改为拷贝含 dev 的 `/opt/venv`，同时在构建期加入 `import pytest` 校验。
+- **脚本修复**：移除 `scripts/bootstrap.ps1` 与 `scripts/dev.ps1` 中不带 `--extra dev` 的 `uv sync`，防止容器启动时卸载开发依赖（pytest 等）。
+- **遗留测试修复**：修正 `tests/test_db_schema.py` 中关于 `updated_at` 触发器验证用例的采样逻辑，确保 `t1` 从 DB 真实重读，解决历史测试时间戳比对错位报错。
+
+### 验收结果
+- 后端全量非 integration 测试：`559 passed, 1 skipped, 24 deselected, 0 failed`。
+- 前端 `npm run type-check`：0 错误。
+- 前端 `npm run build`：构建成功（1988 modules transformed）。
+- 浏览器人工验收：5 块区域正确渲染，Seed 提示逻辑正常，`/dashboard` 路由畅通。
