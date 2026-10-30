@@ -461,4 +461,41 @@ Content-Type: application/json
 - **批准 ≠ 发布**：前端点击「批准」仅将状态改为 `accepted`，**不会自动写入 `data/rules/`**。正式规则的合入必须人工手动操作（Sprint 2 冻结）。
 - **驳回必须有理由**：前端弹窗和后端 Schema 双重校验了 `rejected_reason` 不为空。
 
+---
+
+## S2-H（一）：Markdown 报告导出（2026-10-30）
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §5.7 + §14 S2-H 行
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/app/services/report_service.py` | **新建**：`generate_markdown_report(task_id)`，负责查库并渲染 Markdown 报告 |
+| 2 | `backend/app/api/review_tasks.py` | 新增 `GET /review/tasks/{task_id}/export` 接口，返回 `PlainTextResponse` 并带 `Content-Disposition` 触发下载 |
+| 3 | `frontend/src/pages/TaskDetailPage.vue` | 头部增加「导出报告」按钮，通过 `window.location.href` 触发浏览器下载 |
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 浏览器测试 | ✅ 点击「导出报告」按钮，成功下载 `RUN-xxx_report.md` |
+| 内容完整性 | ✅ Task ID、评审状态、缺陷总数、三态分布、缺陷明细、根因/建议、Evidence 完整透出 |
+| 专家判定透出 | ✅ 已点确认的缺陷显示「专家确认」，未点的显示「待判定」 |
+
+### 关键约束
+
+1. **导出结构严格遵守证据链规范**：IR/RAG 等 evidence 必须完整带出（`source/section/reason` 或 `detail`）。
+2. **只有 `done` 状态的任务允许导出**：`failed` 任务后端返回 400，前端也不显示按钮。
+3. **文件编码**：设置 `media_type="text/markdown; charset=utf-8"`，避免 Windows 下中文乱码。
+
+### 遗留项
+
+| 项 | 影响 | 归属 |
+|---|---|---|
+| 旧任务头部显示 `评审状态: pending` | Sprint 1 遗留的历史数据无 `task_status` 列，使用默认值 | Sprint 3 做数据迁移或清洗 |
+
+
+
 

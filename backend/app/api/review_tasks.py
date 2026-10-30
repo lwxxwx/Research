@@ -191,3 +191,41 @@ def patch_expert_decision(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return ExpertDecisionResponse(**result)
+
+
+# ============================================================
+# GET /review/tasks/{task_id}/export（S2-H 报告导出）
+# ============================================================
+from fastapi.responses import PlainTextResponse
+from app.services.report_service import generate_markdown_report
+
+@router.get("/{task_id}/export", response_class=PlainTextResponse)
+def export_review_report(
+    task_id: str,
+    format: str = Query(default="md", description="导出格式，目前仅支持 md"),
+):
+    """导出评审报告为 Markdown 文件。
+
+    - 200：返回 `.md` 文本，浏览器触发下载
+    - 400：任务执行失败无法导出
+    - 404：任务不存在
+    """
+    if format != "md":
+        raise HTTPException(status_code=400, detail="目前仅支持导出 format=md")
+
+    try:
+        md_content = generate_markdown_report(task_id)
+    except ValueError as exc:
+        error_msg = str(exc)
+        if "执行失败" in error_msg:
+            raise HTTPException(status_code=400, detail=error_msg) from exc
+        raise HTTPException(status_code=404, detail=error_msg) from exc
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{task_id}_report.md"'
+    }
+    return PlainTextResponse(
+        content=md_content,
+        headers=headers,
+        media_type="text/markdown; charset=utf-8",
+    )

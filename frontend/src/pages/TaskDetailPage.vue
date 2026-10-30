@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { AlertCircle, ArrowLeft, Loader2 } from "@lucide/vue";
+import { AlertCircle, ArrowLeft, Download, Loader2 } from "@lucide/vue";
 
 import { getTask, getDefects } from "@/api/review";
 import type { TaskDetail } from "@/types/task";
@@ -43,6 +43,13 @@ async function loadData() {
 
 function toggleFeedback(id: string) {
   feedbackDefectId.value = feedbackDefectId.value === id ? null : id;
+}
+
+// ===== [S2-H] 导出报告 =====
+function downloadReport() {
+  if (!task.value) return;
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || "/api/v1";
+  window.location.href = `${baseUrl}/review/tasks/${encodeURIComponent(task.value.task_id)}/export?format=md`;
 }
 
 function onExpertDecisionUpdated(defectId: string, response: {
@@ -96,6 +103,7 @@ watch(() => route.params.taskId, (newId) => {
     <template v-else-if="task">
       <TaskSummaryCard :metrics="task.summary_metrics" />
 
+      <!-- 头部摘要 -->
       <div class="card p-6 border-l-4 border-blue-500">
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
@@ -105,22 +113,35 @@ watch(() => route.params.taskId, (newId) => {
             </div>
             <code class="text-sm font-mono text-gray-600 block">{{ task.task_id }}</code>
           </div>
-          <div class="flex items-center space-x-6 text-sm text-gray-600 bg-gray-50 px-4 py-2 rounded-lg">
-            <div>
-              <span class="block text-xs text-gray-500">Case ID</span>
-              <span class="font-medium">{{ task.case_id ?? '未知' }}</span>
-            </div>
-            <div>
-              <span class="block text-xs text-gray-500">缺陷数</span>
-              <span class="font-medium text-blue-600">{{ task.defects_count }}</span>
-            </div>
-            <div>
-              <span class="block text-xs text-gray-500">创建时间</span>
-              <span>{{ task.created_at ? new Date(task.created_at).toLocaleString() : '—' }}</span>
+          
+          <!-- 右侧操作区和基础信息 -->
+          <div class="flex items-center space-x-4">
+            <button 
+              v-if="task.status === 'done'"
+              class="btn-secondary flex items-center text-sm"
+              @click="downloadReport"
+            >
+              <Download class="w-4 h-4 mr-1.5" /> 导出报告
+            </button>
+
+            <div class="flex items-center space-x-6 text-sm text-gray-600 bg-gray-50 px-4 py-2 rounded-lg">
+              <div>
+                <span class="block text-xs text-gray-500">Case ID</span>
+                <span class="font-medium">{{ task.case_id ?? '未知' }}</span>
+              </div>
+              <div>
+                <span class="block text-xs text-gray-500">缺陷数</span>
+                <span class="font-medium text-blue-600">{{ task.defects_count }}</span>
+              </div>
+              <div>
+                <span class="block text-xs text-gray-500">创建时间</span>
+                <span>{{ task.created_at ? new Date(task.created_at).toLocaleString() : '—' }}</span>
+              </div>
             </div>
           </div>
         </div>
 
+        <!-- 三态分布 (如果有) -->
         <div v-if="task.report?.summary?.review_status_distribution" class="mt-4 pt-4 border-t border-gray-100 flex gap-6">
           <div class="text-sm"><span class="text-gray-500">AI 已确认：</span><span class="font-bold text-emerald-600">{{ task.report.summary.review_status_distribution.AI_CONFIRMED }}</span></div>
           <div class="text-sm"><span class="text-gray-500">需专家复核：</span><span class="font-bold text-amber-600">{{ task.report.summary.review_status_distribution.NEED_EXPERT_REVIEW }}</span></div>
@@ -128,6 +149,7 @@ watch(() => route.params.taskId, (newId) => {
         </div>
       </div>
 
+      <!-- 失败提示 (如果 status=failed) -->
       <div v-if="task.status === 'failed'" class="card p-6 border-red-200 bg-red-50">
         <h3 class="text-lg font-medium text-red-900 flex items-center">
           <AlertCircle class="w-5 h-5 mr-2" /> 评审执行失败
@@ -137,10 +159,12 @@ watch(() => route.params.taskId, (newId) => {
         </ul>
       </div>
 
+      <!-- 报告为空 -->
       <div v-else-if="!task.report || Object.keys(task.report).length === 0" class="card p-12 text-center text-gray-500">
         报告未生成或为空。
       </div>
 
+      <!-- 缺陷列表 -->
       <div v-else class="space-y-4">
         <h3 class="text-lg font-medium text-gray-900 border-b pb-2">缺陷明细 ({{ defects.length }})</h3>
         <div v-if="defects.length === 0" class="text-gray-500 text-center py-8">无缺陷。</div>
