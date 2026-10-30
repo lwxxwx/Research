@@ -3,7 +3,7 @@
 import { RouterLink, RouterView, useRoute } from "vue-router";
 import { computed } from "vue";
 // ===== [S2-G / S2-H] 引入图标 =====
-import { FileText, ListChecks, Sparkles, Database } from "@lucide/vue";
+import { FileText, ListChecks, Sparkles, Database, BarChart3 } from "@lucide/vue";
 
 const route = useRoute();
 
@@ -14,6 +14,8 @@ const isTasksActive = computed(() => route.path.startsWith("/tasks"));
 const isRuleCandidatesActive = computed(() => route.path.startsWith("/rule-candidates"));
 // ===== [S2-H] 知识库路由高亮 =====
 const isKnowledgeBaseActive = computed(() => route.path.startsWith("/knowledge-base"));
+// ===== [S2-H（四）] 指标看板路由高亮 =====
+const isDashboardActive = computed(() => route.path.startsWith("/dashboard"));
 </script>
 
 <template>
@@ -87,6 +89,20 @@ const isKnowledgeBaseActive = computed(() => route.path.startsWith("/knowledge-b
               知识库
             </RouterLink>
             <!-- ===== [S2-H END] ===== -->
+            <!-- ===== [S2-H（四）] 指标看板导航 ===== -->
+            <RouterLink
+              to="/dashboard"
+              class="flex items-center px-3 py-2 rounded-md text-sm font-medium transition-colors"
+              :class="
+                isDashboardActive
+                  ? 'bg-blue-50 text-blue-700'
+                  : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+              "
+            >
+              <BarChart3 class="w-4 h-4 mr-1.5" />
+              指标看板
+            </RouterLink>
+            <!-- ===== [S2-H（四） END] ===== -->
           </nav>
         </div>
       </div>

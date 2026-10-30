@@ -1,7 +1,7 @@
 <!-- frontend/src/pages/RuleCandidatePage.vue -->
 <script setup lang="ts">
-import { onMounted, ref, computed } from "vue";
-import { AlertCircle, CheckCircle, Loader2, XCircle, FileCode2 } from "@lucide/vue";
+import { onMounted, ref } from "vue";
+import { CheckCircle, Loader2, XCircle, FileCode2 } from "@lucide/vue";
 import { listCandidates, getCandidate, updateCandidateStatus } from "@/api/rule_candidate";
 import type { RuleCandidateListItem, RuleCandidateDetail, RuleCandidateStatus } from "@/types/rule_candidate";
 

@@ -14,7 +14,7 @@ import TaskSummaryCard from "@/components/TaskSummaryCard.vue";
 
 const route = useRoute();
 const router = useRouter();
-const taskId = route.params.taskId as string;
+let taskId = route.params.taskId as string;
 
 const task = ref<TaskDetail | null>(null);
 const defects = ref<DefectFromAPI[]>([]);

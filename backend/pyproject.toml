@@ -53,6 +53,10 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+# 新增下面这行，过滤掉这个特定的警告
+filterwarnings = [
+    "ignore:Please use `import python_multipart` instead.:PendingDeprecationWarning",
+]
 python_classes = "Test*"
 python_functions = "test_*"
 asyncio_mode = "auto"

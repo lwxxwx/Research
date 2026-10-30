@@ -106,7 +106,7 @@ async function handleBatchCreate() {
 
     try {
       // 循环调用同步接口（单次 30 秒超时）
-      const resp = await createTask(cid);
+      await createTask(cid);
       results.push({ id: cid, success: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -8,7 +8,7 @@ import { listTasks } from "@/api/review";
 import { useTaskStore } from "@/stores/task";
 import StatusBadge from "@/components/StatusBadge.vue";
 import LoadingSpinner from "@/components/LoadingSpinner.vue";
-import type { TaskListItem } from "@/types/task";
+//import type { TaskListItem } from "@/types/task";
 
 const taskStore = useTaskStore();
 

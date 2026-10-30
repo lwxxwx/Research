@@ -2,25 +2,28 @@
 
 > **用途**：沉淀 Sprint 2 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-10-29
-> **最后更新**：2026-10-30（补充 S2-H RAG 上传相关调试）
+> **最后更新**：2026-10-30（补充 S2-H（四）指标看板及 Docker 构建/依赖同步排障）
 
 ---
 
 ## 目录
-1. [S2-H（二）：批量评审交付记录](#s2-h二批量评审交付记录)
-2. [Vite HMR 失效 / 前端代码更新不生效](#vite-hmr-失效--前端代码更新不生效)
-3. [API 请求返回 HTML（被 Vite 路由拦截）](#api-请求返回-html被-vite-路由拦截)
-4. [组件数据不响应 / 样式不更新](#组件数据不响应--样式不更新)
-5. [后端 Pydantic 422 校验报错（Extra inputs are not permitted）](#后端-pydantic-422-校验报错extra-inputs-are-not-permitted)
-6. [指标数据缺失与 UI 组件消失](#指标数据缺失与-ui-组件消失)
-7. [提交反馈后"无反应"的错觉](#提交反馈后无反应的错觉)
-8. [Sprint 1 规则候选 ID 包含特殊连字符](#sprint-1-规则候选-id-包含特殊连字符)
-9. [前后端超时限制不一致导致批量任务失败](#前后端超时限制不一致导致批量任务失败)
-10. [Vue 模板标签未闭合导致编译失败](#vue-模板标签未闭合导致编译失败)
-11. [开发者调试利器：全链路 Console 日志](#开发者调试利器全链路-console-日志)
-12. [FastAPI 启动报错 python-multipart 缺失](#fastapi-启动报错-python-multipart-缺失)
-13. [前端上传文件报错 Unexpected token 'F', "[object FormData]"](#前端上传文件报错-unexpected-token-f-object-formdata)
-14. [附：版本与适用范围](#附版本与适用范围)
+1. [S2-H（二）：批量评审交付记录](#1-s2-h二批量评审2026-10-30)
+2. [Vite HMR 失效 / 前端代码更新不生效](#2-vite-hmr-失效--前端代码更新不生效)
+3. [API 请求返回 HTML（被 Vite 路由拦截）](#3-api-请求返回-html被-vite-路由拦截)
+4. [组件数据不响应 / 样式不更新](#4-组件数据不响应--样式不更新)
+5. [后端 Pydantic 422 校验报错（Extra inputs are not permitted）](#5-后端-pydantic-422-校验报错extra-inputs-are-not-permitted)
+6. [指标数据缺失与 UI 组件消失](#6-指标数据缺失与-ui-组件消失)
+7. [提交反馈后"无反应"的错觉](#7-提交反馈后无反应的错觉)
+8. [Sprint 1 规则候选 ID 包含特殊连字符](#8-sprint-1-规则候选-id-包含特殊连字符)
+9. [前后端超时限制不一致导致批量任务失败](#9-前后端超时限制不一致导致批量任务失败)
+10. [Vue 模板标签未闭合导致编译失败](#10-vue-模板标签未闭合导致编译失败)
+11. [开发者调试利器：全链路 Console 日志](#11-开发者调试利器全链路-console-日志)
+12. [FastAPI 启动报错 python-multipart 缺失](#12-fastapi-启动报错-python-multipart-缺失)
+13. [前端上传文件报错 Unexpected token 'F', "[object FormData]"](#13-前端上传文件报错-unexpected-token-f-object-formdata)
+14. [S2-H（四）：指标看板前后端联调与交付](#14-s2-h四指标看板前后端联调与交付2026-10-30)
+15. [Docker 构建环境与依赖同步排障（S2-H 基础设施）](#15-docker-构建环境与依赖同步排障s2-h-基础设施)
+16. [前端 Vue/TypeScript 编译与构建排障（Build 模式）](#16-前端-vuetypescript-编译与构建排障build-模式)
+17. [附：版本与适用范围](#17-附版本与适用范围)
 
 ---
 
@@ -256,7 +259,7 @@ RuntimeError: Form data requires "python-multipart" to be installed.
    - 通过 `docker exec` 进去用 `uv pip install python-multipart` 临时装包、`uv pip list` 也能看到，但 **uvicorn 启动用的是 `/opt/venv` 虚拟环境**；如果临时包被装到了系统 Python 或其它环境（位置不对），它依然找不到，uvicorn 进程照样 import 失败。
    - 更致命的是：项目依赖由 `uv.lock` 锁定。只改 `pyproject.toml` 而不跑 `uv lock`，锁文件里没有新记录；即使跑 `uv sync`，若加了 `--frozen`，它会严格按旧锁文件执行，**甚至把环境中临时多出来的包（刚才手动装的）卸载掉**，导致改动反复失效。
 
-> 小结：表面是「缺一个库」，实际是 **Docker 层缓存 + uv 锁文件/虚拟环境隔离** 两层机制叠加。只改配置或临时装包都不够，必须让锁文件、虚拟环境与镜像三层同步刷新，才能让 `python-multipart` 真正进入 uvicorn 运行环境。
+**小结**：表面是「缺一个库」，实际是 **Docker 层缓存 + uv 锁文件/虚拟环境隔离** 两层机制叠加。只改配置或临时装包都不够，必须让锁文件、虚拟环境与镜像三层同步刷新，才能让 `python-multipart` 真正进入 uvicorn 运行环境。
 
 ### 解决思路与最终步骤
 1. 打开 `backend/pyproject.toml`，在 `dependencies` 中添加 `"python-multipart>=0.0.9"`。
@@ -299,8 +302,80 @@ if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
 
 ---
 
-## 14. 附：版本与适用范围
+## 14. S2-H（四）：指标看板前后端联调与交付（2026-10-30）
 
-- 前端：Vue 3 + Vite + TypeScript
-- 后端：FastAPI + Pydantic
+> 状态：✅ 完成
+
+### 交付内容
+- **后端**：`dashboard_service.py`（纯聚合逻辑）、`schemas.py`（Pydantic 契约）、`dashboard.py`（`GET /api/v1/dashboard/summary`）。
+- **前端**：`DashboardPage.vue`（5 块区域）、`api/dashboard.ts`、`types/dashboard.ts`、路由挂载。
+- **契约冻结**：返回 `scope`、`metrics`、`rule_candidates`、`knowledge_gaps` 四个顶层对象，不设时间范围，独立统计规则/缺口。
+- **聚合口径**：EVC 取 done 任务的算术平均；EAR/AI_NER 全局池复用 `benchmark_service`；Seed 双路径检测。
+
+### 踩坑与修正
+
+| 坑 | 现象 | 机理与修正 |
+|---|---|---|
+| 空文件引发 TS2305 | `vue-tsc` 报 `Module '"@/api/dashboard"' has no exported member 'getDashboardSummary'` | 抓取文件时保存为空。补全 `export function getDashboardSummary` 恢复正常 |
+| 测试代码时间戳错位 | `test_db_schema.py::test_trigger_rule_definition_updated_at_refresh` 报 `assert t2 > t1` 失败，且 t2 竟然早于 t1 | 机理：原测试直接读取 flush 后的 ORM 内存对象 `rd.updated_at` 作为 t1，而 t2 是 `expire()` 后重读的 DB 真实值。两者采样口径不同，且受 SQLAlchemy 对象状态影响导致比对错乱。修正：在获取 t1 前也加上 `expire()` + `get()`，让两端都从 DB 取值 |
+| 看板数据校验无数据 | 初次渲染时 EVC/AI_NER/EAR 全是 0% 或页面崩溃 | 严格遵循指标 v3.2：无样本时返回 `null` 并在前端渲染 `N/A · 样本不足`；去掉上层 `v-if`，防止组件消失 |
+
+---
+
+## 15. Docker 构建环境与依赖同步排障（S2-H 基础设施）
+
+### 现象
+执行 `bootstrap.ps1` 时，在 `docker compose up -d --build` 阶段直接报错退出；或即使构建成功，进容器后 `import pytest` 报 `ModuleNotFoundError`。
+
+### 根因分析（四大叠加）
+1. **网络超时（Download Timeout）**
+   `Dockerfile` 执行 `uv sync --frozen` 时，访问 `files.pythonhosted.org` 出现随机超时或下载卡死（重试 3 次耗时 126 秒后报错）。属于网络链路问题，与代码无关。
+2. **Dev 依赖被二次卸载（venv 无 pytest）**
+   `Dockerfile` 的 final 阶段原本 `COPY --from=builder /opt/venv_prod /opt/venv`，而 `venv_prod` 是 `--no-dev` 构建的，天然不含 pytest。本地开发跑测试必须用 venv，导致 pytest 永远缺失。
+3. **脚本强行"精确同步"（致命杀手）**
+   `bootstrap.ps1` 和 `dev.ps1` 的启动逻辑中带了 `uv sync`（不带 `--extra dev`）。`uv sync` 默认是「精确同步」，它会把当前 venv 里属于 extra dev 的依赖（pytest 等）全部卸载（Uninstalled），导致构建阶段千辛万苦装上的 dev 依赖瞬间灰飞烟灭。
+4. **源被污染导致 lock 篡改**
+   在容器内跑 `uv lock` 时，由于容器网络指向了不可信的索引（或是存在冲突的 index-url 环境变量），生成了如 `httpcore2`、`python-dateutil 3.0.0` 这样不存在的依赖包，并写回了宿主机的 `uv.lock`。
+
+### 解决思路与最终步骤
+1. **修正 Dockerfile 容灾与 dev 环境**
+   - 在 runtime 的 ENV 块加上 `UV_HTTP_TIMEOUT=120` / `UV_HTTP_RETRIES=5` 解决网络抖动。
+   - 将 final 阶段的 `COPY --from=builder /opt/venv_prod` 改为 `COPY --from=builder /opt/venv`，保证本地开发有 pytest。
+   - 增加构建期防呆：`RUN python -c "import pytest; ..."`，一旦缺失构建直接失败，阻断污染镜像。
+   - 注意：ENV 的多行续行中间禁止插入注释行，否则 Docker 会报语法错误。需把注释统提至 ENV 块上方。
+2. **清理锁文件与脚本**
+   - 恢复被污染的 `uv.lock`（`git checkout -- backend/uv.lock`），移除异常的 pythonhosted 镜像源。
+   - 从 `bootstrap.ps1` 和 `dev.ps1` 中彻底删除 `uv sync` 的代码块。启动脚本不应干涉 venv 的精确依赖状态，依赖只由镜像构建期负责。
+3. **强制刷新镜像**
+   - 运行 `docker compose ... up -d --build`。观察日志，若需重装，使用 `uv sync --extra dev`。
+
+---
+
+## 16. 前端 Vue/TypeScript 编译与构建排障（Build 模式）
+
+### 现象
+运行 `npm run type-check`（`vue-tsc --noEmit`）0 错误，但运行 `npm run build`（`vue-tsc -b && vite build`）直接失败，报 9 个错误。
+
+### 根因分析
+`-b` 是 Project References 的 Build 模式。`vue-tsc --noEmit` 仅做快速静态类型检查，而 `vue-tsc -b` 会检查所有子项目（包括不常改的 `vite.config.ts`），并将 TS6133（变量未使用）等 lint 级规则视为致命错误终止构建。
+
+### 解决思路与最终步骤
+1. **清理历史遗留的未使用变量/引入**
+   - `TaskSummaryCard.vue`：删除 `const props =`，直接 `defineProps`。
+   - `CaseListPage.vue`：删除未使用的 `const resp =`，改为 `await createTask(cid)`。
+   - `RuleCandidatePage.vue`：移除 `computed` 和 `AlertCircle` 的 import。
+   - `TaskListPage.vue`：移除 `TaskListItem` 的 import。
+   - `TaskDetailPage.vue`：将报错 `Cannot assign to 'taskId'` 的 `const` 定义改为 `let`。
+2. **补齐 Node 类型声明**
+   - 在 `vite.config.ts` 中用到了 `path` 和 `__dirname`，需安装依赖：`npm install -D @types/node`。
+3. **结果**
+   - 重新运行 `npm run build`，1988 modules transformed，构建成功，产物输出至 `dist/`。
+
+---
+
+## 17. 附：版本与适用范围
+
+- 前端：Vue 3 + Vite 5 + TypeScript
+- 后端：FastAPI + Pydantic + uv
+- 基础设施：Docker Compose
 - 适用范围：Sprint 2 开发联调阶段（S2-D / S2-E / S2-G / S2-H 为主）

@@ -101,14 +101,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Success "docker compose up completed"
 
-Write-Host "`n[2.5/5] Syncing python dependencies (uv sync)..."
-cmd /c "docker compose $composeArgStr exec -T backend uv sync"
-if ($LASTEXITCODE -ne 0) {
-    Write-Warning "uv sync failed, continue to health check"
-} else {
-    Write-Success "Dependencies synced"
-}
-
 Write-Host "`n[3/5] Waiting for postgres & backend healthy, max wait $maxWaitSeconds s"
 $elapsed = 0
 $pgOk = $false

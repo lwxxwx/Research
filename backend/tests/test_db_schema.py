@@ -1426,15 +1426,15 @@ def test_trigger_users_updated_at_refresh(db_session):
     db_session.flush()
 
     uid = u.id
-    t1 = u.updated_at
+    # t1 从 DB 重新读，与 t2 同口径（避免读 ORM 内存值）
+    db_session.expire(u)
+    t1 = db_session.get(User, uid).updated_at
 
     _time.sleep(0.05)
 
-    # 触发 UPDATE
     u.username = "trig_u1_modified"
     db_session.flush()
 
-    # 强制从 DB 重新加载
     db_session.expire(u)
     u2 = db_session.get(User, uid)
     t2 = u2.updated_at
@@ -1453,7 +1453,8 @@ def test_trigger_project_updated_at_refresh(db_session):
     db_session.flush()
 
     pid = proj.id
-    t1 = proj.updated_at
+    db_session.expire(proj)
+    t1 = db_session.get(Project, pid).updated_at
 
     _time.sleep(0.05)
 
@@ -1479,7 +1480,8 @@ def test_trigger_rule_definition_updated_at_refresh(db_session):
     db_session.flush()
 
     rid = rd.id
-    t1 = rd.updated_at
+    db_session.expire(rd)
+    t1 = db_session.get(RuleDefinition, rid).updated_at
 
     _time.sleep(0.05)
 
@@ -1504,7 +1506,8 @@ def test_trigger_rule_candidates_updated_at_refresh(db_session):
     db_session.flush()
 
     rcid = rc.id
-    t1 = rc.updated_at
+    db_session.expire(rc)
+    t1 = db_session.get(RuleCandidate, rcid).updated_at
 
     _time.sleep(0.05)
 
@@ -1528,7 +1531,8 @@ def test_trigger_knowledge_doc_updated_at_refresh(db_session):
     db_session.flush()
 
     did = doc.id
-    t1 = doc.updated_at
+    db_session.expire(doc)
+    t1 = db_session.get(KnowledgeDoc, did).updated_at
 
     _time.sleep(0.05)
 
@@ -1551,8 +1555,10 @@ def test_trigger_does_not_refresh_created_at(db_session):
     db_session.flush()
 
     uid = u.id
-    c1 = u.created_at
-    u1 = u.updated_at
+    db_session.expire(u)
+    u_reload = db_session.get(User, uid)
+    c1 = u_reload.created_at
+    u1 = u_reload.updated_at
 
     _time.sleep(0.05)
 

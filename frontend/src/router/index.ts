@@ -42,6 +42,14 @@ const router = createRouter({
       component: () => import("@/pages/KnowledgeBasePage.vue"),
       meta: { title: "知识库管理" },
     },
+    // ===== [S2-H（四）] 指标看板 =====
+    {
+      path: "/dashboard",
+      name: "dashboard",
+      component: () => import("@/pages/DashboardPage.vue"),
+      meta: { title: "指标看板" },
+    },
+    // ===== [S2-H（四） END] =====
     // ===== [S2-H END] =====
     {
       path: "/:pathMatch(.*)*",

@@ -605,3 +605,14 @@ Content-Type: application/json
 | `FormData` 序列化失败 | 报错 `Unexpected token 'F'` | `http.ts` 动态判断 `options.body`，不打 JSON 日志，不强制设 `Content-Type` |
 | 上传非规范文件 | 报错 `缺失 YAML frontmatter` | 后端保留原报错，前端转换为友好提示 |
 
+## S2-H（四）指标看板
+
+- 后端：新增 `GET /api/v1/dashboard/summary`，4 顶层对象契约（scope / metrics / rule_candidates / knowledge_gaps）
+- 聚合口径：仅 task_status='done'；EVC 算术平均；EAR/AI_NER 全局池复用 benchmark_service；样本不足返 null
+- Seed 检测：双路径（review_result_id 直接 + review_defect_id 间接），仅提示不参与计算
+- 前端：DashboardPage.vue 5 块区域（指标卡 / AI 质量 / 专家判定 / 规则候选 / 知识缺口），N/A 语义，Seed 警告条
+- 导航 + 路由：/dashboard
+- Infra 修复：Dockerfile 加 UV_HTTP_TIMEOUT/RETRIES；final 拷含 dev 的 venv；构建期 pytest 校验
+- Fix：bootstrap.ps1 删除 [2.5/5] uv sync（防 dev 依赖被卸）
+- Fix：test_db_schema.py 触发器测试 t1 改从 DB 读（修既有时间采样缺陷）
+- 已知问题：前端 4 格卡高度在空数据时略不齐（Sprint 3 视觉打磨）

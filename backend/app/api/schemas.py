@@ -270,3 +270,37 @@ class KnowledgeUploadResponse(BaseModel):
     title: str
     chunk_count: int
     message: str = "上传并向量化成功"
+
+# ============================================================
+# S2-H（四）：指标看板
+# ============================================================
+class DashboardScope(BaseModel):
+    """看板统计范围（S2-H（四）冻结）。"""
+    task_status_filter: Literal["done"] = "done"
+    excluded_task_status: list[Literal["pending", "failed"]] = ["pending", "failed"]
+    total_done_tasks: int
+    has_seed_data: bool
+
+
+class DashboardMetrics(BaseModel):
+    """看板全局指标（复用 SummaryMetrics 口径 + 新增 expert_decision 分布）。"""
+    evidence_coverage: float | None = None
+    ai_new_effective_rate: float | None = None
+    expert_adoption_rate: float | None = None
+    review_status_distribution: dict[str, int] = Field(default_factory=dict)
+    expert_decision_distribution: dict[str, int] = Field(default_factory=dict)
+    sample_info: SampleInfo
+
+
+class StatusCount(BaseModel):
+    """状态计数（规则候选 / 知识缺口共用）。"""
+    total: int
+    by_status: dict[str, int] = Field(default_factory=dict)
+
+
+class DashboardSummaryResponse(BaseModel):
+    """GET /api/v1/dashboard/summary 响应体。"""
+    scope: DashboardScope
+    metrics: DashboardMetrics
+    rule_candidates: StatusCount
+    knowledge_gaps: StatusCount

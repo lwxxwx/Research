@@ -2,7 +2,7 @@
 <script setup lang="ts">
 import type { SummaryMetrics } from "@/types/task";
 
-const props = defineProps<{
+defineProps<{
   metrics: SummaryMetrics | null | undefined;
 }>();
 

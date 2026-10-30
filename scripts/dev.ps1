@@ -86,13 +86,6 @@ switch ($Action.ToLower()) {
         cmd /c "docker compose $composeArgStr up -d $buildFlag"
 
         if ($LASTEXITCODE -eq 0) {
-            Write-Info "Syncing python dependencies (uv sync)..."
-            cmd /c "docker compose $composeArgStr exec -T backend uv sync"
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "uv sync failed, continue"
-            } else {
-                Write-Success "Dependencies synced"
-            }
             Write-Success "Dev environment started"
             Write-Host "  Backend:  http://localhost:8000" -ForegroundColor Cyan
             Write-Host "  Frontend: http://localhost:3000" -ForegroundColor Cyan
@@ -114,13 +107,6 @@ switch ($Action.ToLower()) {
         cmd /c "docker compose $composeArgStr up -d $buildFlag"
 
         if ($LASTEXITCODE -eq 0) {
-            Write-Info "Syncing python dependencies (uv sync)..."
-            cmd /c "docker compose $composeArgStr exec -T backend uv sync"
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "uv sync failed, continue"
-            } else {
-                Write-Success "Dependencies synced"
-            }
             Write-Success "Dev environment restarted"
             Write-Host "  Backend:  http://localhost:8000" -ForegroundColor Cyan
             Write-Host "  Frontend: http://localhost:3000" -ForegroundColor Cyan
