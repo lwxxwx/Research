@@ -20,3 +20,46 @@ export interface CaseListResponse {
   /** 坏 Case 说明，不是 HTTP 错误 */
   errors: string[];
 }
+
+// ===== [F07] Case 管理 =====
+export interface CaseDetail {
+  case_id: string;
+  case_dir: string;
+  info_yaml: string | null;
+  evaluation_yaml: string | null;
+  expert_reasoning_md: string | null;
+  expected_review_json: Record<string, unknown> | null;
+  schematic_ir_json: Record<string, unknown> | null;
+}
+
+export interface CaseBenchmarkItem {
+  id: number;
+  case_id: string;
+  mode: string;
+  status: string;
+  total_gt_defects: number;
+  total_pred_defects: number;
+  tp: number;
+  fp: number;
+  fn: number;
+  rule_precision: number | null;
+  rule_recall: number | null;
+  evc: number | null;
+  ear: number | null;
+  ai_ner: number | null;
+  metric_source: string | null;
+  task_id: string | null;
+  error: string | null;
+  created_at: string | null;
+}
+
+export interface CaseBenchmarkListResponse {
+  total: number;
+  items: CaseBenchmarkItem[];
+  limit: number;
+  offset: number;
+}
+
+export interface RunCaseBenchmarkRequest {
+  mode: "rule_only" | "full_review";
+}

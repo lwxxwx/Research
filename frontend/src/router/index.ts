@@ -15,6 +15,12 @@ const router = createRouter({
       meta: { title: "Case 列表" },
     },
     {
+      path: "/cases/:caseId",
+      name: "case-detail",
+      component: () => import("@/pages/CaseDetailPage.vue"),
+      meta: { title: "Case 详情" },
+    },
+    {
       path: "/tasks",
       name: "tasks",
       component: () => import("@/pages/TaskListPage.vue"),

@@ -23,7 +23,8 @@
 14. [S2-H（四）：指标看板前后端联调与交付](#14-s2-h四指标看板前后端联调与交付2026-10-30)
 15. [Docker 构建环境与依赖同步排障（S2-H 基础设施）](#15-docker-构建环境与依赖同步排障s2-h-基础设施)
 16. [前端 Vue/TypeScript 编译与构建排障（Build 模式）](#16-前端-vuetypescript-编译与构建排障build-模式)
-17. [附：版本与适用范围](#17-附版本与适用范围)
+17. [S2-F07：Case 管理与单 Case Benchmark 前后端联调](#17-s2-f07case-管理与单-case-benchmark-前后端联调2026-11-02)
+18. [附：版本与适用范围](#18-附版本与适用范围)
 
 ---
 
@@ -373,7 +374,30 @@ if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
 
 ---
 
-## 17. 附：版本与适用范围
+## 17. S2-F07：Case 管理与单 Case Benchmark 前后端联调（2026-11-02）
+
+> 状态：✅ 完成
+> 交付：`CaseDetailPage.vue`（资产预览 + Benchmark 运行 + 历史表格）、`CaseListPage.vue`（卡片跳详情 + 独立多选）。
+> 核心难点：在同一个卡片上同时实现“点击主体跳转”和“点击多选阻断跳转”，以及跨框架默认样式的 UI 适配。
+
+### 踩坑与修正
+
+| 坑 | 现象 | 排查思路与机理 | 最终修正 |
+|---|---|---|---|
+| **多选与跳转事件冒泡** | 点击卡片右上角的 checkbox，预期是勾选，结果直接跳转到了 Case 详情页。 | 初始尝试用绝对定位 `absolute top-3 right-3` 加 `@click.stop` 隔离。但由于卡片是 `relative` 且子元素有 `flex` 撑开，绝对定位层由于没有显式宽度或层级被底部的按钮盖住，事件冒泡到了外层的卡片 `@click` 上。 | **重构卡片内部布局**：彻底放弃绝对定位。用 Flex 布局把卡片顶部划分为左右两栏：左侧（`@click="goToCaseDetail"`），右侧（`@click.stop="toggleSelect"`）。物理隔离点击区域。 |
+| **原生 checkbox 在白色背景下“隐形”** | 切换为原生 `<input type="checkbox">` 后，视觉上看不见方框，只有点击后才会出现蓝色对勾。 | Chrome/Edge 在特定系统主题下，原生的 unchecked checkbox 边框非常浅，甚至完全透明，在白色卡片背景中丢失了视觉存在感。 | 外层包裹 `<label>`，加上明显的灰色背景（`bg-gray-50`）和边框（`border-2 border-gray-300`），强行“画”出一个清晰的方块。 |
+| **胶囊按钮多选交互体验不佳** | 原生 checkbox 的点击区域太小，且没有悬停反馈，不符合现代 Web 交互习惯。 | 原生控件受限于浏览器自身的 UI 引擎，无法做到像 GitHub 或 Figma 那样“点击标签块变色选中”的效果。 | 不再使用 `<input>`，改回 `@lucide/vue` 的 `<CheckSquare>` / `<Square>` 图标。将其包裹在一个带圆角、带背景色的 `<div>` 里，绑定 `@click.stop="toggleSelect"`。 |
+| **图标文字组合的样式抖动** | 把图标和文字“选择/已选择”放在一起时，选中状态切换会导致卡片宽度抖动或换行。 | 图标和文字的长度不同（“选择”二字变“已选择”三字），在没有固定宽度的 flex 容器中，会挤压其他元素。 | 给该容器统一设置 `px-2 py-1` 的内边距，并使用 Tailwind 的 `bg-blue-50 text-blue-700` 与 `bg-gray-50 text-gray-500` 做色彩区分，确保布局稳定。 |
+| **前端 API 引入路径报错** | `npm run build` 报错 `Cannot find module '@/api/case'` 和 `'@/types/cases'`。 | 在写 `CaseDetailPage.vue` 时，按照直觉引入了单数的 `api/case` 和复数的 `types/cases`，但实际文件命名恰好相反。 | 修正 `CaseDetailPage.vue` 的 import：`api` 用复数 `@/api/cases`，`types` 用单数 `@/types/case`。 |
+| **F05 字段在 ORM 中丢失导致回归测试失败** | 跑全量回归时，`test_db_schema.py::test_orm_columns_match_db` 报 `rule_candidates` 的 `db_only` 多出 5 个 `publish_*` 字段。 | F05 和 F07 跨天开发时，工作区发生了一些未预期的代码丢失（或回滚）。`models.py` 里关于 F05 的 5 个发布字段不翼而飞，但 DB 里已经有了这些列。 | 通过 `git show 53878c7:backend/alembic/versions/s2_f05_rule_publish.py > ...` 恢复了丢失的 Migration 文件，并手动在 `models.py` 的 `RuleCandidate` 类里补回了对应的 5 个 SQLAlchemy 字段定义。 |
+
+### 核心认知与总结
+
+1. **Vue 事件穿透的终极防线**：当遇到“点击 A 却触发了 B 的事件”时，如果 CSS 层级（`z-index`）难以排查，最稳妥的方案是**修改 DOM 树结构**，用正常的文档流（Flex/Grid）将点击区域物理隔开，而不是依赖 `absolute` 悬空浮在表面。
+2. **UI 控件的视觉存在感**：不要盲目信任原生 `<input>` 的默认样式。在自定义组件中，给交互元素增加明显的边框、背景色和 `hover` 状态，能大幅降低用户的学习成本。
+3. **跨功能模块的持久化验证**：在进行新的迁移（如 F07）前，务必跑一次全量测试（如 `test_orm_columns_match_db`）。它可以帮你提前发现历史代码（F05）是否因为误操作而丢失了字段定义，防止带病提交。
+
+## 18. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv

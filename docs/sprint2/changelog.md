@@ -686,3 +686,44 @@ Content-Type: application/json
 
 ### 已知问题
 - CI 平台尚未最终确认（待定）。
+
+---
+
+## [S2-F07] 2026-11-02 - Case 管理与单 Case Benchmark
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §3 F07 + §4.5
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/alembic/versions/s2_f07_case_benchmark.py` | **新建**：`case_benchmark_result` 表（14 列 + 2 索引 + 2 CHECK） |
+| 2 | `backend/app/persistence/models.py` | 新增 `CaseBenchmarkResult` ORM；补回 F05 的 `RuleCandidate` 5 个发布字段 |
+| 3 | `backend/app/services/case_service.py` | **新建**：`get_case_detail` / `run_case_benchmark` / `list_case_benchmarks` |
+| 4 | `backend/app/api/schemas.py` | 新增 `CaseDetailResponse` / `CaseBenchmarkItem` / `CaseBenchmarkListResponse` / `RunCaseBenchmarkRequest` |
+| 5 | `backend/app/api/cases.py` | 扩展 3 端点：`GET /cases/{case_id}` / `POST /cases/{case_id}/benchmark` / `GET /cases/{case_id}/benchmarks` |
+| 6 | `backend/tests/test_case_benchmark.py` | **新建**：6 个测试（详情、404、rule_only、非法 mode、不存在 Case、历史查询） |
+| 7 | `frontend/src/types/case.ts` | 新增 F07 的 4 个 TypeScript 接口 |
+| 8 | `frontend/src/api/cases.ts` | 新增 `getCaseDetail` / `runCaseBenchmark` / `listCaseBenchmarks` |
+| 9 | `frontend/src/pages/CaseDetailPage.vue` | **新建**：资产预览 + Benchmark 操作 + 历史表格 |
+| 10 | `frontend/src/router/index.ts` | 新增 `/cases/:caseId` 路由 |
+| 11 | `frontend/src/pages/CaseListPage.vue` | 卡片点击跳转详情；复选框独立多选（避免冒泡冲突） |
+
+### 核心设计
+
+- **资产预览**：读取 `/data/cases/{case_id}/` 下的 `info.yaml` / `evaluation.yaml` / `expert_reasoning.md` / `expected_review.json` / `schematic_ir.json`。
+- **Benchmark 分流**：`rule_only` 调 `run_single_case`（不耗 LLM）；`full_review` 调 `run_single_case_full_review`（耗 LLM，20-30s）。
+- **落库**：结果写 `case_benchmark_result` 表，包含 `metric_source` / `task_id`，供前端历史表格渲染。
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `test_case_benchmark.py` | **6 passed** |
+| 全量非 integration | **568 passed, 1 skipped, 24 deselected** |
+| 前端 type-check / build | ✅ 0 错误 / 成功 |
+| 浏览器验收 A（详情页） | ✅ 资产预览正常，4 个面板正确渲染 |
+| 浏览器验收 B（多选隔离） | ✅ 点击复选框不跳转，底部出现悬浮栏 |
+| 浏览器验收 C（批量评审） | ✅ 弹窗进度正确，完成后跳转任务列表 |
+| 浏览器验收 D（Benchmark） | ✅ 弹出 `tp=2, fp=0, fn=0`，历史表格正确更新 |

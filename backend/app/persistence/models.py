@@ -331,6 +331,17 @@ class RuleCandidate(Base):
     rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # ===== [S2-A 新增 END] =====
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="proposed")
+    # ===== [F05] 发布状态机字段 =====
+    publish_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="not_published"
+    )
+    published_at: Mapped[Optional[datetime]] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    published_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    publish_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    publish_idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # ===== [F05 END] =====
     # ----- ✅ 对齐SQL：TIMESTAMPTZ + 触发器自动更新updated_at -----
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("NOW()"))
@@ -341,6 +352,17 @@ class RuleCandidate(Base):
         Index("idx_rule_candidates_from_feedback_id", "from_feedback_id"),
         # ===== [S1-CHANGE-6] RuleCandidate 新增 schematic_case_id 索引（Sprint1 §8）=====
         Index("idx_rule_candidates_schematic_case", "schematic_case_id"),
+        CheckConstraint(
+            "publish_status IN ('not_published','publishing','published','publish_failed')",
+            name="check_rule_candidates_publish_status",
+        ),
+        Index("idx_rule_candidates_publish_status", "publish_status"),
+        Index(
+            "uniq_rule_candidates_publish_idempotency_key",
+            "publish_idempotency_key",
+            unique=True,
+            postgresql_where=text("publish_idempotency_key IS NOT NULL"),
+        ),
         # ===== [S1-CHANGE-6 END] =====
     )
 # ============================================================
@@ -398,4 +420,42 @@ class GapFeedbackLink(Base):
 
     __table_args__ = (
         Index("idx_gap_feedback_link_feedback", "feedback_id"),
+    )
+
+# ============================================================
+# 15. CaseBenchmarkResult（F07 新增，单 Case Benchmark 历史结果）
+# ============================================================
+class CaseBenchmarkResult(Base):
+    __tablename__ = "case_benchmark_result"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    case_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    total_gt_defects: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    total_pred_defects: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    tp: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    fp: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    fn: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    rule_precision: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rule_recall: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    evc: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ear: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ai_ner: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    metric_source: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    task_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=text("NOW()")
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('rule_only','full_review')",
+            name="check_case_benchmark_result_mode",
+        ),
+        CheckConstraint(
+            "status IN ('done','failed')",
+            name="check_case_benchmark_result_status",
+        ),
+        Index("idx_case_benchmark_result_case_id", "case_id"),
+        Index("idx_case_benchmark_result_created_at", "created_at"),
     )

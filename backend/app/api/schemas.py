@@ -304,3 +304,45 @@ class DashboardSummaryResponse(BaseModel):
     metrics: DashboardMetrics
     rule_candidates: StatusCount
     knowledge_gaps: StatusCount
+
+# ===== [F07] Case 管理 =====
+class CaseDetailResponse(BaseModel):
+    case_id: str
+    case_dir: str
+    info_yaml: str | None = None
+    evaluation_yaml: str | None = None
+    expert_reasoning_md: str | None = None
+    expected_review_json: dict[str, Any] | None = None
+    schematic_ir_json: dict[str, Any] | None = None
+
+
+class CaseBenchmarkItem(BaseModel):
+    id: int
+    case_id: str
+    mode: str
+    status: str
+    total_gt_defects: int
+    total_pred_defects: int
+    tp: int
+    fp: int
+    fn: int
+    rule_precision: float | None = None
+    rule_recall: float | None = None
+    evc: float | None = None
+    ear: float | None = None
+    ai_ner: float | None = None
+    metric_source: str | None = None
+    task_id: str | None = None
+    error: str | None = None
+    created_at: str | None = None
+
+
+class CaseBenchmarkListResponse(BaseModel):
+    total: int
+    items: list[CaseBenchmarkItem]
+    limit: int
+    offset: int
+
+
+class RunCaseBenchmarkRequest(BaseModel):
+    mode: Literal["rule_only", "full_review"] = "rule_only"

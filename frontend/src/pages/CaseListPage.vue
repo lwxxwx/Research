@@ -47,6 +47,12 @@ const toggleSelect = (caseId: string) => {
 
 const isSelected = (caseId: string) => selectedCaseIds.value.includes(caseId);
 
+// ===== [F07] 卡片跳详情 =====
+function goToCaseDetail(caseId: string) {
+  if (isBatchRunning.value) return; // 批量评审进行中不允许跳走
+  router.push(`/cases/${caseId}`);
+}
+
 // ===== 加载列表 =====
 async function loadCases() {
   loading.value = true;
@@ -105,7 +111,6 @@ async function handleBatchCreate() {
     batchProgress.value.currentCaseId = cid;
 
     try {
-      // 循环调用同步接口（单次 30 秒超时）
       await createTask(cid);
       results.push({ id: cid, success: true });
     } catch (e) {
@@ -202,47 +207,64 @@ onMounted(loadCases);
         </h3>
 
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <!-- 卡片主体：绝对不使用 absolute 定位 -->
           <div
             v-for="c in cases.filter((x) => x.case_class === group)"
             :key="c.case_id"
-            class="card p-4 hover:shadow-md transition-shadow flex flex-col relative cursor-pointer"
+            class="card hover:shadow-md transition-shadow flex flex-col"
             :class="isSelected(c.case_id) ? 'border-blue-500 ring-1 ring-blue-500' : ''"
-            @click="toggleSelect(c.case_id)"
           >
-            <!-- 多选框 -->
-            <div class="absolute top-3 right-3 text-blue-600">
-              <CheckSquare v-if="isSelected(c.case_id)" class="w-5 h-5" />
-              <Square v-else class="w-5 h-5 text-gray-300" />
-            </div>
-
-            <div class="flex items-start justify-between pr-6">
-              <div class="flex items-center min-w-0">
-                <FileText class="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" />
-                <code class="text-xs font-mono text-gray-600 truncate">{{ c.case_id }}</code>
+            <!-- 卡片顶部：左侧是跳转区域，右侧固定放原生 checkbox -->
+            <div class="flex items-start justify-between p-4 border-b border-gray-50">
+              
+              <!-- 左侧标题区域：点击跳详情 -->
+              <div class="flex-1 cursor-pointer min-w-0 pr-3" @click="goToCaseDetail(c.case_id)">
+                <div class="flex items-center mb-1">
+                  <FileText class="w-4 h-4 text-gray-400 mr-2 flex-shrink-0" />
+                  <code class="text-xs font-mono text-gray-600 truncate">{{ c.case_id }}</code>
+                </div>
+                <h4 class="text-base font-medium text-gray-900 truncate">
+                  {{ c.title ?? c.case_id }}
+                </h4>
               </div>
-              <span v-if="c.calibration_status" class="ml-2 text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600 flex-shrink-0">
-                {{ c.calibration_status }}
-              </span>
+
+              <!-- 右侧：自定义选择块，点击选中变色 -->
+              <div 
+                class="flex-shrink-0 flex items-center h-full pt-1 cursor-pointer"
+                @click.stop="toggleSelect(c.case_id)"
+              >
+                <div 
+                  class="flex items-center px-2 py-1 rounded transition-colors text-sm font-medium"
+                  :class="isSelected(c.case_id) ? 'bg-blue-50 text-blue-700' : 'bg-gray-50 text-gray-500 hover:bg-gray-100 hover:text-gray-700'"
+                >
+                  <CheckSquare v-if="isSelected(c.case_id)" class="w-4 h-4 mr-1" />
+                  <Square v-else class="w-4 h-4 mr-1" />
+                  {{ isSelected(c.case_id) ? "已选择" : "选择" }}
+                </div>
+              </div>
             </div>
 
-            <h4 class="mt-2 text-base font-medium text-gray-900">{{ c.title ?? c.case_id }}</h4>
-            <p v-if="c.description" class="mt-1 text-sm text-gray-500 line-clamp-2 flex-1">{{ c.description }}</p>
-
-            <div v-if="c.tags.length > 0" class="mt-2 flex flex-wrap gap-1">
-              <span v-for="tag in c.tags" :key="tag" class="text-xs px-2 py-0.5 rounded bg-gray-50 text-gray-600 border border-gray-200">
-                {{ tag }}
-              </span>
+            <!-- 中间：描述内容，点击跳详情 -->
+            <div class="p-4 flex-1 flex flex-col cursor-pointer" @click="goToCaseDetail(c.case_id)">
+              <p v-if="c.description" class="text-sm text-gray-500 line-clamp-2 flex-1">{{ c.description }}</p>
+              <div v-if="c.tags.length > 0" class="mt-2 flex flex-wrap gap-1">
+                <span v-for="tag in c.tags" :key="tag" class="text-xs px-2 py-0.5 rounded bg-gray-50 text-gray-600 border border-gray-200">
+                  {{ tag }}
+                </span>
+              </div>
             </div>
 
-            <!-- 单个发起按钮 -->
-            <button
-              class="btn-primary mt-4 w-full relative z-10"
-              :disabled="creatingCaseId !== null || isBatchRunning"
-              @click.stop="handleCreate(c)"
-            >
-              <Loader2 v-if="creatingCaseId === c.case_id" class="w-4 h-4 mr-1.5 animate-spin" />
-              单次评审
-            </button>
+            <!-- 底部：操作按钮 -->
+            <div class="p-4 pt-0">
+              <button
+                class="btn-primary w-full"
+                :disabled="creatingCaseId !== null || isBatchRunning"
+                @click.stop="handleCreate(c)"
+              >
+                <Loader2 v-if="creatingCaseId === c.case_id" class="w-4 h-4 mr-1.5 animate-spin" />
+                单次评审
+              </button>
+            </div>
           </div>
         </div>
       </div>
