@@ -30,5 +30,9 @@ api_router.include_router(knowledge_docs.router)
 # ===== [S2-H（四）] 指标看板 =====
 api_router.include_router(dashboard.router)
 # ===== [S2-H（四） END] =====
+# ===== [F06] 知识缺口 Backlog =====
+from . import knowledge_gaps
+api_router.include_router(knowledge_gaps.router)
+# ===== [F06 END] =====
 
 __all__ = ["api_router"]

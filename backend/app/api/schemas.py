@@ -346,3 +346,56 @@ class CaseBenchmarkListResponse(BaseModel):
 
 class RunCaseBenchmarkRequest(BaseModel):
     mode: Literal["rule_only", "full_review"] = "rule_only"
+
+# ===== [F05] 规则发布 =====
+class PublishRuleRequest(BaseModel):
+    idempotency_key: str = Field(..., min_length=8, max_length=128)
+
+
+class RulePublishResponse(BaseModel):
+    candidate_id: str
+    publish_status: Literal["publishing", "published", "publish_failed"]
+    published_version: str | None = None
+    publish_error: str | None = None
+    idempotent_replay: bool = False
+    benchmark_regression: dict[str, Any] | None = None
+
+# ===== [F06] 知识缺口 Backlog =====
+class KnowledgeGapItem(BaseModel):
+    gap_id: str
+    title: str
+    description: str | None = None
+    status: str
+    case_id: str | None = None
+    task_id: str | None = None
+    defect_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    resolved_at: str | None = None
+    resolved_by: int | None = None
+
+
+class KnowledgeGapFeedbackRef(BaseModel):
+    feedback_id: int
+    feedback_type: str
+    expert_suggestion: str | None = None
+    created_at: str | None = None
+    task_id: str | None = None
+    defect_id: str | None = None
+
+
+class KnowledgeGapDetail(KnowledgeGapItem):
+    source_feedback: KnowledgeGapFeedbackRef | None = None
+    all_feedbacks: list[KnowledgeGapFeedbackRef] = Field(default_factory=list)
+
+
+class KnowledgeGapListResponse(BaseModel):
+    total: int
+    items: list[KnowledgeGapItem]
+    limit: int
+    offset: int
+
+
+class UpdateGapStatusRequest(BaseModel):
+    status: Literal["open", "in_progress", "resolved", "wontfix"]
+    resolved_by: int | None = None

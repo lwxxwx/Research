@@ -22,17 +22,73 @@ v1.3 变更（None 值兜底）：
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tempfile
 import uuid
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.persistence.models import FeedbackItem, ReviewDefect, ReviewResult, RuleCandidate
+from app.persistence.models import (
+    FeedbackItem,
+    ReviewDefect,
+    ReviewResult,
+    RuleCandidate,
+    RuleDefinition,      # F05 新增
+)
+from app.rules.engine import load_rule_definitions  # F05 新增
 
+# ============================================================
+# [F05] 正式规则发布：异常类型 + 辅助函数
+# ============================================================
+class RulePublishError(Exception):
+    """发布失败（技术异常，方案 A 下不直接 raise 给 API，由方法内部返回）。"""
+    pass
+
+
+class RulePublishConflictError(RulePublishError):
+    """候选状态不允许发布（未批准 / 已发布）→ API 409。"""
+    pass
+
+
+class RulePublishValidationError(RulePublishError):
+    """YAML 校验失败（语法 / 字段 / 规则 ID 冲突）→ API 422。"""
+    pass
+
+
+def _rollback_publish(
+    db: Session,
+    rc: RuleCandidate,
+    target_path: Path,
+) -> str:
+    """发布失败补偿：删 target_path + 标记 publish_failed。
+
+    返回错误描述（写入 publish_error）。
+    注意：本函数内部 commit，确保 publish_failed 状态落库。
+    """
+    error_msg = "发布失败"
+
+    # 文件补偿：删除已替换的 target_path（F05 不产生备份，直接删）
+    try:
+        if target_path.exists():
+            target_path.unlink(missing_ok=True)
+    except Exception as exc:
+        error_msg = f"发布失败（文件清理异常: {exc}）"
+
+    # DB 状态补偿
+    try:
+        rc.publish_status = "publish_failed"
+        rc.publish_error = error_msg
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return error_msg
 
 def _make_candidate_id() -> str:
     """生成候选规则ID RC‑YYYYMMDD‑XXXXXX（6 位大写 hex）"""
@@ -227,7 +283,7 @@ class RuleEvolutionService:
     def get_candidate(
         self, db: Session, candidate_id: str
     ) -> Optional[Dict[str, Any]]:
-        """查询单条候选规则详情（S2-G）。"""
+        """查询单条候选规则详情（S2-G + F05）。"""
         rc: Optional[RuleCandidate] = (
             db.query(RuleCandidate)
             .filter(RuleCandidate.candidate_id == candidate_id)
@@ -253,6 +309,14 @@ class RuleEvolutionService:
             "rejected_reason": rc.rejected_reason,
             "created_at": rc.created_at.isoformat() if rc.created_at else None,
             "updated_at": rc.updated_at.isoformat() if rc.updated_at else None,
+            # ===== [F05] 发布状态字段 =====
+            "publish_status": rc.publish_status,
+            "published_at": (
+                rc.published_at.isoformat() if rc.published_at else None
+            ),
+            "published_version": rc.published_version,
+            "publish_error": rc.publish_error,
+            # ===== [F05 END] =====
         }
 
     def update_candidate_status(
@@ -466,6 +530,195 @@ class RuleEvolutionService:
             "delta": delta,
             "per_case": per_case,
         }
+
+    # ============================================================
+    # [F05] 正式规则发布
+    # ============================================================
+    def publish_rule_candidate(
+        self,
+        db: Session,
+        candidate_id: str,
+        idempotency_key: str,
+        rules_dir: str | Path = "/data/rules",
+    ) -> Dict[str, Any]:
+        """发布候选到正式规则库。
+
+        方案 A：失败时返回 200 + publish_status="publish_failed"，状态落库。
+        只有业务冲突（未批准 / 已发布）raise RulePublishConflictError（→ 409），
+        校验失败（YAML / 规则 ID）raise RulePublishValidationError（→ 422）。
+
+        状态机：accepted → publishing → published | publish_failed
+        顺序：临时文件校验 → 原子替换 → DB 同步 → 引擎验证 → 状态落 published
+        关键：文件替换后、DB 提交前不做任何规则执行（不跑 Benchmark）
+        """
+        rules_dir = Path(rules_dir)
+        rules_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. 幂等检查
+        existing = (
+            db.query(RuleCandidate)
+            .filter(RuleCandidate.publish_idempotency_key == idempotency_key)
+            .first()
+        )
+        if existing is not None:
+            return {
+                "candidate_id": existing.candidate_id,
+                "publish_status": existing.publish_status,
+                "published_version": existing.published_version,
+                "publish_error": existing.publish_error,
+                "idempotent_replay": True,
+                "benchmark_regression": None,
+            }
+
+        # 2. 候选校验（业务冲突 → 409）
+        rc: Optional[RuleCandidate] = (
+            db.query(RuleCandidate)
+            .filter(RuleCandidate.candidate_id == candidate_id)
+            .first()
+        )
+        if rc is None:
+            raise RulePublishConflictError(f"候选不存在: {candidate_id}")
+        if rc.status != "accepted":
+            raise RulePublishConflictError(
+                f"候选未批准，status={rc.status}，不允许发布"
+            )
+        if rc.publish_status == "published":
+            raise RulePublishConflictError(
+                f"候选已发布，published_version={rc.published_version}"
+            )
+        if not rc.proposed_yaml:
+            raise RulePublishValidationError("候选缺少 proposed_yaml")
+
+        # 3. YAML 解析 + 字段校验（校验失败 → 422）
+        try:
+            parsed = yaml.safe_load(rc.proposed_yaml)
+        except yaml.YAMLError as exc:
+            raise RulePublishValidationError(f"YAML 语法错误: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise RulePublishValidationError("YAML 顶层必须是 dict")
+        rule_id = parsed.get("rule_id")
+        if not rule_id:
+            raise RulePublishValidationError("YAML 缺少 rule_id")
+
+        # 4. 规则 ID 唯一性（校验失败 → 422）
+        target_path = rules_dir / f"{rule_id}.yaml"
+        if target_path.exists():
+            raise RulePublishValidationError(
+                f"规则 ID 已存在: {rule_id}（{target_path}）"
+            )
+
+        # 5. 标记 publishing + 记录幂等 Key（先落状态，防重复）
+        rc.publish_status = "publishing"
+        rc.publish_error = None
+        rc.publish_idempotency_key = idempotency_key
+        db.commit()
+
+        # 6. 临时文件 + 原子替换 + DB 同步 + 引擎验证
+        tmp_fd, tmp_path_str = tempfile.mkstemp(
+            prefix=f".tmp_{candidate_id}_", suffix=".yaml", dir=str(rules_dir)
+        )
+        tmp_path = Path(tmp_path_str)
+        #backup_path: Path | None = None
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(rc.proposed_yaml)
+
+            # 验证临时文件可解析
+            try:
+                yaml.safe_load(tmp_path.read_text(encoding="utf-8"))
+            except yaml.YAMLError as exc:
+                raise RulePublishValidationError(
+                    f"临时文件 YAML 校验失败: {exc}"
+                ) from exc
+
+            # 原子替换
+            os.replace(tmp_path, target_path)
+
+            # DB 同步：更新 / 插入 rule_definition
+            version = parsed.get("version") or "v1.0"
+            existing_rd = (
+                db.query(RuleDefinition)
+                .filter(RuleDefinition.rule_id == rule_id)
+                .first()
+            )
+            if existing_rd is None:
+                db.add(RuleDefinition(
+                    rule_id=rule_id,
+                    rule_name=parsed.get("rule_name") or rule_id,
+                    rule_category=parsed.get("category") or "other",
+                    rule_yaml=rc.proposed_yaml,
+                    severity=parsed.get("severity") or "medium",
+                    enabled=True,
+                    version=version,
+                ))
+            else:
+                existing_rd.rule_name = parsed.get("rule_name") or rule_id
+                existing_rd.rule_category = parsed.get("category") or "other"
+                existing_rd.rule_yaml = rc.proposed_yaml
+                existing_rd.severity = parsed.get("severity") or "medium"
+                existing_rd.enabled = True
+                existing_rd.version = version
+
+            # 引擎验证：调 load_rule_definitions 确认新文件可解析（不执行规则）
+            loaded = load_rule_definitions(rules_dir)
+            loaded_ids = {r.rule_id for r in loaded}
+            if rule_id not in loaded_ids:
+                raise RulePublishError(
+                    f"引擎加载后未找到 {rule_id}，文件可能损坏"
+                )
+
+            # 状态落 published
+            rc.publish_status = "published"
+            rc.published_at = datetime.now(timezone.utc)
+            rc.published_version = version
+            rc.publish_error = None
+            db.commit()
+
+            return {
+                "candidate_id": candidate_id,
+                "publish_status": "published",
+                "published_version": version,
+                "publish_error": None,
+                "idempotent_replay": False,
+                "benchmark_regression": None,
+            }
+
+        except RulePublishValidationError as exc:
+            # 发布中校验失败（临时文件 YAML 错）→ 补偿 + 返回 200 + publish_failed
+            _rollback_publish(db, rc, target_path)
+            return {
+                "candidate_id": candidate_id,
+                "publish_status": "publish_failed",
+                "published_version": None,
+                "publish_error": str(exc),
+                "idempotent_replay": False,
+                "benchmark_regression": None,
+            } 
+        except RulePublishError as exc:
+            # 技术失败（引擎验证失败）→ 补偿 + 返回 200 + publish_failed
+            _rollback_publish(db, rc, target_path)
+            return {
+                "candidate_id": candidate_id,
+                "publish_status": "publish_failed",
+                "published_version": None,
+                "publish_error": str(exc),
+                "idempotent_replay": False,
+                "benchmark_regression": None,
+            }
+        except Exception as exc:
+            # 未预期异常 → 补偿 + 返回 200 + publish_failed
+            _rollback_publish(db, rc, target_path)
+            return {
+                "candidate_id": candidate_id,
+                "publish_status": "publish_failed",
+                "published_version": None,
+                "publish_error": f"{type(exc).__name__}: {exc}",
+                "idempotent_replay": False,
+                "benchmark_regression": None,
+            }
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
 
 # ============================================================
 # 辅助函数：TP/FP/FN 匹配与 Precision/Recall 计算
