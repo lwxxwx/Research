@@ -360,11 +360,18 @@ def test_rule_evolution_list_candidates(pg_session: Session, feedback_test_fixtu
     )
     out = svc.submit_feedback(pg_session, fb_in)
     rev = RuleEvolutionService()
+    # 1) proposed 状态应该包含刚创建的候选
     lst = rev.list_candidates(pg_session, status="proposed")
     ids = [x["candidate_id"] for x in lst]
     assert out.rule_candidate_ref in ids
-    empty = rev.list_candidates(pg_session, status="accepted")
-    assert len(empty) == 0
+
+    # 2) accepted 状态：只验证刚创建的候选不在 accepted 里（不假设全库 0 条）
+    accepted = rev.list_candidates(pg_session, status="accepted")
+    accepted_ids = [x["candidate_id"] for x in accepted]
+    assert out.rule_candidate_ref not in accepted_ids, (
+        f"刚创建的 proposed 候选不应出现在 accepted 列表，"
+        f"实际 accepted 包含 {out.rule_candidate_ref}"
+    )
 
 
 # ============================================================

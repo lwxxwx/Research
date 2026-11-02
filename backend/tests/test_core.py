@@ -84,6 +84,7 @@ def test_secret_key_prod_accepts_real_key(monkeypatch):
 def test_database_url_rejects_localhost(monkeypatch):
     _set_required_env(
         monkeypatch,
+        APP_ENV="prod",  # 只对生产环境拦截
         DATABASE_URL="postgresql+psycopg://u:p@localhost:5432/db",
     )
     with pytest.raises(ValueError):
@@ -93,6 +94,7 @@ def test_database_url_rejects_localhost(monkeypatch):
 def test_database_url_rejects_127(monkeypatch):
     _set_required_env(
         monkeypatch,
+        APP_ENV="prod",  # 只对生产环境拦截
         DATABASE_URL="postgresql+psycopg://u:p@127.0.0.1:5432/db",
     )
     with pytest.raises(ValueError):

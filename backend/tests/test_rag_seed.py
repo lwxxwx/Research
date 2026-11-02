@@ -224,7 +224,10 @@ def test_get_embedding_client_fake_mode():
     # ===== [S1-C 修正 END] =====
 
 
-def test_retriever_instance_create():
+def test_retriever_instance_create(monkeypatch):
+    # 临时把 RAG 后端设为 zhipu（1024 维），与 DB 的 knowledge_chunk.embedding 匹配
+    from app.rag import embedding_factory
+    monkeypatch.setattr(embedding_factory.settings, "rag_embedding_backend", "zhipu")
     ret = Retriever()
     assert hasattr(ret, "_embed_client")
 
@@ -772,7 +775,11 @@ def test_knowledge_table_has_seed_data():
 
         sample_doc = db.query(KnowledgeDoc).first()
         meta = _as_dict(sample_doc.meta_json)
-        assert meta.get("embedding_provider") == "fake"
+        # 只验证 embedding_provider 字段存在且非空，不硬编码具体后端名
+        # （Sprint 0 是 fake，Sprint 1 切到了 zhipu 1024 维，Sprint 3 可能再切）
+        assert meta.get("embedding_provider"), (
+            f"知识库种子数据缺少 embedding_provider 字段，meta={meta}"
+        )
 
 
 @pytest.mark.integration
