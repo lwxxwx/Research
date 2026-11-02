@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 2 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-10-29
-> **最后更新**：2026-10-30（补充 S2-H（四）指标看板及 Docker 构建/依赖同步排障）
+> **最后更新**：2026-11-02（补充 S2-F07 / S2-F15 交付及全链路恢复记录）
 
 ---
 
@@ -24,7 +24,8 @@
 15. [Docker 构建环境与依赖同步排障（S2-H 基础设施）](#15-docker-构建环境与依赖同步排障s2-h-基础设施)
 16. [前端 Vue/TypeScript 编译与构建排障（Build 模式）](#16-前端-vuetypescript-编译与构建排障build-模式)
 17. [S2-F07：Case 管理与单 Case Benchmark 前后端联调](#17-s2-f07case-管理与单-case-benchmark-前后端联调2026-11-02)
-18. [附：版本与适用范围](#18-附版本与适用范围)
+18. [S2-F15：技术基线快照与全链路恢复](#18-s2-f15技术基线快照与全链路恢复2026-11-02)
+19. [附：版本与适用范围](#19-附版本与适用范围)
 
 ---
 
@@ -397,7 +398,227 @@ if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
 2. **UI 控件的视觉存在感**：不要盲目信任原生 `<input>` 的默认样式。在自定义组件中，给交互元素增加明显的边框、背景色和 `hover` 状态，能大幅降低用户的学习成本。
 3. **跨功能模块的持久化验证**：在进行新的迁移（如 F07）前，务必跑一次全量测试（如 `test_orm_columns_match_db`）。它可以帮你提前发现历史代码（F05）是否因为误操作而丢失了字段定义，防止带病提交。
 
-## 18. 附：版本与适用范围
+## 18. S2-F15：技术基线快照与全链路恢复（2026-11-02）
+
+> 状态：✅ 完成
+> 用途：把 Sprint 2 的最终状态固化为不可变的基线快照，作为 Sprint 3 (G1–G6) 起步的唯一事实地基。
+> 核心难点：F05/F06/F07 的代码在工作区被意外回滚，导致后端启动崩溃、接口 404，需要逐个精准恢复。
+
+### 一、事故背景与根因
+
+**现象**：执行 `scripts/demo_sprint2.ps1` 时，后端在 `docker compose restart backend` 后直接崩溃（`基础连接已经关闭`），`healthz` 连不上。
+
+**根因链条**（一次连锁回滚）：
+
+在 F07 收尾之后，工作区被某次 git 操作（可能是 `git checkout` 或 `git reset`）错误回滚，导致 **F05/F06/F07 三个阶段的部分文件丢失**。具体表现：
+
+| 阶段 | 丢失的文件 | 后端启动报错 |
+|---|---|---|
+| F05 | `backend/alembic/versions/s2_f05_rule_publish.py`、`backend/app/api/rule_candidates.py` 的 `/publish` 端点、`backend/app/services/rule_evolution_service.py` 的 3 个异常类 + `publish_rule_candidate` 方法、`backend/app/api/schemas.py` 的 2 个 Pydantic 模型 | `ImportError: cannot import name 'RulePublishConflictError'` |
+| F06 | `backend/app/api/knowledge_gaps.py`、`backend/app/services/knowledge_gap_service.py`、`backend/app/api/__init__.py` 的 `knowledge_gaps` 路由注册、`backend/app/api/schemas.py` 的 4 个 Pydantic 模型 | `ImportError: cannot import name 'KnowledgeGapListResponse'` |
+| F07 | `backend/app/persistence/models.py` 的 `RuleCandidate` 5 个 F05 发布字段 | `AssertionError: 列级不一致: {'rule_candidates': {'db_only': ['publish_*', ...]}}` |
+
+**关键观察**：`git status` 里这些文件**没有显示 `D`（deleted）状态**，而是直接"不存在"。原因是工作区文件被物理删除，但 git index 里仍然保留了 F05/F06/F07 commit 的记录，所以 `git status` 看不到删除动作。
+
+### 二、排查思路（逐步缩小范围）
+
+**第 1 步：从报错位置反向追踪缺失模块**
+
+先后端日志出现 `ImportError: cannot import name 'PublishRuleRequest' from 'app.api.schemas'`。立刻能定位到 `schemas.py` 缺少 F05 的 Pydantic 模型。
+
+此时**不能直接 `git checkout 53878c7 -- schemas.py`**，因为 `schemas.py` 同时承载 F05 / F06 / F07 三个阶段的模型（共 10+ 个），直接 checkout 会丢失 F06/F07 的模型定义，导致新的 ImportError。
+
+**第 2 步：从 commit 历史找回原始定义**
+
+用 `git show 53878c7:backend/app/api/schemas.py | Select-String "PublishRuleRequest" -Context 2,10` 找到 F05 commit 里的原始模型定义，然后**手工追加到当前工作区的 `schemas.py` 末尾**（不能整体覆盖）。
+
+**第 3 步：同一方法检查其他文件**
+
+依次检查 `rule_candidates.py` / `rule_evolution_service.py` / `knowledge_gaps.py` / `knowledge_gap_service.py` / `api/__init__.py`：
+
+```powershell
+git show 53878c7:backend/app/api/rule_candidates.py | Select-String "publish"
+git show 03ddf34:backend/app/api/knowledge_gaps.py | Select-String "router"
+```
+
+发现 rule_candidates.py / knowledge_gaps.py / api/__init__.py 在 commit 里是完整的，但工作区不存在（或缺少关键端点），于是用 `git checkout <commit> -- <path>` 直接恢复（这些文件 F05/F06 commit 之后没被 F07 改过，所以可以整体恢复）。
+
+**第 4 步：反复重启后端验证**
+
+每恢复一批文件，就 `docker compose restart backend` + healthz 检查。每次报错位置会往上推移（从 rule_candidates.py → rule_evolution_service.py → knowledge_gaps.py），直到 healthz 返回 status: ok。
+
+**第 5 步：跑全量测试**
+
+`docker compose exec backend uv run pytest -m "not integration" -v`。发现 test_orm_columns_match_db 挂，说明 models.py 的 RuleCandidate 也丢了 F05 字段，手工补回 5 个 publish_* 字段。
+
+### 三、具体恢复方法（可复用清单）
+
+#### A. 从 commit 恢复整个文件
+
+```powershell
+# F05 的文件（F05 commit 之后没被 F07 改过，安全）
+git checkout 53878c7 -- backend/app/api/rule_candidates.py
+git checkout 53878c7 -- backend/app/services/rule_evolution_service.py
+git checkout 53878c7 -- backend/alembic/versions/s2_f05_rule_publish.py
+
+# F06 的文件（F06 commit 之后没被 F07 改过，安全）
+git checkout 03ddf34 -- backend/app/api/knowledge_gaps.py
+git checkout 03ddf34 -- backend/app/services/knowledge_gap_service.py
+git checkout 03ddf34 -- backend/app/api/__init__.py
+```
+
+注意：`api/__init__.py` 必须先确认 F06 之后没被 F07 改过：
+
+```powershell
+git log --oneline 03ddf34..HEAD -- backend/app/api/__init__.py
+```
+
+无输出才能 checkout。
+
+#### B. 手工补回共享文件的模型定义
+
+`schemas.py` 同时被 F05/F06/F07 改过，不能用 git checkout（会丢后续改动），必须在文件末尾手工追加。
+
+**F05 部分（从 53878c7 提取）：**
+
+```python
+class PublishRuleRequest(BaseModel):
+    idempotency_key: str = Field(..., min_length=8, max_length=128)
+
+class RulePublishResponse(BaseModel):
+    candidate_id: str
+    publish_status: Literal["publishing", "published", "publish_failed"]
+    published_version: str | None = None
+    publish_error: str | None = None
+    idempotent_replay: bool = False
+    benchmark_regression: dict[str, Any] | None = None
+```
+
+**F06 部分（从 03ddf34 提取）：**
+
+```python
+class KnowledgeGapItem(BaseModel):
+    gap_id: str
+    title: str
+    description: str | None = None
+    status: str
+    case_id: str | None = None
+    task_id: str | None = None
+    defect_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+    resolved_at: str | None = None
+    resolved_by: int | None = None
+
+class KnowledgeGapDetail(KnowledgeGapItem):
+    source_feedback: KnowledgeGapFeedbackRef | None = None
+    all_feedbacks: list[KnowledgeGapFeedbackRef] = Field(default_factory=list)
+
+class KnowledgeGapListResponse(BaseModel):
+    total: int
+    items: list[KnowledgeGapItem]
+    limit: int
+    offset: int
+
+class UpdateGapStatusRequest(BaseModel):
+    status: Literal["open", "in_progress", "resolved", "wontfix"]
+    resolved_by: int | None = None
+```
+
+**F07 部分（models.py 的 RuleCandidate 5 字段 + 3 约束）：**
+
+```python
+# RuleCandidate 类内
+publish_status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="not_published")
+published_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
+published_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+publish_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+publish_idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+# __table_args__ 内
+CheckConstraint("publish_status IN ('not_published','publishing','published','publish_failed')", name="check_rule_candidates_publish_status"),
+Index("idx_rule_candidates_publish_status", "publish_status"),
+Index("uniq_rule_candidates_publish_idempotency_key", "publish_idempotency_key", unique=True, postgresql_where=text("publish_idempotency_key IS NOT NULL")),
+```
+
+### 四、PowerShell 特殊坑点
+
+#### A. > 重定向写 UTF-16 LE
+
+`git show ... > file` 在 PowerShell 5.1 中默认写 UTF-16 LE with BOM，Python 读取时崩溃：
+
+```
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte
+```
+
+修复：改用 `git checkout <commit> -- <path>`，从 git 对象库直接写工作区（UTF-8 无 BOM）。
+
+#### B. 中文乱码导致语法错误
+
+PowerShell 5.1 用系统编码（GBK）解码 UTF-8 脚本，脚本里 `Print-Step "阶段 1/3"` 变成 `Print-Step "闃舵 1/3"`，解析器报"意外的标记"。
+
+修复：脚本里所有中文字符串改为英文（`Print-Step "Phase 1/3"`），或者脚本文件保存为 UTF-8 with BOM（但这也可能引起其他问题，最稳的是纯英文）。
+
+#### C. Invoke-WebRequest 安全警告
+
+每次 POST 都弹 `安全警告: 脚本执行风险`，需手动按 Y。
+
+修复：加 `-UseBasicParsing` 参数，跳过 HTML 解析引擎。
+
+#### D. Invoke-RestMethod 错误信息被吞
+
+404 / 422 时只返回 `远程服务器返回错误: (404) 未找到`，看不到后端返回的 detail。
+
+修复：改用 Invoke-WebRequest + `$_.Exception.Response.GetResponseStream()` 提取错误 body：
+
+```powershell
+try {
+    $resp = Invoke-WebRequest -Uri "..." -Method POST -Body $body -ContentType "application/json" -UseBasicParsing
+} catch {
+    $stream = $_.Exception.Response.GetResponseStream()
+    $reader = New-Object System.IO.StreamReader($stream)
+    $errorBody = $reader.ReadToEnd()
+    throw "HTTP $($_.Exception.Response.StatusCode.value__): $errorBody"
+}
+```
+
+#### E. alembic current 的 stdout 噪声
+
+`alembic current` 会把 `INFO [alembic.runtime.migration] ...` 日志打到 stdout（不是 stderr），导致 `2>$null` 屏蔽不掉，Out-String 后的内容无法被正则精准匹配。
+
+修复：直接查 DB 的 alembic_version 表，绕开命令输出：
+
+```python
+from sqlalchemy import text
+from app.persistence.db import get_db_session
+with get_db_session() as db:
+    row = db.execute(text("SELECT version_num FROM alembic_version")).fetchone()
+    print(row[0] if row else "unknown")
+```
+
+### 五、核心认知与总结
+
+1. **工作区丢失代码的排查方法论**
+   - 先看 git status——如果没显示 D，说明文件被"物理删除"，但 git 索引里还有 commit 记录
+   - 用 `git show <commit>:<path>` 确认 commit 里的原始内容
+   - 用 `git log <commit>..HEAD -- <path>` 确认该文件后续是否被修改过，决定能否 git checkout
+   - 共享文件（如 schemas.py）必须手工追加，不能整体覆盖
+
+2. **PowerShell 5.1 的 5 大坑**
+   > 重定向写 UTF-16 LE、中文乱码、Invoke-WebRequest 安全警告、Invoke-RestMethod 吞错误 body、alembic current 的 stdout 噪声。
+
+3. **Demo 脚本必须自动清理**
+   否则每次跑都会污染 /data/rules/ 和 DB，导致 test_rules_loaded_exactly_ten 等测试失败。清理逻辑要放在 try/finally 或主流程末尾，确保异常时也清理。
+
+4. **静态快照的三个必填字段**
+   - Alembic Version 必须是具体的 revision 名（如 s2_f07_case_benchmark），不能是 unknown 或 `<base>`
+   - Database Type 必须是 postgresql / mysql / sqlite，不能带 +driver 后缀
+   - Test Baseline 必须是"数字 + passed + 数字 + skipped"的汇总行，不能是单条 tests/test_xxx PASSED [ 0%]
+
+5. **跨阶段恢复的依赖顺序**
+   从 F05 开始，每恢复一层就重启后端 + healthz 验证，再进下一层。一次性恢复所有文件反而容易引入新错误（比如把 F07 的 schemas.py 改动覆盖掉）。
+
+## 19. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv

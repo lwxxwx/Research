@@ -727,3 +727,64 @@ Content-Type: application/json
 | 浏览器验收 B（多选隔离） | ✅ 点击复选框不跳转，底部出现悬浮栏 |
 | 浏览器验收 C（批量评审） | ✅ 弹窗进度正确，完成后跳转任务列表 |
 | 浏览器验收 D（Benchmark） | ✅ 弹出 `tp=2, fp=0, fn=0`，历史表格正确更新 |
+
+---
+
+## [S2-F15] 2026-11-02 - Demo 脚本与技术基线快照
+
+> 状态：✅ 完成
+> 依据：`Sprint2_详细执行计划_V1.0.md` §8 + §9
+
+### 交付内容
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `scripts/demo_sprint2.ps1` | **新建**：三阶段自动化 Demo（静态审计 + 业务闭环验证 + 快照生成） |
+| 2 | `docs/sprint2/baseline_snapshot.md` | **新建**：Sprint 2 技术基线静态快照（Git HEAD / 测试基线 / 数据库状态 / 业务闭环状态） |
+| 3 | `docs/sprint2/baseline_evidence/*` | **新建**：5 个证据 JSON + 1 份测试日志 |
+
+### 核心设计
+
+1. **静态审计**：抓取 Git HEAD、工作区状态、Alembic 版本、数据库类型、`users` 表记录数、`get_current_user` 是否存在、审计字段是否存在、全量测试基线。
+2. **业务闭环验证**：真实跑通三条业务线（评审质量 → 规则演进 → 知识反馈 → 看板一致性），失败即终止。
+3. **快照生成**：把上述事实固化为 `baseline_snapshot.md`，作为 Sprint 3 (G1–G6) 起步时的唯一技术地基。
+4. **自动清理**：Demo 跑完后自动清理 `DEMO_RULE_*.yaml` 和对应 DB 记录，避免污染后续测试。
+
+### 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `demo_sprint2.ps1` 全流程 | ✅ `[ALL PASSED]` |
+| `baseline_snapshot.md` 测试基线 | **568 passed, 1 skipped, 24 deselected**（0 failed） |
+| `baseline_snapshot.md` Alembic 版本 | **`s2_f07_case_benchmark`** |
+| `baseline_snapshot.md` 数据库类型 | **`postgresql`** |
+| 三条业务线闭环 | ✅ 全部通过 |
+
+### 恢复的历史代码（工作区丢失）
+
+执行 Demo 时发现 F05/F06/F07 的部分代码因之前的 git 操作丢失，已全部从对应 commit 恢复：
+
+| 文件 | 来源 commit | 恢复方式 |
+|---|---|---|
+| `backend/alembic/versions/s2_f05_rule_publish.py` | `53878c7` (F05) | `git checkout 53878c7 -- ...` |
+| `backend/app/api/rule_candidates.py` | `53878c7` (F05) | `git checkout 53878c7 -- ...` |
+| `backend/app/services/rule_evolution_service.py` | `53878c7` (F05) | `git checkout 53878c7 -- ...` |
+| `backend/app/api/knowledge_gaps.py` | `03ddf34` (F06) | `git checkout 03ddf34 -- ...` |
+| `backend/app/services/knowledge_gap_service.py` | `03ddf34` (F06) | `git checkout 03ddf34 -- ...` |
+| `backend/app/api/__init__.py` | `03ddf34` (F06) | `git checkout 03ddf34 -- ...` |
+| `backend/app/api/schemas.py` 的 F05 模型 | `53878c7` (F05) | 手工补入 `PublishRuleRequest` / `RulePublishResponse` |
+| `backend/app/api/schemas.py` 的 F06 模型 | `03ddf34` (F06) | 手工补入 `KnowledgeGapItem` / `KnowledgeGapDetail` / `KnowledgeGapListResponse` / `UpdateGapStatusRequest` |
+
+详见 `frontend_debug.md` §18，其中记录了完整的排查思路与恢复方法。
+
+### 踩坑与修正
+
+| 坑 | 现象 | 修正 |
+|---|---|---|
+| PowerShell `>` 重定向 UTF-16 BOM | `git show ... > file` 后用 Python 读取崩溃 `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xff` | 改用 `git checkout <commit> -- <path>`，避免重定向编码问题 |
+| 脚本中文乱码 | PowerShell 5.1 用 GBK 解码 UTF-8 脚本，`Print-Step "阶段"` 报 `意外的标记“闃舵”` | 脚本内的中文字符串全部改为英文（`Phase 1/3` 等） |
+| `Invoke-WebRequest` 安全警告 | 每次 POST 都弹 `安全警告: 脚本执行风险`，需手动按 `Y` | 加 `-UseBasicParsing` 参数，跳过 HTML 解析引擎 |
+| 提取 `alembic current` 失败 | `2>&1 | Out-String` 拿到空字符串，正则匹配不到 `s2_xxx` | 改用临时 Python 脚本查 `alembic_version` 表 `version_num` 字段，绕开 `alembic current` 的 stdout 噪声 |
+| `Invoke-RestMethod` 报错信息被吞 | 404 / 422 时只返回 `远程服务器返回错误`，看不到 `detail` | 改用 `Invoke-WebRequest` + `$_.Exception.Response.GetResponseStream()` 提取错误 body |
+| DEMO_RULE 污染测试基线 | `test_rules.py::test_rules_loaded_exactly_ten` 挂，因为 `data/rules/` 多了 `DEMO_RULE_*.yaml` | Demo 脚本末尾加自动清理逻辑（删 DB 记录 + 删 YAML 文件） |
+| `uvicorn --reload` 不触发 | 修改 `schemas.py` 后后端没重新加载 | `docker compose restart backend` 强制重启 |
