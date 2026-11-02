@@ -25,8 +25,8 @@
 16. [前端 Vue/TypeScript 编译与构建排障（Build 模式）](#16-前端-vuetypescript-编译与构建排障build-模式)
 17. [S2-F07：Case 管理与单 Case Benchmark 前后端联调](#17-s2-f07case-管理与单-case-benchmark-前后端联调2026-11-02)
 18. [S2-F15：技术基线快照与全链路恢复](#18-s2-f15技术基线快照与全链路恢复2026-11-02)
-19. [附：版本与适用范围](#19-附版本与适用范围)
-
+19. [S2-F15-Fix：CI/CD 流水线环境适配与排障](#19-s2-f15-fixcicd-流水线环境适配与排障2026-11-02)
+20. [附：版本与适用范围](#20-附版本与适用范围)
 ---
 
 ## 1. S2-H（二）：批量评审（2026-10-30）
@@ -618,7 +618,70 @@ with get_db_session() as db:
 5. **跨阶段恢复的依赖顺序**
    从 F05 开始，每恢复一层就重启后端 + healthz 验证，再进下一层。一次性恢复所有文件反而容易引入新错误（比如把 F07 的 schemas.py 改动覆盖掉）。
 
-## 19. 附：版本与适用范围
+## 19. S2-F15-Fix：CI/CD 流水线环境适配与排障（2026-11-02）
+
+> 状态：✅ 完成
+> 核心难点：本地开发环境（Docker Compose）与 CI 环境（GitHub Actions Runner）在**网络连通、目录挂载、数据状态**上的巨大差异。
+
+### 一、坑点与修复全过程
+
+#### 坑 1：缺少 PostgreSQL 服务 & 环境变量
+
+**现象**：CI 的 `backend` job 在收集测试阶段直接崩溃，报 `ImportError` 或 `ValidationError`。
+
+**根因**：GitHub Runner 默认没有启动数据库。`Settings` 里的必填字段（`secret_key` / `database_url` / `data_dir` / `llm_api_key`）也全为空。
+
+**解决**：在 `ci.yml` 中引入 `services.postgres` 容器，并补全所有 `env` 变量。
+
+#### 坑 2：数据库主机名校验拦截了 CI 环境
+
+**现象**：CI 尝试用 `localhost` 连数据库，被 `config.py` 拦截报错 `DATABASE_URL 在容器内部不能使用 localhost`。
+
+**根因**：本地开发时，容器间互信用 `postgres` 服务名；但 CI Runner 是宿主机环境，访问映射端口必须用 `localhost`。
+
+**解决**：把 `config.py` 的 `check_db_host` 校验器改为**仅针对 `APP_ENV == "prod"` 生效**，`test` 和 `dev` 环境放行 `localhost`。
+
+#### 坑 3：硬编码绝对路径 `/data` 导致文件找不到 / 无权限
+
+**现象**：`test_benchmark.py` 报 `FileNotFoundError: /data/cases/...`；`test_demo.py` 报 `PermissionError: /out`。
+
+**根因**：项目历史悠久，大量测试代码（尤其是 Sprint 0/1 时期的）硬编码了容器内的绝对路径（`/data` 和 `/out`）。但 CI 里的项目在 `/home/runner/work/...` 下。
+
+**解决**：在 CI 的 `steps` 中加一步 `cp -r`：
+
+```yaml
+      - name: Create symlinks for CI compatibility
+        run: |
+          sudo mkdir -p /data /out
+          sudo chmod -R 777 /data /out
+          sudo cp -r $(pwd)/data/* /data/ 2>/dev/null || true
+          sudo cp -r $(pwd)/out/* /out/ 2>/dev/null || true
+```
+
+#### 坑 4：Embedding 维度不匹配
+
+**现象**：`test_rag_seed.py` 报 `RuntimeError: 后端 fake 期望 1536 维，DB 当前 1024 维`。
+
+**根因**：数据库在迁移脚本 `c1_embedding_dim_1024` 里写死了 `vector(1024)`（为了适配智谱），但 CI 默认的 `RAG_EMBEDDING_BACKEND` 是 `fake`（1536 维）。
+
+**解决**：在 `ci.yml` 的 `env` 里显式指定 `RAG_EMBEDDING_BACKEND: "zhipu"`，与数据库维度对齐。
+
+#### 坑 5：测试断言过度依赖"全库为空"的历史状态
+
+**现象**：`test_rule_evolution_list_candidates` 断言 `len(accepted) == 0` 失败，实际查出 1 条 Sprint 1 遗留的历史数据。
+
+**根因**：测试用了独立事务的 `pg_session`，但数据库本身不会因为测试回滚就抹掉历史数据。
+
+**解决**：移除 `assert len(empty) == 0` 这种脆弱断言，改为 `assert out.rule_candidate_ref not in accepted_ids`（只验证刚创建的候选不在里面即可）。
+
+### 二、核心认知与总结
+
+1. **测试用例必须是"自封闭"的**：绝对不能假设"数据库里除了我造的数据没有其他数据"。查列表时，要么通过 `candidate_id` 精确匹配，要么只断言增量。
+2. **`config.py` 的校验逻辑必须区分环境**：任何"禁止 localhost"的硬性拦截，都必须放到 `APP_ENV == "prod"` 分支里。否则会卡死本地和 CI。
+3. **隔离"容器绝对路径"**：长期项目里硬编码的 `/data` 很难一次性全改，在 CI 环境用 `sudo cp -r` 做兼容是最快的工程手段。
+
+
+## 20. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
