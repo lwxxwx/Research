@@ -1,0 +1,123 @@
+﻿{
+    "task_id":  "RUN-20261102-111119-AE76",
+    "status":  "done",
+    "case_id":  "case001",
+    "report":  {
+                   "errors":  [
+
+                              ],
+                   "defects":  [
+                                   {
+                                       "net":  "VCC",
+                                       "risk":  "critical",
+                                       "origin":  "rule",
+                                       "rule_id":  "POWER_001",
+                                       "category":  "power",
+                                       "evidence":  [
+                                                        {
+                                                            "type":  "ir_ref",
+                                                            "detail":  "Net[VCC].connected_pins = [\u0027U1.VCC\u0027]",
+                                                            "reason":  null,
+                                                            "source":  null,
+                                                            "section":  null,
+                                                            "source_type":  null
+                                                        },
+                                                        {
+                                                            "type":  "ir_ref",
+                                                            "detail":  "è¯¥ç½ç»å\u0085ä»¶éå [\u0027U1\u0027] ä¸­æ çµå®¹å¼æ¥è¿ 0.1Î¼F ä¸è·¨æ¥ VCC-GND ççµå®¹",
+                                                            "reason":  null,
+                                                            "source":  null,
+                                                            "section":  null,
+                                                            "source_type":  null
+                                                        }
+                                                    ],
+                                       "location":  {
+                                                        "path":  "",
+                                                        "sheet":  "",
+                                                        "coords":  {
+
+                                                                   }
+                                                    },
+                                       "component":  "U1",
+                                       "defect_id":  "RUN-20261102-111119-AE76-DEF-RULE-POWER_001",
+                                       "confidence":  0.9,
+                                       "root_cause":  "çµæºç½ç» VCC ç¼ºå° 0.1Î¼F å»è¦çµå®¹ï¼è¦æ±çµå®¹å¼æ¥è¿ 0.1Î¼Fï¼ä¸ä¸ç«¯æ¥ VCCãå¦ä¸ç«¯æ¥ GNDï¼",
+                                       "suggestion":  "å¨ MCU ç VCC å¼èå°±è¿å¢å  0.1Î¼F X7R é¶ç·å»è¦çµå®¹å° GNDï¼è·ç¦»å¼è \u003c 5mmï¼å¯å¹¶è 10Î¼F çµè§£çµå®¹ä½ä¸ºä½é¢å¨è½ã",
+                                       "synthesized":  true,
+                                       "review_status":  "AI_CONFIRMED",
+                                       "expert_decision":  "pending"
+                                   },
+                                   {
+                                       "net":  "RST",
+                                       "risk":  "medium",
+                                       "origin":  "rule",
+                                       "rule_id":  "POWER_002",
+                                       "category":  "power",
+                                       "evidence":  [
+                                                        {
+                                                            "type":  "ir_ref",
+                                                            "detail":  "Net[RST].connected_pins = [\u0027U1.RST\u0027, \u0027R1.pin1\u0027, \u0027C3.pin1\u0027, \u0027SW1.pin1\u0027]",
+                                                            "reason":  null,
+                                                            "source":  null,
+                                                            "section":  null,
+                                                            "source_type":  null
+                                                        },
+                                                        {
+                                                            "type":  "ir_ref",
+                                                            "detail":  "RST ç½ç»å\u0085ä»¶éå [\u0027C3\u0027, \u0027R1\u0027, \u0027SW1\u0027, \u0027U1\u0027] åæªæä¾ RST-VCC éè·¯",
+                                                            "reason":  null,
+                                                            "source":  null,
+                                                            "section":  null,
+                                                            "source_type":  null
+                                                        }
+                                                    ],
+                                       "location":  {
+                                                        "path":  "",
+                                                        "sheet":  "",
+                                                        "coords":  {
+
+                                                                   }
+                                                    },
+                                       "component":  "C3",
+                                       "defect_id":  "RUN-20261102-111119-AE76-DEF-RULE-POWER_002",
+                                       "confidence":  0.9,
+                                       "root_cause":  "å¤ä½ç½ç» RST æ²¡æéå¾ VCC ççµæ°è·¯å¾ï¼é«çµå¹³å¤ä½ MCU æ æ³äº§çä¸çµå¤ä½èå²",
+                                       "suggestion":  "ä¿®æ¹ RC å¤ä½ææï¼å»¶æ¶çµå®¹ C3 æ¥ VCC-RSTï¼æå¨å¤ä½æé® SW1 æ¥ VCC-RSTï¼ä¿ç R1(10kÎ©) ä¸æ RST å° GNDï¼ä¿è¯ä¸çµäº§çé«çµå¹³å¤ä½èå²ã",
+                                       "synthesized":  true,
+                                       "review_status":  "AI_CONFIRMED",
+                                       "expert_decision":  "pending"
+                                   }
+                               ],
+                   "summary":  {
+                                   "evidence_coverage":  1.0,
+                                   "review_status_distribution":  {
+                                                                      "AI_CONFIRMED":  2,
+                                                                      "LOW_CONFIDENCE":  0,
+                                                                      "NEED_EXPERT_REVIEW":  0
+                                                                  }
+                               },
+                   "task_id":  "RUN-20261102-111119-AE76",
+                   "report_id":  "RUN-20261102-111119-AE76-R"
+               },
+    "errors":  [
+
+               ],
+    "created_at":  "2026-11-02T11:11:17.064503+00:00",
+    "defects_count":  2,
+    "summary_metrics":  {
+                            "evidence_coverage":  null,
+                            "ai_new_effective_rate":  null,
+                            "expert_adoption_rate":  null,
+                            "review_status_distribution":  {
+                                                               "AI_CONFIRMED":  2,
+                                                               "NEED_EXPERT_REVIEW":  0,
+                                                               "LOW_CONFIDENCE":  0
+                                                           },
+                            "sample_info":  {
+                                                "ear_sample_size":  0,
+                                                "ear_sample_threshold":  20,
+                                                "ai_ner_sample_size":  0,
+                                                "ai_ner_sample_threshold":  10
+                                            }
+                        }
+}

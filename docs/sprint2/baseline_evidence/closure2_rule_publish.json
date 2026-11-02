@@ -1,0 +1,8 @@
+﻿{
+    "candidate_id":  "RC-DEMO-A94C08",
+    "publish_status":  "published",
+    "published_version":  "v1.0",
+    "publish_error":  null,
+    "idempotent_replay":  false,
+    "benchmark_regression":  null
+}

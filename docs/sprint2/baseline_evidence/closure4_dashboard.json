@@ -1,0 +1,52 @@
+﻿{
+    "scope":  {
+                  "task_status_filter":  "done",
+                  "excluded_task_status":  [
+                                               "pending",
+                                               "failed"
+                                           ],
+                  "total_done_tasks":  0,
+                  "has_seed_data":  false
+              },
+    "metrics":  {
+                    "evidence_coverage":  null,
+                    "ai_new_effective_rate":  null,
+                    "expert_adoption_rate":  null,
+                    "review_status_distribution":  {
+                                                       "AI_CONFIRMED":  0,
+                                                       "NEED_EXPERT_REVIEW":  0,
+                                                       "LOW_CONFIDENCE":  0
+                                                   },
+                    "expert_decision_distribution":  {
+                                                         "pending":  0,
+                                                         "confirmed":  0,
+                                                         "rejected":  0,
+                                                         "needs_verification":  0
+                                                     },
+                    "sample_info":  {
+                                        "ear_sample_size":  0,
+                                        "ear_sample_threshold":  20,
+                                        "ai_ner_sample_size":  0,
+                                        "ai_ner_sample_threshold":  10
+                                    }
+                },
+    "rule_candidates":  {
+                            "total":  148,
+                            "by_status":  {
+                                              "proposed":  145,
+                                              "designing":  0,
+                                              "benchmarked":  0,
+                                              "accepted":  2,
+                                              "rejected":  1
+                                          }
+                        },
+    "knowledge_gaps":  {
+                           "total":  26,
+                           "by_status":  {
+                                             "open":  26,
+                                             "in_progress":  0,
+                                             "resolved":  0,
+                                             "wontfix":  0
+                                         }
+                       }
+}
