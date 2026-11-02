@@ -59,8 +59,12 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def check_db_host(cls, v: str):
-        if "localhost" in v or "127.0.0.1" in v:
-            raise ValueError("DATABASE_URL 在容器内部不能使用 localhost/127.0.0.1，请使用服务名 postgres")
+        # 允许 CI（APP_ENV=test）和本地开发（APP_ENV=dev）使用 localhost
+        # 只对生产环境（prod）强制使用服务名 postgres
+        import os
+        env = os.environ.get("APP_ENV", "dev").lower()
+        if env == "prod" and ("localhost" in v or "127.0.0.1" in v):
+            raise ValueError("DATABASE_URL 在生产环境不能使用 localhost/127.0.0.1，请使用服务名 postgres")
         return v
 
 settings = Settings()

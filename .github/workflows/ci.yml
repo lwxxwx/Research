@@ -27,9 +27,7 @@ jobs:
 
     env:
       APP_ENV: "test"
-      # 用 postgres 服务名（通过 CI services 内网 DNS）而不是 localhost
-      DATABASE_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/schematic_review"
-      # 补齐 Settings 必填字段（本地从 .env 读，CI 里显式设置）
+      DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/schematic_review"
       SECRET_KEY: "ci-test-secret-key-0123456789abcdef"
       DATA_DIR: "/home/runner/work/Research/Research/data"
       LLM_PROVIDER: "mock"
@@ -62,9 +60,6 @@ jobs:
       - name: Run backend tests (non-integration)
         working-directory: backend
         run: uv run python -m pytest -m "not integration" -v
-        env:
-          # 这一层覆盖：让 config.py 的 localhost 校验不触发
-          DATABASE_URL: "postgresql+psycopg://postgres:postgres@postgres:5432/schematic_review"
 
   frontend:
     runs-on: ubuntu-latest
