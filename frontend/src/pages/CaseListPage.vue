@@ -49,9 +49,21 @@ const isSelected = (caseId: string) => selectedCaseIds.value.includes(caseId);
 
 // ===== [F07] 卡片跳详情 =====
 function goToCaseDetail(caseId: string) {
-  if (isBatchRunning.value) return; // 批量评审进行中不允许跳走
+  if (isBatchRunning.value) return;
   router.push(`/cases/${caseId}`);
 }
+
+// ===== [F07] 状态颜色映射 =====
+const getStatusColor = (status: string | null) => {
+  if (!status) return "bg-gray-100 text-gray-500 border-gray-200";
+  const s = status.toUpperCase();
+  if (s.includes("PENDING")) return "bg-amber-100 text-amber-700 border-amber-200";
+  if (s.includes("APPROVED") || s.includes("CONFIRMED")) return "bg-emerald-100 text-emerald-700 border-emerald-200";
+  if (s.includes("REJECTED")) return "bg-red-100 text-red-700 border-red-200";
+  if (s.includes("CALIBRATED")) return "bg-blue-100 text-blue-700 border-blue-200";
+  if (s.includes("PROVISIONAL")) return "bg-purple-100 text-purple-700 border-purple-200";
+  return "bg-gray-100 text-gray-500 border-gray-200";
+};
 
 // ===== 加载列表 =====
 async function loadCases() {
@@ -61,7 +73,7 @@ async function loadCases() {
     const resp = await listCases();
     cases.value = resp.items;
     errors.value = resp.errors;
-    selectedCaseIds.value = []; // 刷新时清空选择
+    selectedCaseIds.value = [];
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -214,7 +226,7 @@ onMounted(loadCases);
             class="card hover:shadow-md transition-shadow flex flex-col"
             :class="isSelected(c.case_id) ? 'border-blue-500 ring-1 ring-blue-500' : ''"
           >
-            <!-- 卡片顶部：左侧是跳转区域，右侧固定放原生 checkbox -->
+            <!-- 卡片顶部：左侧是跳转区域，右侧固定放状态胶囊 -->
             <div class="flex items-start justify-between p-4 border-b border-gray-50">
               
               <!-- 左侧标题区域：点击跳详情 -->
@@ -228,18 +240,21 @@ onMounted(loadCases);
                 </h4>
               </div>
 
-              <!-- 右侧：自定义选择块，点击选中变色 -->
+              <!-- 右侧：状态胶囊 + 多选（整体点击可选中） -->
               <div 
                 class="flex-shrink-0 flex items-center h-full pt-1 cursor-pointer"
                 @click.stop="toggleSelect(c.case_id)"
               >
                 <div 
-                  class="flex items-center px-2 py-1 rounded transition-colors text-sm font-medium"
-                  :class="isSelected(c.case_id) ? 'bg-blue-50 text-blue-700' : 'bg-gray-50 text-gray-500 hover:bg-gray-100 hover:text-gray-700'"
+                  class="flex items-center px-2.5 py-1.5 rounded-md border transition-all text-xs font-medium"
+                  :class="isSelected(c.case_id) 
+                    ? 'bg-blue-600 text-white border-blue-600 shadow-sm' 
+                    : getStatusColor(c.calibration_status) + ' hover:opacity-80'"
                 >
-                  <CheckSquare v-if="isSelected(c.case_id)" class="w-4 h-4 mr-1" />
-                  <Square v-else class="w-4 h-4 mr-1" />
-                  {{ isSelected(c.case_id) ? "已选择" : "选择" }}
+                  <CheckSquare v-if="isSelected(c.case_id)" class="w-3.5 h-3.5 mr-1.5" />
+                  <Square v-else class="w-3.5 h-3.5 mr-1.5 opacity-60" />
+                  <span v-if="isSelected(c.case_id)">已选择</span>
+                  <span v-else class="truncate max-w-[80px]">{{ c.calibration_status || "未知" }}</span>
                 </div>
               </div>
             </div>
