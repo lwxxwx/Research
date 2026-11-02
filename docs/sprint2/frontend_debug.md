@@ -26,7 +26,9 @@
 17. [S2-F07：Case 管理与单 Case Benchmark 前后端联调](#17-s2-f07case-管理与单-case-benchmark-前后端联调2026-11-02)
 18. [S2-F15：技术基线快照与全链路恢复](#18-s2-f15技术基线快照与全链路恢复2026-11-02)
 19. [S2-F15-Fix：CI/CD 流水线环境适配与排障](#19-s2-f15-fixcicd-流水线环境适配与排障2026-11-02)
-20. [附：版本与适用范围](#20-附版本与适用范围)
+20. [S2-Git-Fix：Git 历史分叉治理与分支清理](#20-s2-git-fixgit-历史分叉治理与分支清理2026-11-02)
+21. [附：版本与适用范围](#21-附版本与适用范围)
+
 ---
 
 ## 1. S2-H（二）：批量评审（2026-10-30）
@@ -680,8 +682,39 @@ with get_db_session() as db:
 2. **`config.py` 的校验逻辑必须区分环境**：任何"禁止 localhost"的硬性拦截，都必须放到 `APP_ENV == "prod"` 分支里。否则会卡死本地和 CI。
 3. **隔离"容器绝对路径"**：长期项目里硬编码的 `/data` 很难一次性全改，在 CI 环境用 `sudo cp -r` 做兼容是最快的工程手段。
 
+## 20. S2-Git-Fix：Git 历史分叉治理与分支清理（2026-11-02）
 
-## 20. 附：版本与适用范围
+> 状态：✅ 完成
+> 核心难点：处理因项目早期初始化不一致导致的 `entirely different commit histories` 问题，在保留本地完整代码的前提下，安全地将远端 `main` 覆盖为最新成果。
+
+### 一、坑点与修复全过程
+
+#### 坑 1：GitHub 无法创建 PR（提示历史分叉）
+
+**现象**：在 GitHub 上尝试创建 Pull Request 合并 `feature/sprint1-core-review` 到 `main` 时，页面提示 `There isn't anything to compare`，并指出两个分支是 `entirely different commit histories`。
+
+**根因**：本地仓库的初始根节点与远端 `main` 完全不同。可能是因为早期在 GitHub 网页创建了初始仓库，而本地是重新 `git init` 拉起了一套全新历史。后续开发（Sprint 0 ~ 2）全在本地进行，导致这两条时间线毫无交集。
+
+**解决**：
+1. 既然本地分支包含了从 Sprint 0 到 Sprint 2 的所有正确代码，且远端 `main` 已经过时。直接放弃传统的 PR 合并。
+2. 在本地执行 `git checkout -B main`，将本地 `main` 分支指针强制重置到当前最新的 commit。
+3. 执行 `git push -f origin main`，强制覆盖远端 `main` 的历史，让两条时间线彻底对齐。
+
+#### 坑 2：本地遗留的“化石分支”过多
+
+**现象**：执行 `git branch -a` 时，发现本地除了 `main` 之外，还残留着 `develop`、`feature/schema-a-flat-mounts`、`feature/schema-b-symlink`、`sprint0/base` 等一堆废弃分支。
+
+**根因**：历史迭代过程中，各种实验性分支没有及时清理。
+
+**解决**：在确认这些分支的代码都已合入当前主干后，执行 `git branch -D develop feature/schema-a-flat-mounts feature/schema-b-symlink sprint0/base`，强制清理。
+
+### 二、核心认知与总结
+
+1. **Git 历史是可以重塑的**：遇到没有共同祖先的分支（`entirely different commit histories`），只要确定其中一条包含了所有最终代码，直接用 `git push -f` 覆盖另一条是最快、最安全的做法，不要尝试去“合并”（大概率会产生海量冲突）。
+2. **定期清理分支**：保持 `git branch -a` 输出只有 `main` 和一个当前开发分支，能极大降低心智负担。
+3. **主干分支对齐的意义**：对于交付级项目，`main` 分支必须包含最完整、CI 全绿的所有代码。强制覆盖后，所有后续 CI 和 PR 都将基于这个正确的基线运行。
+
+## 21. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
