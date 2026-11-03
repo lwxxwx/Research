@@ -31,11 +31,28 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     username: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    # ===== [S3-G2] 用户角色与启用状态 =====
+    role: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="engineer"
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
+    # ===== [S3-G2 END] =====
     email: Mapped[Optional[str]] = mapped_column(String(256))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     projects: Mapped[List["Project"]] = relationship(back_populates="owner")
     feedbacks: Mapped[List["FeedbackItem"]] = relationship(back_populates="creator")
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('admin','engineer','reviewer','rule_admin')",
+            name="check_users_role",
+        ),
+        Index("idx_users_role", "role"),
+    )
+
 # ============================================================
 # 2. Project
 # ============================================================
@@ -49,6 +66,7 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     owner: Mapped[Optional["User"]] = relationship(back_populates="projects")
     schematic_cases: Mapped[List["SchematicCase"]] = relationship(back_populates="project", cascade="all, delete-orphan")
+
 # ============================================================
 # 3. SchematicCase
 # ============================================================
@@ -71,6 +89,7 @@ class SchematicCase(Base):
     __table_args__ = (
         UniqueConstraint("project_id", "case_id", name="uq_schematic_case_project_case"),
     )
+
 # ============================================================
 # 4. IRDocument
 # ============================================================
@@ -84,6 +103,7 @@ class IRDocument(Base):
     schematic_case: Mapped[Optional["SchematicCase"]] = relationship(back_populates="ir_documents")
     rule_executions: Mapped[List["RuleExecution"]] = relationship(back_populates="ir_document", cascade="all, delete-orphan")
     review_results: Mapped[List["ReviewResult"]] = relationship(back_populates="ir_document", cascade="all, delete-orphan")
+
 # ============================================================
 # 5. RuleDefinition
 # ============================================================
@@ -101,6 +121,7 @@ class RuleDefinition(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     executions: Mapped[List["RuleExecution"]] = relationship(back_populates="rule_def")
+
 # ============================================================
 # 6. RuleExecution
 # ============================================================
@@ -119,6 +140,7 @@ class RuleExecution(Base):
     # #    ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="ir_document")
     ir_document: Mapped[Optional["IRDocument"]] = relationship(back_populates="rule_executions")
     rule_def: Mapped[Optional["RuleDefinition"]] = relationship(back_populates="executions")
+
 # ============================================================
 # 7. ReviewResult
 # ============================================================
@@ -132,6 +154,11 @@ class ReviewResult(Base):
         BigInteger, ForeignKey("schematic_case.id", ondelete="SET NULL")
     )
     # ===== [S1-CHANGE-3 END] =====
+    # ===== [S3-G2] 任务创建者（审计字段，ON DELETE SET NULL）=====
+    created_by: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # ===== [S3-G2 END] =====
     # ===== [S2-A 新增] task_status：任务执行结果，与 review_status 分离 =====
     task_status: Mapped[str] = mapped_column(
         String(32), nullable=False, server_default="pending"
@@ -162,7 +189,9 @@ class ReviewResult(Base):
         # ===== [S2-A 新增] =====
         Index("idx_review_result_task_status", "task_status"),
         # ===== [S2-A 新增 END] =====
+        Index("idx_review_result_created_by", "created_by"),
     )
+
 # ============================================================
 # 8. ReviewDefect（新增：缺陷明细表）
 # ============================================================
@@ -215,6 +244,7 @@ class ReviewDefect(Base):
         Index("idx_review_defect_expert_decision", "expert_decision"),
         # ===== [S1-CHANGE-2 END] =====
     )
+
 # ============================================================
 # 9. FeedbackItem（增强：关联 review_defect）
 # ===== ✅ MODIFIED Sprint0 Phase‑I：对齐002_schema.sql全部字段 =====
@@ -272,6 +302,7 @@ class FeedbackItem(Base):
         Index("idx_feedback_item_result", "review_result_id"),
         Index("idx_feedback_item_defect", "review_defect_id"),
     )
+
 # ============================================================
 # 10. KnowledgeDoc
 # ============================================================
@@ -288,6 +319,7 @@ class KnowledgeDoc(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
     chunks: Mapped[List["KnowledgeChunk"]] = relationship(back_populates="doc", cascade="all, delete-orphan")
+
 # ============================================================
 # 11. KnowledgeChunk
 # ============================================================
@@ -305,6 +337,7 @@ class KnowledgeChunk(Base):
     __table_args__ = (
         Index("idx_knowledge_chunk_embedding", "embedding", postgresql_using="hnsw", postgresql_ops={"embedding": "vector_cosine_ops"}),
     )
+
 # ============================================================
 # 12. RuleCandidate（P1，Sprint‑1业务使用）
 # ===== ✅ MODIFIED Sprint0 Phase‑I：对齐002_schema.sql触发器、时区字段 =====
@@ -330,6 +363,11 @@ class RuleCandidate(Base):
     benchmarked_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP(timezone=True), nullable=True)
     rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # ===== [S2-A 新增 END] =====
+    # ===== [S3-G2] 审核人（审计字段，ON DELETE SET NULL）=====
+    reviewed_by: Mapped[Optional[int]] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    # ===== [S3-G2 END] =====
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="proposed")
     # ===== [F05] 发布状态机字段 =====
     publish_status: Mapped[str] = mapped_column(
@@ -345,6 +383,7 @@ class RuleCandidate(Base):
     # ----- ✅ 对齐SQL：TIMESTAMPTZ + 触发器自动更新updated_at -----
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("NOW()"))
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False, server_default=text("NOW()"))
+
     __table_args__ = (
         Index("idx_rule_candidates_status", "status"),
         Index("idx_rule_candidates_case_id", "case_id"),
@@ -364,7 +403,9 @@ class RuleCandidate(Base):
             postgresql_where=text("publish_idempotency_key IS NOT NULL"),
         ),
         # ===== [S1-CHANGE-6 END] =====
+        Index("idx_rule_candidates_reviewed_by", "reviewed_by"),
     )
+
 # ============================================================
 # 13. KnowledgeGap（S2-A 新增，一对多：一条反馈可派生多条缺口）
 # ============================================================
@@ -402,6 +443,7 @@ class KnowledgeGap(Base):
         Index("idx_knowledge_gap_source_feedback", "source_feedback_id"),
         Index("idx_knowledge_gap_case", "case_id"),
     )
+
 # ============================================================
 # 14. GapFeedbackLink（S2-A 新增，中间表：支撑一对多）
 # ============================================================
