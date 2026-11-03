@@ -399,3 +399,49 @@ class KnowledgeGapListResponse(BaseModel):
 class UpdateGapStatusRequest(BaseModel):
     status: Literal["open", "in_progress", "resolved", "wontfix"]
     resolved_by: int | None = None
+
+# ===== [S3-G2] Auth / 用户管理 =====
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+
+
+class LoginResponse(BaseModel):
+    user_id: int
+    username: str
+    role: str
+
+
+class AuthMeResponse(BaseModel):
+    user_id: int
+    username: str
+    role: str
+    is_active: bool
+
+
+class UserCreateRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+    email: str | None = None
+    role: Literal["admin", "engineer", "reviewer", "rule_admin"] = "engineer"
+
+
+class UserPatchRequest(BaseModel):
+    """PATCH /auth/users/{id} 请求体。
+
+    关键：字段允许缺省（None），但"显式 null"要通过 model_fields_set 判断。
+    """
+    role: Literal["admin", "engineer", "reviewer", "rule_admin"] | None = None
+    is_active: bool | None = None
+
+
+class UserListItem(BaseModel):
+    id: int
+    username: str
+    email: str | None = None
+    role: str
+    is_active: bool
+    created_at: str | None = None
+
+
+class UserListResponse(BaseModel):
+    total: int
+    items: list[UserListItem]
