@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-03（G2 Migration 与 Auth 底座开发）
+> **最后更新**：2026-11-04（新增 G3-A-API 鉴权改造后 API 层排障）
 
 ---
 
@@ -11,8 +11,9 @@
 1. [S3-G2-Migration：多 Head 问题与增量 SQL 生成](#1-s3-g2-migration多-head-问题与增量-sql-生成2026-11-03)
 2. [S3-G2-PreCheck：脚本路径与容器挂载陷阱](#2-s3-g2-precheck脚本路径与容器挂载陷阱2026-11-03)
 3. [S3-G2-TestIsolation：测试隔离与并发断言修正](#3-s3-g2-testisolation测试隔离与并发断言修正2026-11-03)
-4. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#4-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
-5. [附：版本与适用范围](#5-附版本与适用范围)
+4. [S3-G3A-API：G3-A 鉴权改造后的 API 层排障](#4-s3-g3a-apig3-a-鉴权改造后的-api-层排障2026-11-04)
+5. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#5-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
+6. [附：版本与适用范围](#6-附版本与适用范围)
 
 ---
 
@@ -301,16 +302,270 @@ def test_last_admin_protection(client, admin_user, pg_session):
 
 ---
 
-## 4. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
+## 4. S3-G3A-API：G3-A 鉴权改造后的 API 层排障（2026-11-04）
+
+> **状态**：✅ 已修复
+> **核心难点**：G3-A 给业务路由挂 RBAC 鉴权后，`test_api.py` / `test_dashboard.py` / `test_feedback_rule.py` / `test_review_persistence.py` 合并跑时出现 6 类问题，横跨 API 层、Service 层、全局异常处理器、ORM 模型、测试脚手架。
+> **最终结果**：全量非 integration `595 passed, 2 skipped, 0 failed`。
+
+### 4.1 坑 1：全局 ValueError handler 过度捕获（掩盖代码 bug）
+
+**现象**：
+
+`task_service.list_tasks_filtered` 对非法 `case_class` 抛 `ValueError`，路由层没做 `try/except`，最初注册了全局 `@app.exception_handler(ValueError) → 422`。测试 `test_list_tasks_invalid_params_422` 通过。但同类 `review_status` 非法值却返回 200（因为路由未透传 Query 参数）。
+
+**根因**：
+
+1. **全局 `except ValueError → 422` 过度捕获**：`json.loads` 解析 DB 脏数据失败、`int()` 类型转换失败等代码 bug 也会被伪装成 422，掩盖真实故障。
+2. **路由 Query 参数漏声明**：`review_status` / `status` 参数未在 `@router.get` 签名里声明，FastAPI 静默丢弃，service 收到 `None`，校验分支不触发。
+
+**修复**：
+
+1. **新建 `app/core/exceptions.py` 定义 `BusinessValueError(ValueError)`**（不 import 任何 service，避免循环依赖）。
+2. **`errors.py` 只注册 `BusinessValueError → 422`**，删除全局 `ValueError` handler，标准 `ValueError` 走兜底 500 暴露代码 bug。
+3. **只把"用户输入参数校验失败"的 6 处改为 `raise BusinessValueError`**：
+   - `task_service.list_tasks_filtered` 5 处（`case_class` / `review_status` / `status` / `limit` / `offset`）
+   - `task_service.update_expert_decision` 1 处（`expert_decision` 枚举）
+4. 其余 `raise ValueError` **一律保留**：
+   - 路由层已有 `try/except` 转 400 的（`case_service.py` 2 处、`report_service.py` 2 处）
+   - 服务内部数据一致性校验（`rule_evolution_service.py` 7 处、`benchmark_service.py` 1 处）
+   - 被注释掉的旧代码（`feedback_service.py` 4 处）
+   - 留 G3-A 第 3 批改：`knowledge_gap_service.py` 2 处（挂鉴权时同步改）
+5. **`task_service.py` import 从 `app.core.exceptions` 而非 `app.core.errors`**，避免 `task_service → errors → feedback_service` 的耦合链。
+
+**教训**：
+
+业务异常必须用**自定义类型**与标准异常区分，不能图省事用宽泛的 `except ValueError` / `@app.exception_handler(ValueError)` 一刀切。否则"系统内部坏了"被伪装成"用户输入错了"，掩盖真实故障。
+
+### 4.2 坑 2：`task_service.create_task` 返回类型与 API 解包不一致
+
+**现象**：
+
+```text
+TypeError: CreateTaskResponse() argument after ** must be a mapping, not str
+```
+
+**根因**：
+
+`task_service.create_task()` 返回**字符串 task_id**，不是 dict。`CreateTaskResponse(**resp)` 只能解包 mapping。
+
+**修复（临时，G3-A）**：
+
+```python
+task_id = task_service.create_task(body.case_id)
+detail = task_service.get_task(task_id)
+if detail is None:
+    return CreateTaskResponse(task_id=task_id, status="failed", defects_count=0)
+return CreateTaskResponse(
+    task_id=detail["task_id"],
+    status=detail["status"],
+    defects_count=detail["defects_count"],
+)
+```
+
+> 遗留（G3-C）：升级 `task_service.create_task` 返回完整 dict 后恢复 `CreateTaskResponse(**resp)`。
+
+### 4.3 坑 3：批量创建 `resp["task_id"]` 访问字符串索引
+
+**现象**：
+
+`POST /review/tasks/batch` 每次调用抛 `TypeError: string indices must be integers`，被 `except Exception` 吞掉，所有子任务记 `status="failed"`。
+
+**根因**：
+
+`task_service.create_task` 返回 str，但 batch 里 `resp["task_id"]` 当 dict 访问。
+
+**修复**：
+
+```python
+resp = task_service.create_task(cid)   # 返回 str
+items.append({
+    "case_id": cid,
+    "task_id": resp,                   # ← 直接用 str
+    "status": "success",
+    "error": None,
+})
+```
+
+### 4.4 坑 4：`list_review_tasks` 缺 status 参数 + 缺 ROLE_REVIEWER 角色
+
+**现象**：
+
+1. 前端传 `?status=pending` 被静默丢弃，service 收到 None，无过滤。
+2. reviewer 角色访问 `GET /review/tasks` 返回 403（权限矩阵要求 engineer / reviewer / admin 三角色）。
+
+**根因**：
+
+路由签名漏 `status: Optional[str] = Query(None)`；`require_roles` 漏 `ROLE_REVIEWER`。
+
+**修复**：
+
+```python
+@router.get("", response_model=TaskListResponse)
+def list_review_tasks(
+    current: CurrentUser = Depends(
+        require_roles(ROLE_ENGINEER, ROLE_REVIEWER, ROLE_ADMIN)   # ← 补 REVIEWER
+    ),
+    status: Optional[str] = Query(None, description="pending / done / failed"),   # ← 补
+    case_class: Optional[str] = Query(None),
+    review_status: Optional[str] = Query(None),
+    limit: int = Query(20, ge=0),
+    offset: int = Query(0, ge=0),
+):
+    result = task_service.list_tasks_filtered(
+        status=status,             # ← 补透传
+        case_class=case_class,
+        review_status=review_status,
+        limit=limit,
+        offset=offset,
+    )
+    return result
+```
+
+### 4.5 坑 5：Pydantic schema 字段 ≠ SQLAlchemy ORM 列
+
+**现象**：
+
+```text
+TypeError: 'suggestion_diff' is an invalid keyword argument for FeedbackItem
+```
+
+**根因**：
+
+`feedbacks.py` 手动构造 `FeedbackItem(suggestion_diff=...)`，但 `suggestion_diff` 是 Pydantic 结构字段，DB 列名是 `suggestion_diff_json`；`rule_candidate` 同样不是 DB 列（列名是 `rule_candidate_ref`）。
+
+**修复**：
+
+不在 API 路由层手动 `db.add(ORMModel(...))`，改用项目已封装的业务入口 `task_service.submit_task_feedback(...)`，内部完成 task/defect 翻译、ORM 映射与 FeedbackService 调用。
+
+**教训**：
+
+Pydantic schema 字段 ≠ DB ORM 列。写 DB 前先确认目标 ORM 模型的真实列名，优先复用 service 已有业务入口，不自行拼 ORM。
+
+### 4.6 坑 6：`test_auth.py` 的 pg_session 前缀与 conftest 冲突
+
+**现象**：
+
+单跑 `test_auth.py` 全过，全量跑时 `test_api.py` / `test_feedback_rule.py` 出现大量 `ForeignKeyViolation` 或 401 ERROR。
+
+**根因**：
+
+1. `test_auth.py` 的 `pg_session` teardown 用 `like("test_admin_%")` 清理，误删了 `conftest.py` 的 session 级 `test_admin_global_xxx`，而后者被其它测试的 `feedback_item.created_by` / `review_result.created_by` 引用。
+2. `test_last_admin_protection` 里 delete 其它所有 admin（包括 conftest 的 session 级 admin），触发 FK 违反，且后续 fixture 找不到 admin，一连串 ERROR。
+
+**修复**：
+
+**1. `pg_session` 前缀命名空间隔离：**
+
+- `test_auth.py` 的 `pg_session` teardown 只用 `like("test_auth_%")`；
+- 3 个 user fixture 的前缀改为 `test_auth_admin_` / `test_auth_eng_` / `test_auth_dis_`。
+
+**2. `test_last_admin_protection` 不删其它 admin，改用"临时降级 + finally 恢复"：**
+
+```python
+def test_last_admin_protection(client, admin_user, pg_session):
+    admin_id, _ = admin_user
+    # 1. 其它 active admin 临时降级为 engineer（不删，避免 FK 违反）
+    other_admins = pg_session.query(User).filter(
+        User.id != admin_id,
+        User.role == "admin",
+        User.is_active.is_(True),
+    ).all()
+    original_roles = {u.id: u.role for u in other_admins}
+    for u in other_admins:
+        u.role = "engineer"
+    pg_session.commit()
+
+    try:
+        resp = client.patch(
+            f"/api/v1/auth/users/{admin_id}",
+            headers={"X-User-Id": str(admin_id)},
+            json={"role": "engineer"},
+        )
+        assert resp.status_code == 422, resp.text
+        assert "最后一个启用管理员" in resp.json()["detail"]
+    finally:
+        # 3. 恢复其它 admin
+        for uid, original_role in original_roles.items():
+            pg_session.query(User).filter(User.id == uid).update(
+                {User.role: original_role}, synchronize_session=False
+            )
+        pg_session.commit()
+```
+
+**教训**：
+
+1. session 级 fixture 的前缀必须唯一命名空间，避免跨文件误删。
+2. 涉及"全库状态"的测试，不能直接 delete，用"临时修改 + finally 恢复"更安全。
+3. 删除被业务表引用的 user 前，先想清楚 FK 链；即使 FK 是 ON DELETE SET NULL，并发事务下也可能报错。
+
+### 4.7 坑 7：`dashboard.py` 跨层调用函数名笔误
+
+**现象**：
+
+6 个 dashboard 测试全挂：
+
+```text
+AttributeError: module 'app.services.dashboard_service' has no attribute 'get_summary'
+```
+
+**根因**：
+
+G3-A 给 `dashboard.py` 挂鉴权时，凭记忆写了 `dashboard_service.get_summary()`，但实际函数名是 `get_dashboard_summary()`。
+
+**修复**：
+
+```python
+# 改前
+return DashboardSummaryResponse(**dashboard_service.get_summary())
+
+# 改后
+return DashboardSummaryResponse(**dashboard_service.get_dashboard_summary())
+```
+
+**教训**：
+
+API 层调用 Service 时，函数名必须先用 `Select-String -Path "backend\app\services\<file>.py" -Pattern "^def "` 核对，不能凭记忆写。这类笔误如果测试覆盖了会立刻暴露；如果没测试覆盖，会静默 404/500，最坑。
+
+### 4.8 修复后验证结果
+
+| 验证项 | 执行结果 |
+|---|---|
+| test_api.py 单文件 | ✅ 17 passed（含 2 个 422 关键用例） |
+| test_dashboard.py 单文件 | ✅ 6 passed |
+| 全量非 integration | ✅ 595 passed, 2 skipped, 24 deselected, 0 failed |
+
+### 4.9 G3-A 遗留到 G3-C 的待办
+
+1. **升级 `task_service.create_task`**：返回完整 dict，恢复 `CreateTaskResponse(**resp)` 解包，去掉接口 `get_task` 回查。
+2. **修复 `ReviewResult.total_defects` 落库**：保证 DB 持久化缺陷数量与运行内存解析数量一致。
+3. **反馈提交逻辑收敛**：将 `task_service.submit_task_feedback` 内部逻辑完整收敛进 `feedback_service.submit_feedback`，路由层恢复调用 service、移除路由内直连 DB。
+4. **审计字段注入升级**：`update_expert_decision` / `submit_feedback` 接收 `updated_by` / `created_by`，统一由鉴权上下文注入。
+
+### 4.10 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | 全局 ValueError handler 过度捕获 | 业务参数校验异常要用自定义类型（`BusinessValueError`），标准 `ValueError` 留给兜底 500 暴露 bug |
+| 2 | service 返回 str，API `**resp` 解包 | `Model(**x)` 只能解包 dict，返回 str 会 TypeError |
+| 3 | 批量创建把 str 当 dict 索引 | 确认 service 返回类型后再取字段 |
+| 4 | 路由漏声明 Query 参数 + 漏角色 | 路由签名每个 Query 都要声明并透传；角色矩阵逐一核对 |
+| 5 | Pydantic 字段 ≠ ORM 列 | 不手动 `db.add(ORMModel(pydantic字段))`，优先复用 service 业务入口 |
+| 6 | fixture 前缀冲突 + 全库状态测试 | session fixture 用唯一前缀命名空间；全库状态测试用"临时修改 + finally 恢复"而非 delete |
+| 7 | 跨层函数名笔误 | 调用前用 `Select-String "^def "` 核对，不凭记忆 |
+
+---
+
+## 5. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
 
 > **状态**：⏳ 待验证（G3 阶段执行，G2 不触发）
 > **规划依据**：[Sprint3_详细执行计划_V1.0.md §3.3](./Sprint3_详细执行计划_V1.0.md)
 
-### 4.1 为什么 G2 未触发
+### 5.1 为什么 G2 未触发
 
 G2 的 `get_current_user` 和 `update_user` / `soft_delete_user` 各自使用独立的 `with get_db_session() as db:`，不共享 Session。因此 admin_lock 和业务 Service 不冲突。
 
-### 4.2 G3 阶段可能触发
+### 5.2 G3 阶段可能触发
 
 G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_user` 和业务 Service。此时：
 
@@ -322,7 +577,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 - **方案 A（推荐）**：Service 层不 `db.begin()`，直接复用 `get_db_session` 的事务。
 - **方案 B**：最后管理员保护需要 READ COMMITTED，用独立 Session + `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`。
 
-### 4.3 验收测试用例（G3 阶段）
+### 5.3 验收测试用例（G3 阶段）
 
 1. **正常路径**：GET /auth/me 鉴权 → PATCH /auth/users/{id} 降级非最后 admin，不抛 `InvalidRequestError`。
 2. **受保护路径**：唯一 admin 降级 → 抛 `LastAdminProtectionError`，不抛 `InvalidRequestError`。
@@ -330,7 +585,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 
 ---
 
-## 5. 附：版本与适用范围
+## 6. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv

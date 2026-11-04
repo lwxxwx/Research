@@ -2,7 +2,7 @@
 
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
-> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成
+> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 第 1、2 批完成（第 3 批待做）
 
 ---
 
@@ -167,13 +167,90 @@
 
 ---
 
+## G3-A：业务路由挂鉴权（2026-11-04）
+
+> 状态：✅ 完成（第 1、2 批：`cases.py` / `review_tasks.py` / `feedbacks.py` / `dashboard.py`；第 3 批 `rule_candidates.py` / `knowledge_docs.py` / `knowledge_gaps.py` 待做）
+> 依据：`Sprint3_详细执行计划_V1.0.md` §9 权限矩阵
+
+### G3-A.1 权限矩阵落地
+
+| 路由 | 允许角色 | 状态 |
+|---|---|---|
+| `GET /cases`、`GET /cases/{id}`、`POST /cases/{id}/benchmark`、`GET /cases/{id}/benchmarks` | 所有登录用户 | ✅ 已完成（`get_current_user`） |
+| `POST /review/tasks`、`POST /review/tasks/batch` | engineer / admin | ✅ 已完成 |
+| `GET /review/tasks`、`/{id}`、`/{id}/defects`、`/{id}/export` | engineer / reviewer / admin | ✅ 已完成 |
+| `PATCH /review/tasks/{id}/defects/{defect_id}` | reviewer / admin | ✅ 已完成 |
+| `POST /feedbacks` | reviewer / admin | ✅ 已完成 |
+| `GET /dashboard/summary` | admin / rule_admin / reviewer | ✅ 已完成 |
+| `GET /rule-candidates`、`PATCH /rule-candidates/{id}`、`POST /rule-candidates/{id}/approve`、`POST /rule-candidates/{id}/reject` | rule_admin / admin | ⏳ 第 3 批 |
+| `GET /knowledge-docs`、`POST /knowledge-docs/upload` | rule_admin / admin | ⏳ 第 3 批 |
+| `GET /knowledge-gaps`、`PATCH /knowledge-gaps/{id}` | rule_admin / admin | ⏳ 第 3 批 |
+
+### G3-A.2 交付清单（第 1、2 批）
+
+| 交付项 | 文件 | 状态 |
+|---|---|---|
+| 全局异常解耦 | `backend/app/core/exceptions.py`（新建 `BusinessValueError`） | ✅ |
+| 全局异常处理器 | `backend/app/core/errors.py`（只注册 `BusinessValueError → 422`） | ✅ |
+| Service 层异常调整 | `backend/app/services/task_service.py`（6 处 `ValueError → BusinessValueError`） | ✅ |
+| Cases 路由 | `backend/app/api/cases.py`（4 端点加 `get_current_user`） | ✅ |
+| Review 任务路由 | `backend/app/api/review_tasks.py`（6 端点按角色挂鉴权 + 补 `status` 参数 + 补 `ROLE_REVIEWER` + 修 `batch` 的 `resp["task_id"]` + 修 `create` 的 `defects_count` 回查） | ✅ |
+| Feedbacks 路由 | `backend/app/api/feedbacks.py`（改用 `task_service.submit_task_feedback`，`created_by` 后端注入） | ✅ |
+| Dashboard 路由 | `backend/app/api/dashboard.py`（3 角色鉴权 + 修 `get_summary` 笔误） | ✅ |
+| 全局测试 fixture | `backend/tests/conftest.py`（session 级 admin / engineer + 6 个 client fixture + teardown FK 解除） | ✅ |
+| `test_auth.py` 前缀隔离 | `backend/tests/test_auth.py`（`test_auth_%` 前缀 + 最后管理员保护改用"降级+恢复"） | ✅ |
+
+### G3-A.3 新增技术决策
+
+| # | 决策 | 落地位置 |
+|---|---|---|
+| **R1** | `require_roles` 返回完整 `CurrentUser`（含 id + role），供 G3-B 数据范围过滤使用 | `app/core/auth.py` |
+| **R2** | 每个 API 组至少 3 个负面用例（无 header / 非法整数 / 角色 403） | 各测试文件 |
+| **R3** | D1–D5 + R1–R3 统一在 G6 收尾时写入 changelog / debug | 本文件 + `debug_03.md` |
+| **R4** | 业务参数校验失败用 `BusinessValueError`；标准 `ValueError` 走 500 暴露 bug | `app/core/exceptions.py` + `errors.py` |
+| **R5** | session 级 fixture 前缀必须唯一命名空间（`test_admin_global_` / `test_eng_global_` / `test_auth_`），跨文件不误删 | `conftest.py` + `test_auth.py` |
+| **R6** | "全库状态"断言测试不 `delete`，改用"临时修改 + finally 恢复" | `test_auth.py::test_last_admin_protection` |
+| **R7** | API 层调用 Service 前必须 `Select-String -Pattern "^def "` 核对函数名 | 开发规范 |
+
+### G3-A.4 踩坑与修正
+
+详见 `debug_03.md` §4，共 7 类问题：
+
+1. **全局 `except ValueError → 422` 过度捕获**：改为 `BusinessValueError → 422`，标准 `ValueError` 走 500。
+2. **`create_task` 返回 str 与 API 解包不一致**：临时 `get_task` 回查，G3-C 升级 service 返回 dict。
+3. **batch 的 `resp["task_id"]` 访问字符串索引**：改为直接用 str。
+4. **`list_review_tasks` 缺 `status` 参数 + 缺 `ROLE_REVIEWER`**：补 Query 入参 + 补角色。
+5. **Pydantic schema 字段 ≠ ORM 列**：`suggestion_diff` 不是 DB 列，改用 `task_service.submit_task_feedback`。
+6. **`test_auth.py` 前缀与 conftest 冲突**：改为 `test_auth_%` 前缀；最后管理员保护改用"降级+恢复"。
+7. **`dashboard.py` 函数名笔误**：`get_summary` → `get_dashboard_summary`。
+
+### G3-A.5 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `test_api.py` | ✅ 17 passed |
+| `test_dashboard.py` | ✅ 6 passed |
+| `test_feedback_rule.py` | ✅ 全 passed |
+| `test_review_persistence.py` | ✅ 全 passed |
+| `test_auth.py` | ✅ 26 passed, 2 skipped |
+| **全量非 integration** | ✅ **595 passed, 2 skipped, 24 deselected, 0 failed** |
+
+### G3-A.6 遗留到 G3-C 的待办
+
+1. 升级 `task_service.create_task` 返回完整 dict，恢复 `CreateTaskResponse(**resp)`。
+2. 修复 `ReviewResult.total_defects` 落库语义，保证与运行内存解析数量一致。
+3. 反馈提交逻辑从 `task_service.submit_task_feedback` 收敛进 `feedback_service`。
+4. `update_expert_decision` / `submit_feedback` 的审计字段注入升级（`updated_by` / `created_by`）。
+
+---
+
 ## 附录：G1-G6 阶段验收总表（更新）
 
 | 阶段 | 核心交付 | 状态 |
 |---|---|---|
 | G1 | 方案评审 + 现状核查 | ✅ 完成 |
 | G2 | Migration + auth 底座 + CLI + 用户管理 | ✅ 完成 |
-| G3 | 业务路由挂鉴权 + IDOR | ⏳ 待开始 |
+| G3 | 业务路由挂鉴权 + IDOR（G3-A 第 1、2 批完成） | ⏳ 进行中（第 3 批 + G3-B 待做） |
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ⏳ 待开始 |
 | G5 | 审计字段 + 反馈闭环 E2E | ⏳ 待开始 |
 | G6 | 完整回归 + 负向安全测试 + B 类并发 | ⏳ 待开始 |
