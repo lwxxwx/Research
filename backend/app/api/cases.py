@@ -1,6 +1,10 @@
 # backend/app/api/cases.py
 """Case 列表 / 详情 / Benchmark 路由。
 
+Sprint 3 G3 鉴权：
+  - 所有端点要求登录（get_current_user）。
+  - Case 数据范围过滤（engineer 仅自己创建的 case）留到 G3-B Service 层实现。
+
 端点：
   GET  /api/v1/cases                                列出所有 Case 元信息
   GET  /api/v1/cases/{case_id}                      Case 详情 + 资产预览
@@ -9,8 +13,9 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.deps import CurrentUser, get_current_user
 from app.api.schemas import (
     CaseBenchmarkListResponse,
     CaseBenchmarkItem,
@@ -25,14 +30,22 @@ router = APIRouter(prefix="/cases", tags=["cases"])
 
 
 @router.get("", response_model=CaseListResponse)
-def list_cases() -> CaseListResponse:
-    """列出所有 Case 元信息。"""
+def list_cases(
+    current: CurrentUser = Depends(get_current_user),
+) -> CaseListResponse:
+    """列出所有 Case 元信息。
+
+    Sprint 3 G3-A：仅校验登录；对象级过滤（若 case 有 created_by）在 G3-B 追加。
+    """
     result = task_service.list_cases()
     return CaseListResponse(**result)
 
 
 @router.get("/{case_id}", response_model=CaseDetailResponse)
-def get_case(case_id: str) -> CaseDetailResponse:
+def get_case(
+    case_id: str,
+    current: CurrentUser = Depends(get_current_user),
+) -> CaseDetailResponse:
     """Case 详情 + 资产预览。不存在 → 404。"""
     detail = case_service.get_case_detail(case_id)
     if detail is None:
@@ -44,6 +57,7 @@ def get_case(case_id: str) -> CaseDetailResponse:
 def run_case_benchmark(
     case_id: str,
     body: RunCaseBenchmarkRequest,
+    current: CurrentUser = Depends(get_current_user),
 ) -> CaseBenchmarkItem:
     """跑单 Case Benchmark。
 
@@ -67,6 +81,7 @@ def list_case_benchmarks(
     case_id: str,
     limit: int = Query(default=20, ge=0),
     offset: int = Query(default=0, ge=0),
+    current: CurrentUser = Depends(get_current_user),
 ) -> CaseBenchmarkListResponse:
     """历史 Benchmark 结果查询（按 created_at 倒序）。"""
     with get_db_session() as db:

@@ -445,3 +445,22 @@ class UserListItem(BaseModel):
 class UserListResponse(BaseModel):
     total: int
     items: list[UserListItem]
+
+
+# ===== [S3-G3A] 批量评审 =====
+class BatchReviewRequest(BaseModel):
+    """批量发起评审请求"""
+    case_ids: list[str]
+
+
+class BatchReviewItem(BaseModel):
+    """批量评审单个 case 的结果"""
+    case_id: str
+    task_id: str | None = None
+    status: str  # "success" / "failed"
+    error: str | None = None
+
+
+class BatchReviewResponse(BaseModel):
+    """批量发起评审返回"""
+    items: list[BatchReviewItem]
