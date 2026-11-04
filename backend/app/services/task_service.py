@@ -30,6 +30,9 @@ from typing import Any
 
 from app.persistence.db import get_db_session
 from app.persistence.models import ReviewDefect, ReviewResult
+# ===== [S3-G3] 业务参数校验异常 → 422 =====
+from app.core.exceptions import BusinessValueError
+# ===== [S3-G3 END] =====
 from app.schemas.feedback import (
     FeedbackCreate,   # ← 新增
     FeedbackOut,
@@ -340,24 +343,28 @@ def list_tasks_filtered(
     _VALID_STATUS = {"pending", "done", "failed"}
 
     if case_class is not None and case_class not in _VALID_CASE_CLASS:
-        raise ValueError(
+        raise BusinessValueError(
             f"case_class 必须为 'A' / 'B' / None，实际: {case_class!r}"
         )
+    # ============ 新增下面这一段 ============
     if review_status is not None and review_status not in _VALID_REVIEW_STATUS:
-        raise ValueError(
-            f"review_status 必须为 AI_CONFIRMED / NEED_EXPERT_REVIEW / "
-            f"LOW_CONFIDENCE / None，实际: {review_status!r}"
-        )
+        raise BusinessValueError(f"review_status 必须为 {_VALID_REVIEW_STATUS} 之一，实际: {review_status!r}")
+    #if review_status is not None and review_status not in _VALID_REVIEW_STATUS:
+    #    raise BusinessValueError(
+    #        f"review_status 必须为 AI_CONFIRMED / NEED_EXPERT_REVIEW / "
+    #        f"LOW_CONFIDENCE / None，实际: {review_status!r}"
+    #    )
+
     # ===== [S2-C] status 校验 =====
     if status is not None and status not in _VALID_STATUS:
-        raise ValueError(
+        raise BusinessValueError(
             f"status 必须为 'pending' / 'done' / 'failed' / None，实际: {status!r}"
         )
     # ===== [S2-C END] =====
     if limit < 0:
-        raise ValueError(f"limit 必须 >= 0，实际: {limit}")
+        raise BusinessValueError(f"limit 必须 >= 0，实际: {limit}")
     if offset < 0:
-        raise ValueError(f"offset 必须 >= 0，实际: {offset}")
+        raise BusinessValueError(f"offset 必须 >= 0，实际: {offset}")
 
     # ===== 决策 3：JOIN 拿 case_id，避免 N+1 =====
     errors: list[str] = []
@@ -763,7 +770,7 @@ def update_expert_decision(
 
     _ALLOWED = {"pending", "confirmed", "rejected", "needs_verification"}
     if expert_decision not in _ALLOWED:
-        raise ValueError(f"非法 expert_decision: {expert_decision!r}")
+        raise BusinessValueError(f"非法 expert_decision: {expert_decision!r}")
 
     with get_db_session() as db:
         # 1. 查 review_result
