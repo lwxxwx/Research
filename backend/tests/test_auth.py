@@ -1,5 +1,10 @@
 # backend/tests/test_auth.py
-"""Sprint 3 G2 auth API 测试（真实 PostgreSQL，独立事务回滚）。"""
+"""Sprint 3 G2 auth API 测试（真实 PostgreSQL，独立事务回滚）。
+
+关键约束：
+  - pg_session 只清理 test_auth_ 前缀的用户，不碰 conftest 的 test_admin_global_ / test_eng_global_
+  - 不删任何 user（避免 FK 违反 / 破坏 session 级 fixture），改用"临时降级 + 恢复"
+"""
 from __future__ import annotations
 
 import uuid
@@ -19,19 +24,15 @@ def client():
 
 @pytest.fixture()
 def pg_session():
-    """真实提交，测试后删除测试用户，不再使用外层事务rollback。"""
+    """真实提交；测试后只清理 test_auth_ 前缀的用户。"""
     from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session
     from app.core.config import settings
     engine = create_engine(settings.database_url, echo=False)
     sess = Session(bind=engine)
     yield sess
-    # 测试结束，删除所有以 test_admin_ / test_eng_ / test_dis_ 开头的测试用户
-    from app.persistence.models import User
+    # 只清理本文件创建的用户，不碰 conftest 的 session 级 fixture
     sess.query(User).filter(
-        User.username.like("test_admin_%") |
-        User.username.like("test_eng_%") |
-        User.username.like("test_dis_%")
+        User.username.like("test_auth_%")
     ).delete(synchronize_session=False)
     sess.commit()
     sess.close()
@@ -39,18 +40,17 @@ def pg_session():
 
 @pytest.fixture()
 def admin_user(pg_session: Session):
-    """创建一个 admin 用户，数据真实commit到数据库，测试后由pg_session清理。"""
-    uname = f"test_admin_{uuid.uuid4().hex[:6]}"
+    uname = f"test_auth_admin_{uuid.uuid4().hex[:6]}"
     user = User(username=uname, role="admin", is_active=True)
     pg_session.add(user)
     pg_session.flush()
-    pg_session.commit()   # ✅ 真正落库，http请求的新session可以读到
+    pg_session.commit()
     return user.id, uname
 
 
 @pytest.fixture()
 def engineer_user(pg_session: Session):
-    uname = f"test_eng_{uuid.uuid4().hex[:6]}"
+    uname = f"test_auth_eng_{uuid.uuid4().hex[:6]}"
     user = User(username=uname, role="engineer", is_active=True)
     pg_session.add(user)
     pg_session.flush()
@@ -60,39 +60,7 @@ def engineer_user(pg_session: Session):
 
 @pytest.fixture()
 def disabled_user(pg_session: Session):
-    uname = f"test_dis_{uuid.uuid4().hex[:6]}"
-    user = User(username=uname, role="engineer", is_active=False)
-    pg_session.add(user)
-    pg_session.flush()
-    pg_session.commit()
-    return user.id, uname
-
-
-
-@pytest.fixture()
-def admin_user(pg_session: Session):
-    """创建一个 admin 用户，测试结束由事务回滚。"""
-    uname = f"test_admin_{uuid.uuid4().hex[:6]}"
-    user = User(username=uname, role="admin", is_active=True)
-    pg_session.add(user)
-    pg_session.flush()
-    pg_session.commit()  # 提交到事务内（外层仍会 rollback）
-    return user.id, uname
-
-
-@pytest.fixture()
-def engineer_user(pg_session: Session):
-    uname = f"test_eng_{uuid.uuid4().hex[:6]}"
-    user = User(username=uname, role="engineer", is_active=True)
-    pg_session.add(user)
-    pg_session.flush()
-    pg_session.commit()
-    return user.id, uname
-
-
-@pytest.fixture()
-def disabled_user(pg_session: Session):
-    uname = f"test_dis_{uuid.uuid4().hex[:6]}"
+    uname = f"test_auth_dis_{uuid.uuid4().hex[:6]}"
     user = User(username=uname, role="engineer", is_active=False)
     pg_session.add(user)
     pg_session.flush()
@@ -203,7 +171,7 @@ def test_create_user_engineer_403(client, engineer_user):
 
 
 def test_create_user_duplicate(client, admin_user):
-    uid, uname = admin_user  # 用已有 admin username 制造冲突
+    uid, uname = admin_user
     resp = client.post(
         "/api/v1/auth/users",
         headers={"X-User-Id": str(uid)},
@@ -250,20 +218,37 @@ def test_delete_soft_disable_ok(client, admin_user, engineer_user):
 
 
 def test_last_admin_protection(client, admin_user, pg_session):
-    """唯一的 admin 不能自我降级。"""
+    """唯一的 admin 不能自我降级。
+
+    关键：不能删其它 admin（会触发 FK 违反 / 破坏 conftest 的 session 级 fixture），
+    改为临时降级为 engineer，测试结束恢复。
+    """
     admin_id, _ = admin_user
-    # 关键：删除其它所有活跃admin，保证当前是系统仅剩的活跃管理员
-    pg_session.query(User).filter(
+
+    # 1. 其它 active admin 临时降级为 engineer（不删，避免 FK 违反）
+    other_admins = pg_session.query(User).filter(
         User.id != admin_id,
         User.role == "admin",
-        User.is_active.is_(True)
-    ).delete(synchronize_session=False)
+        User.is_active.is_(True),
+    ).all()
+    original_roles = {u.id: u.role for u in other_admins}
+    for u in other_admins:
+        u.role = "engineer"
     pg_session.commit()
 
-    resp = client.patch(
-        f"/api/v1/auth/users/{admin_id}",
-        headers={"X-User-Id": str(admin_id)},
-        json={"role": "engineer"},
-    )
-    assert resp.status_code == 422, resp.text
-    assert "最后一个启用管理员" in resp.json()["detail"]
+    try:
+        # 2. 此时 admin_id 是唯一 active admin，尝试自我降级
+        resp = client.patch(
+            f"/api/v1/auth/users/{admin_id}",
+            headers={"X-User-Id": str(admin_id)},
+            json={"role": "engineer"},
+        )
+        assert resp.status_code == 422, resp.text
+        assert "最后一个启用管理员" in resp.json()["detail"]
+    finally:
+        # 3. 恢复其它 admin
+        for uid, original_role in original_roles.items():
+            pg_session.query(User).filter(User.id == uid).update(
+                {User.role: original_role}, synchronize_session=False
+            )
+        pg_session.commit()
