@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.schemas import (
     PublishRuleRequest,
@@ -31,6 +31,12 @@ from app.api.schemas import (
     RulePublishResponse,
     UpdateCandidateStatusRequest,
     UpdateCandidateStatusResponse,
+)
+from app.api.deps import (
+    CurrentUser,
+    ROLE_ADMIN,
+    ROLE_RULE_ADMIN,
+    require_roles,
 )
 from app.persistence.db import get_db_session
 from app.services.rule_evolution_service import (
@@ -50,6 +56,7 @@ _svc = RuleEvolutionService()
 @router.get("", response_model=RuleCandidateListResponse)
 def list_candidates(
     status: Literal["proposed", "designing", "benchmarked", "accepted", "rejected"] | None = Query(default=None),
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
 ) -> RuleCandidateListResponse:
     """查询候选规则列表（可按 status 过滤）。"""
     with get_db_session() as db:
@@ -65,7 +72,10 @@ def list_candidates(
 # GET /rule-candidates/{candidate_id}
 # ============================================================
 @router.get("/{candidate_id}", response_model=RuleCandidateDetail)
-def get_candidate(candidate_id: str) -> RuleCandidateDetail:
+def get_candidate(
+    candidate_id: str,
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
+) -> RuleCandidateDetail:
     """查询候选规则详情（含 proposed_yaml 和 benchmark_result）。"""
     with get_db_session() as db:
         detail = _svc.get_candidate(db, candidate_id)
@@ -89,6 +99,7 @@ def get_candidate(candidate_id: str) -> RuleCandidateDetail:
 def update_candidate_status(
     candidate_id: str,
     body: UpdateCandidateStatusRequest,
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
 ) -> UpdateCandidateStatusResponse:
     """更新候选规则状态（accepted / rejected）。
 
@@ -125,6 +136,7 @@ def update_candidate_status(
 def publish_rule_candidate(
     candidate_id: str,
     body: PublishRuleRequest,
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
 ) -> RulePublishResponse:
     """发布候选到正式规则库。
 

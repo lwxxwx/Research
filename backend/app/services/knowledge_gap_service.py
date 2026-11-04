@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import BusinessValueError
 from app.persistence.models import (
     KnowledgeGap, GapFeedbackLink, FeedbackItem,
     ReviewDefect, ReviewResult,
@@ -47,8 +48,8 @@ def list_gaps(
 ) -> dict[str, Any]:
     """列表 + 筛选 + 分页。"""
     if status is not None and status not in _ALLOWED_STATUS:
-        raise ValueError(f"status 必须为 {_ALLOWED_STATUS}，实际: {status!r}")
-
+        raise BusinessValueError(f"status 必须为 {_ALLOWED_STATUS}，实际: {status!r}")
+    
     q = db.query(KnowledgeGap)
     if status is not None:
         q = q.filter(KnowledgeGap.status == status)
@@ -129,7 +130,7 @@ def update_gap_status(
 ) -> dict[str, Any] | None:
     """状态流转 + resolved_at 维护。"""
     if status not in _ALLOWED_STATUS:
-        raise ValueError(f"status 必须为 {_ALLOWED_STATUS}，实际: {status!r}")
+        raise BusinessValueError(f"status 必须为 {_ALLOWED_STATUS}，实际: {status!r}")  
 
     gap = db.query(KnowledgeGap).filter(KnowledgeGap.gap_id == gap_id).first()
     if gap is None:
