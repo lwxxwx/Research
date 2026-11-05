@@ -405,3 +405,59 @@ def test_create_task_writes_created_by(client, test_admin_user):
         rr = db.query(ReviewResult).filter(ReviewResult.task_id == task_id).first()
         assert rr is not None
         assert rr.created_by == test_admin_user["id"]
+
+# ============================================================
+# G3-D: knowledge_gaps / knowledge_docs / feedbacks / dashboard 负面用例
+# ============================================================
+
+def test_knowledge_gaps_no_auth_401(client_no_auth):
+    resp = client_no_auth.get("/api/v1/knowledge-gaps")
+    assert resp.status_code == 401
+
+
+def test_knowledge_gaps_invalid_uid_401(client_with_invalid_uid):
+    resp = client_with_invalid_uid.get("/api/v1/knowledge-gaps")
+    assert resp.status_code == 401
+
+
+def test_knowledge_gaps_engineer_403(client_as_engineer):
+    resp = client_as_engineer.get("/api/v1/knowledge-gaps")
+    assert resp.status_code == 403
+
+
+def test_knowledge_docs_no_auth_401(client_no_auth):
+    resp = client_no_auth.get("/api/v1/knowledge-docs")
+    assert resp.status_code == 401
+
+
+def test_knowledge_docs_engineer_403(client_as_engineer):
+    resp = client_as_engineer.get("/api/v1/knowledge-docs")
+    assert resp.status_code == 403
+
+
+def test_feedbacks_no_auth_401(client_no_auth):
+    resp = client_no_auth.post(
+        "/api/v1/feedbacks",
+        json={"task_id": "x", "defect_id": "x", "feedback_type": "correct_defect"},
+    )
+    assert resp.status_code == 401
+
+
+def test_feedbacks_engineer_403(client_as_engineer):
+    """engineer 不能提交反馈（reviewer / admin 才能）。"""
+    resp = client_as_engineer.post(
+        "/api/v1/feedbacks",
+        json={"task_id": "x", "defect_id": "x", "feedback_type": "correct_defect"},
+    )
+    assert resp.status_code == 403
+
+
+def test_dashboard_no_auth_401(client_no_auth):
+    resp = client_no_auth.get("/api/v1/dashboard/summary")
+    assert resp.status_code == 401
+
+
+def test_dashboard_engineer_403(client_as_engineer):
+    """engineer 不能访问 dashboard（admin / rule_admin / reviewer 才能）。"""
+    resp = client_as_engineer.get("/api/v1/dashboard/summary")
+    assert resp.status_code == 403

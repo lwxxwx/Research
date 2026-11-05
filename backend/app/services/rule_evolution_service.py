@@ -41,6 +41,7 @@ from app.persistence.models import (
     RuleCandidate,
     RuleDefinition,      # F05 新增
 )
+from app.core.exceptions import BusinessValueError
 from app.rules.engine import load_rule_definitions  # F05 新增
 
 # ============================================================
@@ -330,7 +331,7 @@ class RuleEvolutionService:
         """更新候选规则状态（S2-G，approve / reject）。"""
         _ALLOWED = {"accepted", "rejected"}
         if status not in _ALLOWED:
-            raise ValueError(
+            raise BusinessValueError(
                 f"status 必须为 'accepted' / 'rejected'，实际: {status!r}"
             )
 

@@ -39,6 +39,7 @@ from app.api.deps import (
     require_roles,
 )
 from app.persistence.db import get_db_session
+from app.core.exceptions import BusinessValueError
 from app.services.rule_evolution_service import (
     RuleEvolutionService,
     RulePublishConflictError,
@@ -121,9 +122,12 @@ def update_candidate_status(
                 rejected_reason=body.rejected_reason,
                 reviewed_by=current.id,   # ← 加这行
             )
+
+    except BusinessValueError as exc:                    # ← 必须是 BusinessValueError 优先
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-
+    
     return UpdateCandidateStatusResponse(**result)
 
 
