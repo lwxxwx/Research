@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-05（新增 S3-G3C-AuditFields 审计字段注入、S3-G3B-DataScope 对象级数据范围与 IDOR 防护）
+> **最后更新**：2026-11-05（新增 S3-G3C-AuditFields、S3-G3B-DataScope、S3-G3D-ErrorSemantics）
 
 ---
 
@@ -14,8 +14,9 @@
 4. [S3-G3A-API：G3-A 鉴权改造后的 API 层排障](#4-s3-g3a-apig3-a-鉴权改造后的-api-层排障2026-11-04)
 5. [S3-G3C-AuditFields：审计字段注入与手测踩坑](#5-s3-g3c-auditfields审计字段注入与手测踩坑2026-11-05)
 6. [S3-G3B-DataScope：对象级数据范围与 IDOR 防护](#6-s3-g3b-datascope对象级数据范围与-idor-防护2026-11-05)
-7. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#7-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
-8. [附：版本与适用范围](#8-附版本与适用范围)
+7. [S3-G3D-ErrorSemantics：错误语义统一与负面测试补全](#7-s3-g3d-errorsemantics错误语义统一与负面测试补全2026-11-05)
+8. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#8-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
+9. [附：版本与适用范围](#9-附版本与适用范围)
 
 ---
 
@@ -893,16 +894,112 @@ except Exception as exc:
 
 ---
 
-## 7. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
+## 7. S3-G3D-ErrorSemantics：错误语义统一与负面测试补全（2026-11-05）
+
+> **状态**：✅ 已完成
+> **核心难点**：`rule_evolution_service.update_candidate_status` 的 `status` 非法从 404 改 422，需要拆 `except ValueError` 为两层（`BusinessValueError` 优先）；R2 负面用例补全（5 接口组 × 3 类）。
+> **最终结果**：全量非 integration `626 passed, 2 skipped, 0 failed`。
+
+### 7.1 坑 1：`except ValueError` 同时捕获"资源不存在"和"参数非法"
+
+**现象**：
+
+`rule_candidates.py` 的 `update_candidate_status` 端点：
+
+```python
+try:
+    result = _svc.update_candidate_status(...)
+except ValueError as exc:
+    raise HTTPException(status_code=404, detail=str(exc)) from exc
+```
+
+这个 `except ValueError` 同时捕获：
+
+- `status` 非法（应为 422）
+- `candidate_id` 不存在（应为 404）
+
+两个语义完全不同的错误映射到同一个 404，用户传非法 `status` 会看到"candidate not found"的 404，误导。
+
+**根因**：
+
+`rule_evolution_service.update_candidate_status` 内部 2 个 `raise ValueError`：
+
+1. `status` 枚举校验（应为 422）
+2. `candidate_id` 不存在（应为 404）
+
+API 层 `except ValueError → 404` 一刀切。
+
+**修复**：
+
+1. `rule_evolution_service.update_candidate_status` 的 `status` 校验 `raise ValueError` → `raise BusinessValueError`（保留 `candidate_id` 不存在的 `raise ValueError`）
+2. `rule_candidates.py` 拆 2 层：
+
+```python
+except BusinessValueError as exc:   # 必须放前面（子类优先）
+    raise HTTPException(status_code=422, detail=str(exc)) from exc
+except ValueError as exc:
+    raise HTTPException(status_code=404, detail=str(exc)) from exc
+```
+
+**教训**：
+
+1. `except Exception` 的宽泛捕获是错误语义混乱的根源。一个 `except ValueError` 背后往往有多种语义（参数非法 / 资源不存在 / 数据格式错误），需要用自定义异常类型区分。
+2. `BusinessValueError` 必须是 except 链的第一个，否则被父类 `except ValueError` 先捕获。
+3. 这一规则要和 G3-A 的 R4（业务异常用 `BusinessValueError`）一致：参数校验失败 = `BusinessValueError` = 422；资源不存在 = 保留 `ValueError` 但由 API 层针对性转 404。
+
+### 7.2 坑 2：R2 负面用例漏了 5 个接口组
+
+**现象**：
+
+G3-D 开始前，R2 的"每个 API 组 3 个负面用例（无 header / 非法整数 / 角色 403）"覆盖率：
+
+| 接口组 | 覆盖率 |
+|---|---|
+| `auth/users` / `review/tasks` / `cases` | 3/3 ✅ |
+| `rule_candidates` / `knowledge_gaps` / `knowledge_docs` / `feedbacks` / `dashboard` | 0/3 ❌ |
+
+**根因**：
+
+G3-A 挂鉴权时，只在 `test_auth.py` / `test_review_persistence.py` / `test_case_benchmark.py` 里补了负面用例，G3-A 第 3 批（`rule_candidates` / `knowledge_docs` / `knowledge_gaps`）的负面用例没补，G3-B / G3-C 也没补。
+
+**修复**：
+
+在 `test_feedback_rule.py` + `test_api.py` 末尾追加 9 个负面用例，覆盖 5 个接口组 × 2–3 类。
+
+**教训**：
+
+1. R2 是跨阶段的验收标准，不是单个批次的局部要求。G3-A 挂鉴权时漏了，G3-D 必须补全。
+2. 负面用例要按"接口组"组织，同一接口组的 3 个负面用例放一起（如 `test_rule_candidates_no_auth_401` / `test_rule_candidates_invalid_uid_401` / `test_rule_candidates_engineer_403`），便于维护。
+3. `feedbacks` / `dashboard` 的负面用例在 G3-A 已经"逻辑上有"但"测试上没写"，这类"实现了但没测"的漏洞最隐蔽。
+
+### 7.3 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `rule_evolution_service.py` import `BusinessValueError` | ✅ |
+| `rule_candidates.py` 的 `except BusinessValueError → 422` 生效 | ✅ |
+| 新增 9 个负面用例 | ✅ |
+| 全量非 integration | ✅ 626 passed, 2 skipped, 24 deselected, 0 failed（从 613 → 626） |
+
+### 7.4 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | `except ValueError` 混合语义 | 拆成 `except BusinessValueError → 422` + `except ValueError → 404`，子类优先 |
+| 2 | R2 负面用例漏了 5 个接口组 | 跨阶段验收标准，G3-D 补全；"实现了但没测"最隐蔽 |
+
+---
+
+## 8. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
 
 > **状态**：⏳ 待验证（G3 阶段执行，G2 不触发）
 > **规划依据**：[Sprint3_详细执行计划_V1.0.md §3.3](./Sprint3_详细执行计划_V1.0.md)
 
-### 7.1 为什么 G2 未触发
+### 8.1 为什么 G2 未触发
 
 G2 的 `get_current_user` 和 `update_user` / `soft_delete_user` 各自使用独立的 `with get_db_session() as db:`，不共享 Session。因此 admin_lock 和业务 Service 不冲突。
 
-### 7.2 G3 阶段可能触发
+### 8.2 G3 阶段可能触发
 
 G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_user` 和业务 Service。此时：
 
@@ -914,7 +1011,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 - **方案 A（推荐）**：Service 层不 `db.begin()`，直接复用 `get_db_session` 的事务。
 - **方案 B**：最后管理员保护需要 READ COMMITTED，用独立 Session + `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`。
 
-### 7.3 验收测试用例（G3 阶段）
+### 8.3 验收测试用例（G3 阶段）
 
 1. **正常路径**：GET /auth/me 鉴权 → PATCH /auth/users/{id} 降级非最后 admin，不抛 `InvalidRequestError`。
 2. **受保护路径**：唯一 admin 降级 → 抛 `LastAdminProtectionError`，不抛 `InvalidRequestError`。
@@ -922,7 +1019,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 
 ---
 
-## 8. 附：版本与适用范围
+## 9. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
