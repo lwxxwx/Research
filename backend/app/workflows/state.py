@@ -66,6 +66,9 @@ class ReviewGraphState(TypedDict, total=False):
     # --- 任务标识 ---
     case_id: str
     task_id: str
+    # ===== [S3-G3C] 审计字段：任务创建者 users.id =====
+    created_by: int | None
+    # ===== [S3-G3C END] =====
     task_status: str
 
     # --- 节点 1：load_ir 产出 ---
@@ -91,17 +94,23 @@ class ReviewGraphState(TypedDict, total=False):
 # ============================================================
 # 初始 State 工厂
 # ============================================================
-def make_initial_state(case_id: str, task_id: str) -> ReviewGraphState:
+def make_initial_state(
+    case_id: str,
+    task_id: str,
+    created_by: int | None = None,   # ← 加参数
+) -> ReviewGraphState:
     """
     构造 Graph 初始 State。
 
     :param case_id: 业务 Case 标识（对应 data/cases/<case_id>/）
     :param task_id: 本次评审任务 ID（用于日志与 review_result.task_id）
+    :param created_by: 任务创建者 users.id（S3-G3C 审计字段，可空）
     :return: 初始 State，仅含任务标识与空 errors
     """
     return ReviewGraphState(
         case_id=case_id,
         task_id=task_id,
+        created_by=created_by,       # ← 加这行
         task_status=TASK_STATUS_PENDING,
         errors=[],
     )

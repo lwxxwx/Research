@@ -119,6 +119,7 @@ def update_candidate_status(
                 candidate_id=candidate_id,
                 status=body.status,
                 rejected_reason=body.rejected_reason,
+                reviewed_by=current.id,   # ← 加这行
             )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

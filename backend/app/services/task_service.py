@@ -90,7 +90,7 @@ def _make_task_id() -> str:
 # ============================================================
 # create_task：创建并运行评审任务
 # ============================================================
-def create_task(case_id: str) -> str:
+def create_task(case_id: str, created_by: int | None = None) -> str:
     """
     创建并运行一次评审任务。
 
@@ -114,7 +114,9 @@ def create_task(case_id: str) -> str:
     task_id = _make_task_id()
     logger.info("create_task start: case_id=%s task_id=%s", case_id, task_id)
 
-    final_state: ReviewGraphState = run_review_graph(case_id, task_id)
+    final_state: ReviewGraphState = run_review_graph(
+        case_id, task_id, created_by=created_by,
+    )
 
     status = final_state.get("task_status", TASK_STATUS_FAILED)
     errors = final_state.get("errors", [])

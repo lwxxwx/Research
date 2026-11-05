@@ -325,6 +325,7 @@ class RuleEvolutionService:
         candidate_id: str,
         status: str,
         rejected_reason: Optional[str] = None,
+        reviewed_by: int | None = None,   # ← 加这行
     ) -> Dict[str, Any]:
         """更新候选规则状态（S2-G，approve / reject）。"""
         _ALLOWED = {"accepted", "rejected"}
@@ -344,6 +345,9 @@ class RuleEvolutionService:
         rc.status = status
         if status == "rejected":
             rc.rejected_reason = rejected_reason
+        # ===== [S3-G3C] 审计字段：任务创建者 users.id =====
+        rc.reviewed_by = reviewed_by
+        # ===== [S3-G3C END] =====
         db.commit()
         db.refresh(rc)
 
@@ -351,6 +355,7 @@ class RuleEvolutionService:
             "candidate_id": rc.candidate_id,
             "status": rc.status,
             "rejected_reason": rc.rejected_reason,
+            "reviewed_by": rc.reviewed_by,
             "updated_at": rc.updated_at.isoformat() if rc.updated_at else None,
         }    
 

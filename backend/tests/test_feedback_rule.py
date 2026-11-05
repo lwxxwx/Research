@@ -518,3 +518,36 @@ def test_export_candidate_yaml_refuses_overwrite(
     # 原文件内容未被修改
     content_second = target.read_text(encoding="utf-8")
     assert content_first == content_second, "第二次导出失败后原文件不应被修改"
+
+def test_update_candidate_status_writes_reviewed_by(client, test_admin_user):
+    """G3-C：POST /rule-candidates/{id}/status 写入 reviewed_by = 当前登录用户。
+
+    用纯 ASCII candidate_id，避开 Sprint 2 遗留的 U+2011 特殊连字符问题。
+    """
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleCandidate
+
+    cid = f"RC-TEST-{uuid.uuid4().hex[:8].upper()}"
+    with get_db_session() as db:
+        db.add(RuleCandidate(
+            candidate_id=cid, title="test", description="test",
+            status="proposed", proposed_yaml="rule_id: TEST\n",
+        ))
+        db.commit()
+
+    try:
+        resp = client.post(
+            f"/api/v1/rule-candidates/{cid}/status",
+            json={"status": "accepted"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        with get_db_session() as db:
+            rc = db.query(RuleCandidate).filter(RuleCandidate.candidate_id == cid).first()
+            assert rc.status == "accepted"
+            assert rc.reviewed_by == test_admin_user["id"]
+    finally:
+        with get_db_session() as db:
+            db.query(RuleCandidate).filter(RuleCandidate.candidate_id == cid).delete()
+            db.commit()

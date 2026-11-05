@@ -392,3 +392,16 @@ def test_patch_expert_decision_404(client, monkeypatch, mock_llm):
         json={"expert_decision": "confirmed"},
     )
     assert resp.status_code == 404
+
+def test_create_task_writes_created_by(client, test_admin_user):
+    """G3-C：POST /review/tasks 写入 created_by = 当前登录用户。"""
+    resp = client.post("/api/v1/review/tasks", json={"case_id": "case001"})
+    assert resp.status_code == 200, resp.text
+    task_id = resp.json()["task_id"]
+
+    from app.persistence.db import get_db_session
+    from app.persistence.models import ReviewResult
+    with get_db_session() as db:
+        rr = db.query(ReviewResult).filter(ReviewResult.task_id == task_id).first()
+        assert rr is not None
+        assert rr.created_by == test_admin_user["id"]
