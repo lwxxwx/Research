@@ -140,7 +140,7 @@ def create_task(case_id: str, created_by: int | None = None) -> str:
 # ============================================================
 # get_task：查询任务状态 + 报告
 # ============================================================
-def get_task(task_id: str) -> dict[str, Any] | None:
+def get_task(task_id: str, current_user=None) -> dict[str, Any] | None:
     """
     按 task_id 查询任务状态与报告。
 
@@ -175,10 +175,35 @@ def get_task(task_id: str) -> dict[str, Any] | None:
             .first()
         )
         if rr is None:
-            logger.warning("get_task: task_id=%s 未找到 review_result", task_id)
+            # 分支 1：真不存在
+            logger.info(
+                "task.not_found: task_id=%s current_user_id=%s current_user_role=%s",
+                task_id,
+                getattr(current_user, "id", None),
+                getattr(current_user, "role", None),
+            )
             return None
 
+        # ===== [S3-G3B] engineer 对象级数据范围（D6：对外 404，日志区分）=====
+        if current_user is not None and getattr(current_user, "role", None) == "engineer":
+            if rr.created_by is None:
+                # 分支 2：历史数据（created_by NULL），engineer 无权访问
+                logger.warning(
+                    "audit.historical_unauthorized: task_id=%s current_user_id=%s reason=created_by_is_null",
+                    task_id, current_user.id,
+                )
+                return None
+            if rr.created_by != current_user.id:
+                # 分支 3：真实越权（engineer 访问他人任务）
+                logger.warning(
+                    "audit.idor_hidden: task_id=%s current_user_id=%s owner_id=%s",
+                    task_id, current_user.id, rr.created_by,
+                )
+                return None
+        # ===== [S3-G3B END] =====
+
         report_json = rr.review_output_json or {}
+
         errors = report_json.get("errors", []) if isinstance(report_json, dict) else []
         defects = report_json.get("defects", []) if isinstance(report_json, dict) else []
 
@@ -286,6 +311,7 @@ def _infer_case_class(case_id: str | None) -> str | None:
 
 def list_tasks_filtered(
     *,
+    current_user=None,   # ← 加这行（CurrentUser | None，避免循环 import）
     case_class: str | None = None,
     review_status: str | None = None,
     status: str | None = None,   # ← [S2-C] 任务状态过滤（pending/done/failed）
@@ -382,6 +408,15 @@ def list_tasks_filtered(
             .order_by(ReviewResult.id.desc())
         )
 
+        # ===== [S3-G3B] created_by 过滤：仅 engineer =====
+        if current_user is not None and getattr(current_user, "role", None) == "engineer":
+            query = query.filter(ReviewResult.created_by == current_user.id)
+        # ===== [S3-G3B END] =====
+
+        # DB 层过滤：review_status
+        if review_status:
+            query = query.filter(ReviewResult.review_status == review_status)
+
         # DB 层过滤：review_status
         if review_status:
             query = query.filter(ReviewResult.review_status == review_status)
@@ -439,7 +474,7 @@ def list_tasks_filtered(
 # ============================================================
 # get_task_defects：查询任务下的缺陷明细
 # ============================================================
-def get_task_defects(task_id: str) -> list[dict[str, Any]]:
+def get_task_defects(task_id: str, current_user=None) -> list[dict[str, Any]]:
     """
     查询任务下的缺陷明细（review_defect 表）。
 
@@ -459,7 +494,27 @@ def get_task_defects(task_id: str) -> list[dict[str, Any]]:
             .first()
         )
         if rr is None:
+            logger.info(
+                "task.not_found: task_id=%s endpoint=get_task_defects current_user_id=%s",
+                task_id, getattr(current_user, "id", None),
+            )
             return []
+
+        # ===== [S3-G3B] engineer 对象级数据范围（D6：对外 404，日志区分）=====
+        if current_user is not None and getattr(current_user, "role", None) == "engineer":
+            if rr.created_by is None:
+                logger.warning(
+                    "audit.historical_unauthorized: task_id=%s endpoint=get_task_defects current_user_id=%s",
+                    task_id, current_user.id,
+                )
+                return []
+            if rr.created_by != current_user.id:
+                logger.warning(
+                    "audit.idor_hidden: task_id=%s endpoint=get_task_defects current_user_id=%s owner_id=%s",
+                    task_id, current_user.id, rr.created_by,
+                )
+                return []
+        # ===== [S3-G3B END] =====
 
         defects = (
             db.query(ReviewDefect)

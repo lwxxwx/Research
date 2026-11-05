@@ -113,6 +113,7 @@ def list_review_tasks(
     offset: int = Query(0, ge=0),
 ):
     result = task_service.list_tasks_filtered(
+        current_user=current,   # ← 加这行
         status=status,             # ← 补透传
         case_class=case_class,
         review_status=review_status,
@@ -134,7 +135,7 @@ def get_review_task(
     ),
 ) -> TaskDetailResponse:
     """任务详情。G3-A：只校验角色；数据范围过滤 G3-B。"""
-    detail = task_service.get_task(task_id)
+    detail = task_service.get_task(task_id, current_user=current)
     if detail is None:
         raise HTTPException(status_code=404, detail=f"task_id={task_id} 不存在")
     return TaskDetailResponse(**detail)
@@ -150,11 +151,11 @@ def get_review_task_defects(
 ) -> DefectsResponse:
     """获取评审任务缺陷列表"""
     # ----新增开始----
-    task_info = task_service.get_task(task_id)
+    task_info = task_service.get_task(task_id, current_user=current)
     if task_info is None:
         raise HTTPException(status_code=404, detail=f"task_id={task_id} 不存在")
     # ----新增结束----
-    items = task_service.get_task_defects(task_id)
+    items = task_service.get_task_defects(task_id, current_user=current)
     return DefectsResponse(items=items)
 
 
@@ -195,7 +196,13 @@ def export_review_report(
         require_roles(ROLE_ENGINEER, ROLE_REVIEWER, ROLE_ADMIN)
     ),
 ) -> PlainTextResponse:
-    """导出 Markdown 报告。G3-A：只校验角色；数据范围过滤 G3-B。"""
+    """导出 Markdown 报告。G3-B：engineer 越权返回 404。"""
+    # ===== [S3-G3B] 对象级权限校验：engineer 越权返回 404 =====
+    task_info = task_service.get_task(task_id, current_user=current)
+    if task_info is None:
+        raise HTTPException(status_code=404, detail=f"task_id={task_id} 不存在")
+    # ===== [S3-G3B END] =====
+
     try:
         md = report_service.generate_markdown_report(task_id)
     except Exception as exc:
