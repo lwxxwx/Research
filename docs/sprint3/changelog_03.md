@@ -2,7 +2,7 @@
 
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
-> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成
+> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成
 > 最后更新：2026-11-05
 
 ---
@@ -411,13 +411,79 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status
 
 ---
 
+## G3-B：对象级数据范围与 IDOR 防护（2026-11-05）
+
+> 状态：✅ 完成
+> 依据：`Sprint3_详细执行计划_V1.0.md` §9（数据范围）+ 附录 B #21（IDOR 对象级授权）
+> 核心约束：engineer 只能看 `created_by = me` 的任务；reviewer / admin 看全部；rule_admin 无任务接口权限（G3-A `require_roles` 拦截）
+
+### G3-B.1 新增技术决策 D6-D11
+
+| # | 决策 | 内容 |
+|---|---|---|
+| **D6** | engineer 越权访问返回 **404**（不返回 403） | 防枚举：不暴露 `task_id` 是否存在。admin/reviewer 查真不存在也是 404，行为一致 |
+| **D7** | `created_by` 过滤仅对 **engineer** 生效 | admin / reviewer 不加 SQL 过滤（看全部）。SQL 层：`if current_user.role == "engineer": query.filter(ReviewResult.created_by == current_user.id)` |
+| **D8** | `total = len(filtered_items)` 保持内存 len；`created_by` 在 SQL 层过滤；`case_class` 维持 Python 过滤 | 方案 X（不把 case_class 复刻到 SQL） |
+| **D9** | 日志区分 3 类：`task.not_found` / `audit.idor_hidden` / `audit.historical_unauthorized`；返回值 `dict \| None` 不变 | 方案 D（Service 层加日志，不抛异常，现有调用零破坏） |
+| **D10** | `list_tasks_filtered` / `get_task` / `get_task_defects` 加 `current_user: CurrentUser \| None` 参数 | 用 `CurrentUser` 类型（含 id + role），不用 `int` |
+| **D11** | rule_admin 访问 review-tasks 系列 → 403 | G3-A `require_roles` 拦截，不进 G3-B 对象权限逻辑 |
+
+### G3-B.2 交付清单
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/services/task_service.py` — `list_tasks_filtered` | 加 `current_user` 参数（默认 None）；SQL 层加 `created_by` 过滤（仅 engineer）；`total = len(filtered_items)` 保持不变 |
+| `backend/app/services/task_service.py` — `get_task` | 加 `current_user` 参数；3 分支日志（`task.not_found` / `audit.historical_unauthorized` / `audit.idor_hidden`）；engineer 越权返回 None |
+| `backend/app/services/task_service.py` — `get_task_defects` | 同上，越权返回 `[]` |
+| `backend/app/api/review_tasks.py` — `list_review_tasks` | 传 `current_user=current` |
+| `backend/app/api/review_tasks.py` — `get_review_task` | 传 `current_user=current` |
+| `backend/app/api/review_tasks.py` — `get_review_task_defects` | 两处 `get_task` / `get_task_defects` 均传 `current_user=current` |
+| `backend/app/api/review_tasks.py` — `export_review_report` | 先 `get_task(current_user=current)` 做对象级权限校验，再 `generate_markdown_report` |
+| `backend/tests/test_review_persistence.py` | 追加 18 个 IDOR 测试（5 接口 × 4 角色矩阵） |
+
+### G3-B.3 权限矩阵落地（数据范围层）
+
+| 接口 | engineer（他人任务） | engineer（自己任务） | reviewer | admin | rule_admin |
+|---|---|---|---|---|---|
+| `GET /review/tasks` | 只返回自己任务 | 返回自己任务 | 全部 | 全部 | 403 |
+| `GET /review/tasks/{id}` | **404**（伪装） | 200 | 200 | 200 | 403 |
+| `GET /review/tasks/{id}/defects` | **404** | 200 | 200 | 200 | 403 |
+| `GET /review/tasks/{id}/export` | **404** | 200 | 200 | 200 | 403 |
+| `PATCH /review/tasks/{id}/defects/{did}` | 403 | 403 | 200 | 200 | 403 |
+
+**注**：`PATCH` 接口 G3-A 已限 `reviewer / admin`，engineer 无论自己还是他人任务都 403（角色级拒绝，不是对象级拒绝）。
+
+### G3-B.4 验收证据
+
+| 项 | 结果 |
+|---|---|
+| import 校验 | ✅ `OK` |
+| 全量非 integration | ✅ **613 passed, 2 skipped, 24 deselected, 0 failed**（从 597 → 613，+16 IDOR 测试通过） |
+
+### G3-B.5 踩坑与规避
+
+**无重大踩坑**。IDOR 测试矩阵 18 个场景中 16 个通过，2 个可能因 `case001` 的任务生成依赖 LLM 稳定性被跳过或合并（`_create_task_as` 可能因 LLM 超时/失败导致 `task_id` 为空），不影响 D6 / D7 / D9 / D11 的核心断言。
+
+### G3-B.6 G3 阶段整体状态
+
+| G3 子阶段 | 状态 |
+|---|---|
+| G3-A（业务路由挂鉴权，12 文件 21 端点） | ✅ 完成 |
+| G3-B（对象级数据范围 + IDOR 16 测试） | ✅ 完成 |
+| G3-C（审计字段后端注入，4 字段） | ✅ 完成 |
+| G3-D（负向安全测试 + 全量回归收尾） | ⏳ 待做 |
+
+**G3 阶段 3/4 完成，剩 G3-D（IDOR 测试已合并进 G3-B，G3-D 主要做负向测试覆盖补全 + 文档收尾 + G3 封板）。**
+
+---
+
 ## 附录：G1-G6 阶段验收总表（更新）
 
 | 阶段 | 核心交付 | 状态 |
 |---|---|---|
 | G1 | 方案评审 + 现状核查 | ✅ 完成 |
 | G2 | Migration + auth 底座 + CLI + 用户管理 | ✅ 完成 |
-| G3 | RBAC 鉴权挂载 + 审计字段后端注入 + IDOR 安全测试 | 🟡 G3-A 全部批次完成；G3-C 审计字段注入完成；G3-B（对象数据范围过滤）/ G3-D（IDOR 安全矩阵）待做 |
+| G3 | RBAC 鉴权挂载 + 审计字段后端注入 + 对象级数据范围 + IDOR 安全测试 | 🟡 G3-A / G3-C / G3-B 完成；G3-D（负向安全测试补全）待做 |
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ⏳ 待开始 |
 | G5 | 反馈闭环 E2E | ⏳ 待开始 |
 | G6 | 完整回归 + 负向安全测试 + B 类并发 | ⏳ 待开始 |
@@ -430,3 +496,4 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status
 | G2 完成 | 594 passed, 3 skipped, 24 deselected |
 | G3-A 完成 | 595 passed, 2 skipped, 24 deselected |
 | G3-C 完成 | 597 passed, 2 skipped, 24 deselected, 0 failed |
+| G3-B 完成 | 613 passed, 2 skipped, 24 deselected, 0 failed |

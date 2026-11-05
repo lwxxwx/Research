@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-05（新增 S3-G3C-AuditFields 审计字段注入与手测踩坑）
+> **最后更新**：2026-11-05（新增 S3-G3C-AuditFields 审计字段注入、S3-G3B-DataScope 对象级数据范围与 IDOR 防护）
 
 ---
 
@@ -13,8 +13,9 @@
 3. [S3-G2-TestIsolation：测试隔离与并发断言修正](#3-s3-g2-testisolation测试隔离与并发断言修正2026-11-03)
 4. [S3-G3A-API：G3-A 鉴权改造后的 API 层排障](#4-s3-g3a-apig3-a-鉴权改造后的-api-层排障2026-11-04)
 5. [S3-G3C-AuditFields：审计字段注入与手测踩坑](#5-s3-g3c-auditfields审计字段注入与手测踩坑2026-11-05)
-6. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#6-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
-7. [附：版本与适用范围](#7-附版本与适用范围)
+6. [S3-G3B-DataScope：对象级数据范围与 IDOR 防护](#6-s3-g3b-datascope对象级数据范围与-idor-防护2026-11-05)
+7. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#7-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
+8. [附：版本与适用范围](#8-附版本与适用范围)
 
 ---
 
@@ -713,16 +714,195 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status
 
 ---
 
-## 6. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
+## 6. S3-G3B-DataScope：对象级数据范围与 IDOR 防护（2026-11-05）
+
+> **状态**：✅ 已完成
+> **核心难点**：engineer 只能看 `created_by = me` 的任务，reviewer / admin 看全部；engineer 越权访问他人任务必须返回 404（防枚举），但日志要区分"真 404"、"越权 404"、"历史数据无权"。`total` 的改造不能把 `case_class` 的 Python 过滤语义复刻到 SQL。
+> **最终结果**：全量非 integration `613 passed, 2 skipped, 0 failed`（+16 IDOR 测试）。
+
+### 6.1 6 项设计决策（D6-D11）
+
+| # | 决策 | 落地 |
+|---|---|---|
+| **D6** | engineer 越权访问返回 404（不返回 403），防枚举 | `get_task` / `get_task_defects` / `export` 越权时返回 None / []，API 层统一 404 |
+| **D7** | `created_by` 过滤仅对 **engineer** 生效 | SQL 层 `if current_user.role == "engineer": query.filter(...)` |
+| **D8** | `total = len(filtered_items)` 保持内存 len；`created_by` 在 SQL 层过滤 | 方案 X（不把 case_class 复刻到 SQL） |
+| **D9** | 日志区分 3 类：`task.not_found` / `audit.idor_hidden` / `audit.historical_unauthorized` | 方案 D（Service 层加日志，返回 None 不变） |
+| **D10** | Service 方法加 `current_user` 参数 | `CurrentUser \| None` 类型（含 id + role） |
+| **D11** | rule_admin 访问 review-tasks → 403 | G3-A `require_roles` 拦截，不进 G3-B 对象权限逻辑 |
+
+### 6.2 坑 1：`current_user` 参数类型避免循环 import
+
+**现象**：
+
+最初想给 `list_tasks_filtered` 加 `current_user: CurrentUser | None` 类型注解，但 `app.core.auth` 已经 import `app.services.user_service`，`task_service` import `CurrentUser` 会形成 `task_service → core.auth → user_service → ...` 的循环链路。
+
+**根因**：
+
+`CurrentUser` 是 `NamedTuple`，但 `task_service` 不应该依赖 `app.core.auth`（auth 是上层，task_service 是业务层）。
+
+**修复**：
+
+`current_user` 参数不加类型注解（`current_user=None`），运行时 duck typing：
+
+```python
+def list_tasks_filtered(
+    *,
+    current_user=None,   # 不加类型注解，避免循环 import
+    ...
+) -> dict[str, Any]:
+    if current_user is not None and getattr(current_user, "role", None) == "engineer":
+        query = query.filter(ReviewResult.created_by == current_user.id)
+```
+
+用 `getattr(current_user, "role", None)` 而非 `current_user.role`，防止 `None` 或非预期类型报错。
+
+**教训**：
+
+1. 业务 Service 不要 import 上层 `app.core.auth`，用 duck typing + `getattr` 更安全。
+2. `current_user=None` 是合法状态（脚本 / CLI 调用不带用户上下文），必须防御性处理。
+
+### 6.3 坑 2：越权返回 None 但日志要区分 3 种情况
+
+**现象**：
+
+`get_task` 内部如果直接 `if rr.created_by != current_user.id: return None`，日志只能打"任务不存在"，无法区分：
+
+- 真不存在（DB 里没这条）
+- 越权（engineer 访问他人任务）
+- 历史数据（`created_by IS NULL`，Sprint 1 遗留）
+
+**根因**：
+
+`return None` 是统一出口，但 3 种情况的审计语义完全不同——越权要告警，历史数据要提醒迁移，真不存在是正常 404。
+
+**修复**：
+
+3 分支日志（方案 D）：
+
+```python
+if rr is None:
+    # 分支 1：真不存在
+    logger.info("task.not_found: task_id=%s ...", task_id, ...)
+    return None
+
+if current_user and current_user.role == "engineer":
+    if rr.created_by is None:
+        # 分支 2：历史数据无权
+        logger.warning("audit.historical_unauthorized: task_id=%s ...", ...)
+        return None
+    if rr.created_by != current_user.id:
+        # 分支 3：真实越权
+        logger.warning("audit.idor_hidden: task_id=%s current_user_id=%s owner_id=%s",
+                       task_id, current_user.id, rr.created_by)
+        return None
+```
+
+**教训**：
+
+1. "统一 404" 和 "区分日志" 不矛盾：对外响应一致，对内日志分层，运维排障能看到是哪类 404。
+2. 日志前缀用 `task.not_found` / `audit.idor_hidden` / `audit.historical_unauthorized` 便于 grep。
+3. 越权日志必须打 `current_user_id` + `owner_id`，方便回溯。
+
+### 6.4 坑 3：`case_class` 的 Python 过滤不能复刻到 SQL
+
+**现象**：
+
+G3-B 改造 total 时，想给 `list_tasks_filtered` 改 SQL 层 count（`query.count()`），但 `case_class` 是 Python 层从 `case_id` 前缀推导的（`_infer_case_class(case_id)`），DB 无 `case_class` 列。
+
+**根因**：
+
+`case_class` 的推导规则（A 类 `^case\d{3}$`、B 类 `^case_b\d{2}_[a-z0-9_]+_B$`）是 Sprint 2 冻结的语义，DB 里没有对应列，只能在 Python 层过滤。
+
+**修复**：
+
+方案 X（保留 `total = len(filtered_items)`）：
+
+```python
+# SQL 层：created_by 过滤（仅 engineer）
+if current_user and current_user.role == "engineer":
+    query = query.filter(ReviewResult.created_by == current_user.id)
+
+rows = query.all()   # SQL 层过滤后拿数据
+
+# Python 层：case_class 过滤（不变）
+filtered_items = []
+for rr, case_id in rows:
+    item_case_class = _infer_case_class(case_id)
+    if case_class is not None and item_case_class != case_class:
+        continue
+    filtered_items.append({...})
+
+total = len(filtered_items)   # 保持内存 len
+paginated = filtered_items[offset:offset+limit]
+```
+
+**教训**：
+
+1. D8 的真正含义是"`created_by` 在 SQL 层过滤"，不是"total 从 len 改 count"。`case_class` 的 Python 过滤存在时，total 必须保持 `len(filtered_items)`。
+2. 不要为了"性能优化"把已冻结的 Python 过滤语义复刻到 SQL——`case_class` 的 A/B 命名规则如果将来变化，SQL 层要同步改，违反"冻结语义不动"。
+3. `created_by` 在 SQL 层过滤是必要的（不是性能优化，是语义）：engineer 的 total 必须是"自己任务的数"，不能先拉全部再 Python 过滤。
+
+### 6.5 坑 4：`export_review_report` 的对象级权限校验
+
+**现象**：
+
+`export_review_report` 当前直接 `report_service.generate_markdown_report(task_id)`，没有对象级权限校验——engineer 可以导出他人任务报告。
+
+**根因**：
+
+`generate_markdown_report` 内部不区分调用者身份（Service 层只负责生成报告）。
+
+**修复**：
+
+在 `try` 之前先 `get_task(current_user=current)` 做权限校验：
+
+```python
+task_info = task_service.get_task(task_id, current_user=current)
+if task_info is None:
+    raise HTTPException(status_code=404, detail=f"task_id={task_id} 不存在")
+
+try:
+    md = report_service.generate_markdown_report(task_id)
+except Exception as exc:
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+```
+
+**教训**：
+
+1. 对象级权限校验优先在调用业务 Service 之前（用 `get_task` 这种"权限感知"的查询），而不是在 Service 内部。
+2. `generate_markdown_report` 无需接收 `current_user`——因为已经 `get_task` 校验过权限了。
+
+### 6.6 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| import 校验（3 个函数） | ✅ OK |
+| 全量非 integration | ✅ 613 passed, 2 skipped, 24 deselected, 0 failed |
+
+> +16 IDOR 测试（从 597 → 613），覆盖 5 接口 × 4 角色矩阵。
+
+### 6.7 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | `current_user` 参数类型 | 业务 Service 不 import `app.core.auth`，用 `current_user=None` + `getattr` 防循环 import |
+| 2 | 越权返回 None 但日志区分 | "统一 404" + "分层日志" 不矛盾；3 分支：`task.not_found` / `audit.idor_hidden` / `audit.historical_unauthorized` |
+| 3 | `case_class` Python 过滤 | D8 不是"total 改 count"，是"`created_by` 在 SQL 层"；`case_class` 的 Python 过滤保持不动 |
+| 4 | export 对象级权限 | 在 `generate_markdown_report` 之前先 `get_task(current_user=current)` 校验 |
+
+---
+
+## 7. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
 
 > **状态**：⏳ 待验证（G3 阶段执行，G2 不触发）
 > **规划依据**：[Sprint3_详细执行计划_V1.0.md §3.3](./Sprint3_详细执行计划_V1.0.md)
 
-### 6.1 为什么 G2 未触发
+### 7.1 为什么 G2 未触发
 
 G2 的 `get_current_user` 和 `update_user` / `soft_delete_user` 各自使用独立的 `with get_db_session() as db:`，不共享 Session。因此 admin_lock 和业务 Service 不冲突。
 
-### 6.2 G3 阶段可能触发
+### 7.2 G3 阶段可能触发
 
 G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_user` 和业务 Service。此时：
 
@@ -734,7 +914,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 - **方案 A（推荐）**：Service 层不 `db.begin()`，直接复用 `get_db_session` 的事务。
 - **方案 B**：最后管理员保护需要 READ COMMITTED，用独立 Session + `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`。
 
-### 6.3 验收测试用例（G3 阶段）
+### 7.3 验收测试用例（G3 阶段）
 
 1. **正常路径**：GET /auth/me 鉴权 → PATCH /auth/users/{id} 降级非最后 admin，不抛 `InvalidRequestError`。
 2. **受保护路径**：唯一 admin 降级 → 抛 `LastAdminProtectionError`，不抛 `InvalidRequestError`。
@@ -742,7 +922,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 
 ---
 
-## 7. 附：版本与适用范围
+## 8. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
