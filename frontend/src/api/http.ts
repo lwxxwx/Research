@@ -1,12 +1,51 @@
 // frontend/src/api/http.ts
 // ============================================================
 // HTTP 请求封装（带超时、错误处理、开发环境日志）
+// Sprint 3 G4：注入 X-User-Id；401 清身份跳登录；403 抛专用异常
 // ============================================================
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 export const TIMEOUT_ERROR = "TIMEOUT";
+export const USER_ID_STORAGE_KEY = "user_id";
+
+/** 403：已认证但权限不足（页面级提示，不跳登录） */
+export class PermissionDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermissionDeniedError";
+  }
+}
+
+/** 401：身份失效（清身份跳登录） */
+export class UnauthorizedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnauthorizedError";
+  }
+}
+
+function getStoredUserId(): string | null {
+  try {
+    return localStorage.getItem(USER_ID_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function handleUnauthorized(): void {
+  // 清身份：只清 user_id（role 本来就不在 localStorage）
+  try {
+    localStorage.removeItem(USER_ID_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+  // 跳登录：用 window.location 避免 Vue Router 在 http.ts 里循环依赖
+  if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
+}
 
 export async function request<T>(
   path: string,
@@ -16,10 +55,8 @@ export async function request<T>(
   let base = BASE_URL.endsWith("/") ? BASE_URL.slice(0, -1) : BASE_URL;
   let p = path.startsWith("/") ? path : `/${path}`;
   const url = `${base}${p}`;
-
   const method = options.method || "GET";
-  
-  // 开发者提示：打印请求开始
+
   if (import.meta.env.DEV) {
     let logBody: any = options.body;
     if (options.body instanceof FormData) {
@@ -29,19 +66,25 @@ export async function request<T>(
     }
     console.log(`[API 请求开始] ${method} ${url}`, logBody || "");
   }
-  
+
   const startTime = performance.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   // ===== 动态处理 Content-Type =====
   const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string> || {}),
+    ...((options.headers as Record<string, string>) || {}),
   };
-  // 如果 body 不是 FormData，且没有手动指定 Content-Type，默认设为 application/json
   if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
     headers["Content-Type"] = "application/json";
   }
+
+  // ===== [S3-G4] 注入 X-User-Id（登录后 localStorage 有值才注入）=====
+  const storedUserId = getStoredUserId();
+  if (storedUserId && !headers["X-User-Id"]) {
+    headers["X-User-Id"] = storedUserId;
+  }
+  // ===== [S3-G4 END] =====
 
   try {
     const response = await fetch(url, {
@@ -60,26 +103,35 @@ export async function request<T>(
         if (body?.detail) {
           detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
         }
-      } catch { /* ignore */ }
-      
-      // 开发者提示：打印请求失败
+      } catch {
+        /* ignore */
+      }
+
       console.error(`[API 失败] ${method} ${url} - 耗时: ${duration}ms - 错误:`, detail);
+
+      // ===== [S3-G4] 401 / 403 区分 =====
+      if (response.status === 401) {
+        handleUnauthorized();
+        throw new UnauthorizedError(detail);
+      }
+      if (response.status === 403) {
+        throw new PermissionDeniedError(detail);
+      }
+      // 404 / 422 / 500 保持原样
       throw new Error(detail);
+      // ===== [S3-G4 END] =====
     }
 
     if (response.status === 204) return undefined as T;
     const data = await response.json();
-    
-    // 开发者提示：打印请求成功
+
     if (import.meta.env.DEV) {
       console.log(`[API 成功] ${method} ${url} - 耗时: ${duration}ms - 状态: ${response.status}`);
     }
     return data as T;
-
   } catch (e) {
     clearTimeout(timer);
     if (e instanceof DOMException && e.name === "AbortError") {
-      // 开发者提示：打印超时
       console.warn(`[API 超时] ${method} ${url} - 超过 ${timeoutMs}ms 未响应`);
       throw new Error(TIMEOUT_ERROR);
     }
