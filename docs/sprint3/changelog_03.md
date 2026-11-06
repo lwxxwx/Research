@@ -2,8 +2,8 @@
 
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
-> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成
-> 最后更新：2026-11-06（新增 G4 章节）
+> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）🟡 进行中（Commit 1/5）
+> 最后更新：2026-11-06（新增 G4 章节、G5 章节 Commit 1）
 
 ---
 
@@ -678,6 +678,102 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status
 
 ---
 
+## G5：反馈闭环 E2E — 知识缺口生成链路（2026-11-06）
+
+> 状态：🟡 进行中（Commit 1 已完成：`knowledge_gap` 生成函数 + 统一 ID 生成器）
+> 依据：`Sprint3_详细执行计划_V1.0.md` §10（反馈生成链路核实与判定规则）
+> 核心发现：**Sprint 1/2 的 `knowledge_gap` / `gap_feedback_link` 表没有任何生产代码写入路径**（grep 只命中 ORM 模型定义），DB 里 26 条 `knowledge_gap` 是 Sprint 2 测试 / demo 手工造的测试数据。G5 必须补实现。
+
+### G5.0 前置核查结论（附录 C #6 的最终确认）
+
+| 核查项 | 结论 |
+|---|---|
+| `feedback_service.submit_feedback` 是否触发候选生成 | ✅ 是（`FALSE_NEGATIVE` / `NEW_RULE_CANDIDATE` → `generate_candidate_from_feedback`） |
+| `feedback_service.submit_feedback` 是否触发知识缺口生成 | ❌ **否**（`knowledge_gap` 类型只写 `feedback_item`，不写 `knowledge_gap` / `gap_feedback_link`） |
+| `KnowledgeGap(` / `GapFeedbackLink(` 构造点 | ❌ 全项目 grep 只命中 `models.py` 定义，无 `db.add(...)` 写入 |
+| `rule_evolution_service.export_knowledge_gap_backlog` | 是**导出**（`SELECT feedback_item WHERE feedback_type='knowledge_gap'` 导 JSON），不写 `knowledge_gap` 表 |
+| `gap_id` 唯一索引 | ✅ `"knowledge_gap_gap_id_key" UNIQUE CONSTRAINT, btree (gap_id)` |
+| `FeedbackCreate` 是否有 `comment` 字段 | ❌ 无（D13 降级链去掉 `comment` 级） |
+
+**结论**：G5 判定为"补实现"（按 Sprint3 §10 判定规则：反馈生成链路属于第一阶段必要功能，必须补齐最小实现）。
+
+### G5.1 新增技术决策 D12–D20
+
+| # | 决策 | 内容 | 落地 |
+|---|---|---|---|
+| **D12** | `gap_id` 格式 `GAP-YYYYMMDD-XXXXXX`（6 位），ASCII `-`（U+002D），禁止 U+2011 | ① 抽公共 `make_prefixed_id(prefix, random_len)` 到 `app/core/ids.py`；② 碰撞重试 3 次；③ `gap_id` 已有 UNIQUE 约束兜底 | `app/core/ids.py` + `knowledge_gap_service._make_gap_id` |
+| **D13** | `title` 降级链：`expert_suggestion → suggestion_diff 摘要 → "知识缺口 {case_id}"`（**去掉 `comment` 级**，因为 `FeedbackCreate` 无 `comment` 字段） | title 取首行 + strip + 按字符截断 ≤256；全文进 `description` | `create_gap_from_feedback` |
+| **D14** | `task_id` / `case_id` / `defect_id` 反查失败写 NULL + `logger.warning`，不 raise；`fb is None` 才 raise | `case_id` 经 `review_result.schematic_case_id → schematic_case.case_id` 两步反查 | `_resolve_gap_context` |
+| **D15** | 初始 `status="open"`，定义 `GAP_STATUS_OPEN` 等模块常量 | 与 `KnowledgeGap.status` 的 CHECK 约束对齐 | `knowledge_gap_service.py` 顶部 |
+| **D16** | 1:1 映射（1 反馈 1 gap）；幂等：`GapFeedbackLink` 已存在直接返回已有 gap_id | 顺序 `add(gap) → flush() → add(link) → flush()`；**只 flush 不 commit** | `create_gap_from_feedback` |
+| **D17** | `FeedbackOut` 加 `knowledge_gap_ref` 字段 | **G5 Commit 1 未实施**（避免 migration）；待确认：方案 A（不加列，G6 再做）vs 方案 B（加列 + migration） | 待 Commit 2 确认 |
+| **D18** | `source_feedback_id` 同步写（审计快路径，真源为 `gap_feedback_link`） | 与 `feedback_item.id` 同事务双写；26 条 demo 数据 `source_feedback_id` 为 NULL（前端容忍空值） | `create_gap_from_feedback` |
+| **D19** | `knowledge_gap` 不新增 `created_by` 列；提出人追溯走 `source_feedback_id → feedback_item.created_by` | `resolved_by` 只表示处理人 | 文档约定 |
+| **D20** | E2E 断言用 `total_before → total == total_before + 1`，禁止硬编码 `total == 26/27` | 不依赖 demo 数据；CI 与本地数据不一致时用 fixture 预置 / 清理 | 待 Commit 3 实施 |
+
+### G5.2 D12–D20 补充说明
+
+- **D12（ID 生成器统一）**：原 `rule_evolution_service._make_candidate_id` 用 **U+2011 非断连字符**（`f"RC‑{ts}‑{suffix}"`），是 G3-C 手测 404 的根因。G5 Commit 1 改为 `make_prefixed_id("RC", random_len=6)`（ASCII `-`），**顺带修复 U+2011 技术债**（Sprint3 附录 D 第 1 项，原计划下一阶段修，G5 提前做）。**存量候选 ID 保持 U+2011 不迁移**，前端 `encodeURIComponent` 兜底仍有效。
+  > 注：G5 实际落地时 RC 后缀由原 4 位统一为 6 位（与 GAP 共用同一 `random_len` 默认值）。后缀位数只影响**新生成**的 ID，DB 对 `candidate_id` / `gap_id` 格式无长度约束（`VARCHAR(64)`），存量数据不受影响，因此不需要 migration。若后续要求 RC 严格保持 4 位，只需在调用处显式传 `random_len=4`。
+- **D13（降级链）**：`FeedbackCreate` 无 `comment` 字段，降级链只有 3 级（`expert_suggestion` → `suggestion_diff` 摘要 → 兜底）。`fb.comment` 在 DB 里存在但 API 层不传（默认 NULL）。
+- **D14（反查失败不 raise）**：`fb is None` → `raise ValueError`（调用方 bug）；`task_id` / `case_id` / `defect_id` 反查不到 → 写 NULL + `logger.warning`（历史数据兼容，如 `schematic_case_id IS NULL` 的 517 条历史 `review_result`）。
+- **D16（幂等 + 原子性）**：`feedback_id` 无唯一约束，前端双击会造重复 gap。**幂等检查必须在 `create_gap_from_feedback` 入口**（查 `GapFeedbackLink.filter_by(feedback_id=...)`）。`create_gap_from_feedback` **只 flush 不 commit**，事务上交 `submit_feedback` 统一 commit。
+- **D17（加字段是否要 migration）**：`FeedbackOut` 是纯响应模型，新增可选字段本身**不涉及 DB 变更**；真正需要 migration 的只有"把 `knowledge_gap_ref` 落成 `feedback_item` 的持久化列"。因此建议采纳 **方案 A+**：Commit 2 由 `submit_feedback` 返回值携带 `knowledge_gap_ref`（内存透传，`Optional[str] = None`），不新增 DB 列，零 migration 成本；若后续产品要求该 ref 可追溯（页面展示 / 报表），G6 再评估加列。
+- **D18（source_feedback_id vs gap_feedback_link 删除语义不一致）**：`source_feedback_id` 是 `ON DELETE SET NULL`（`feedback_item` 删了 gap 保留、source 清空），`gap_feedback_link.feedback_id` 是 `ON DELETE CASCADE`（`feedback_item` 删了 link 删、gap 保留）。语义一致（gap 保留），但 **`feedback_item` 物理删除会导致 gap 失去来源追溯，业务层禁止物理删除 `feedback_item`**。
+- **D19（gap 审计口径）**：`KnowledgeGap` 无 `created_by` 列，不新增（避免 migration + 多 head 风险）。提出人追溯走 `source_feedback_id → feedback_item.created_by`。`proposed_by` 展示字段递延至 G6 或下一阶段。
+
+### G5.3 Commit 1 交付清单
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/core/ids.py` | **新建**：`make_prefixed_id(prefix, random_len=6)` 统一 ID 生成器，ASCII `-`（U+002D） |
+| `backend/app/services/knowledge_gap_service.py` | 顶部补 `import json` / `import logging` / `logger` / `SchematicCase` / `make_prefixed_id`；末尾追加 `create_gap_from_feedback` + `_make_gap_id` + `_summarize_suggestion_diff` + `_resolve_gap_context` + 4 个 `GAP_STATUS_*` 常量 |
+| `backend/app/services/rule_evolution_service.py` | `_make_candidate_id` 改为调 `make_prefixed_id("RC", random_len=6)`，**顺带修复 U+2011 技术债** |
+
+### G5.4 Commit 1 验收证据
+
+| 项 | 结果 |
+|---|---|
+| import 校验 | ✅ `OK`，`GAP: GAP-20261106-E7B45A`（ASCII `-`）、`RC: RC-20261106-5B167C`（ASCII `-`） |
+| 存量候选 ID | ⚠️ `RC‑20261027‑F05ED4`（U+2011，不迁移，前端 `encodeURIComponent` 兜底） |
+| 全量非 integration | ✅ **626 passed, 2 skipped, 24 deselected, 0 failed**（零破坏） |
+
+### G5.5 Commit 1 踩坑与发现
+
+**发现 1：`_make_candidate_id` 就是 U+2011 技术债源头**
+
+```python
+# 原实现（U+2011：`‑` 是 U+2011，不是 ASCII `-`）
+return f"RC‑{ts}‑{suffix}"
+
+# G5 Commit 1 之后
+def _make_candidate_id() -> str:
+    from app.core.ids import make_prefixed_id
+    return make_prefixed_id("RC", random_len=6)
+```
+
+G5 Commit 1 改为 `make_prefixed_id("RC", random_len=6)`，顺带修复 Sprint3 附录 D 第 1 项技术债（原计划下一阶段修，G5 提前做）。
+
+**发现 2：`FeedbackCreate` 无 `comment` 字段**
+
+D13 降级链去掉 `comment` 级，只有 3 级（`expert_suggestion` → `suggestion_diff` 摘要 → 兜底）。
+
+**发现 3：`knowledge_gap` 表 26 条 demo 数据无生产写入路径**
+
+G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
+
+### G5.6 G5 后续 Commit（待做）
+
+| Commit | 内容 | 状态 |
+|---|---|---|
+| 1 | `feat(s3-g5): add create_gap_from_feedback + unify ID generator` | ✅ 完成 |
+| 2 | `feat(s3-g5): wire knowledge_gap generation in feedback_service`（`_dispatch_evolution` 加 `knowledge_gap` 分支；确认 `FeedbackOut.knowledge_gap_ref` 方案 A/B） | ⏳ 待做 |
+| 3 | `test(s3-g5): E2E test for knowledge_gap generation + gap_feedback_link`（`test_feedback_e2e.py` 加场景，D20：`total_before + 1`） | ⏳ 待做 |
+| 4 | `test(s3-g5): G4 遗留 T-01~T-05 负面用例补全`（接口层 401 / rule_admin 正向 / engineer 知识库越权 / engineer 自身任务正向 / 状态码扫描） | ⏳ 待做 |
+| 5 | `docs(s3-g5): G5 章节 + 完整回归` | ⏳ 待做 |
+
+---
+
 ## 附录：G1-G6 阶段验收总表（更新）
 
 | 阶段 | 核心交付 | 状态 |
@@ -686,7 +782,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status
 | G2 | Migration + auth 底座 + CLI + 用户管理 | ✅ 完成 |
 | G3 | RBAC 鉴权挂载 + 审计字段后端注入 + 对象级数据范围 + IDOR 安全测试 | ✅ G3-A / G3-B / G3-C / G3-D 全部完成，G3 封板 |
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
-| G5 | 反馈闭环 E2E | ⏳ 待开始 |
+| G5 | 反馈闭环 E2E | 🟡 进行中（Commit 1/5 完成：`create_gap_from_feedback` + 统一 ID 生成器） |
 | G6 | 完整回归 + 负向安全测试 + B 类并发 | ⏳ 待开始 |
 
 ### 测试基线演进
@@ -700,3 +796,4 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status
 | G3-B 完成 | 613 passed, 2 skipped, 24 deselected, 0 failed |
 | G3-D 完成 | 626 passed, 2 skipped, 24 deselected, 0 failed |
 | G4 完成 | 626 passed（后端未改动，基线沿用）+ 前端 `type-check` 0 errors / `build` 成功 |
+| G5 Commit 1 完成 | 626 passed, 2 skipped, 24 deselected, 0 failed（新增函数未接线，零破坏） |
