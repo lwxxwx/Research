@@ -92,10 +92,14 @@ def _rollback_publish(
     return error_msg
 
 def _make_candidate_id() -> str:
-    """生成候选规则ID RC‑YYYYMMDD‑XXXXXX（6 位大写 hex）"""
-    ts = datetime.now().strftime("%Y%m%d")
-    suffix = uuid.uuid4().hex[:6].upper()
-    return f"RC‑{ts}‑{suffix}"
+    """生成候选规则 ID `RC-YYYYMMDD-XXXXXX`（6 位大写 hex，ASCII `-`）。
+
+    [S3-G5 修正] 原实现用 U+2011 非断连字符，导致 URL path 404。
+    统一走 `app.core.ids.make_prefixed_id`，分隔符改 ASCII `-`（U+002D）。
+    随机后缀保持 6 位，向后兼容存量候选 ID 长度。
+    """
+    from app.core.ids import make_prefixed_id
+    return make_prefixed_id("RC", random_len=6)
 
 
 def _build_proposed_rule_yaml(hint_payload: Optional[Dict[str, Any]]) -> str:
