@@ -461,3 +461,93 @@ def test_dashboard_engineer_403(client_as_engineer):
     """engineer 不能访问 dashboard（admin / rule_admin / reviewer 才能）。"""
     resp = client_as_engineer.get("/api/v1/dashboard/summary")
     assert resp.status_code == 403
+
+# ============================================================
+# [S3-G5-T4] G4 遗留待补项：接口层 401、rule_admin 正向、engineer 越权
+# ============================================================
+
+def test_api_layer_401_without_header(client_no_auth):
+    """T-01：无 X-User-Id 直接调受保护 API → 401。"""
+    resp = client_no_auth.get("/api/v1/knowledge-gaps")
+    assert resp.status_code == 401
+    assert "X-User-Id" in resp.json()["detail"]
+
+
+def test_rule_admin_knowledge_docs_200(client):
+    """T-02：rule_admin 对 /api/v1/knowledge-docs 的正向验证 → 200。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import User
+
+    with get_db_session() as db:
+        ra = db.query(User).filter(User.role == "rule_admin", User.is_active.is_(True)).first()
+        ra_id = ra.id if ra is not None else None   # ← 在 with 块内提取标量
+
+    if ra_id is None:
+        import pytest
+        pytest.skip("当前 DB 无启用的 rule_admin 用户")
+
+    resp = client.get(
+        "/api/v1/knowledge-docs",
+        headers={"X-User-Id": str(ra_id)},   # ← 用标量 ra_id
+    )
+    assert resp.status_code == 200
+
+
+def test_engineer_knowledge_gaps_403(client_as_engineer):
+    """T-03：engineer 对 /api/v1/knowledge-gaps 越权 → 403。"""
+    resp = client_as_engineer.get("/api/v1/knowledge-gaps")
+    assert resp.status_code == 403
+
+
+def test_engineer_own_task_details_200(client_as_engineer, test_engineer_user):
+    """T-04：engineer 访问自己创建的任务（详情 / 缺陷 / 导出）→ 200。
+
+    不走真实 create_task（避免 Graph 跨 Session 污染其它测试），
+    直接构造 ReviewResult（created_by=engineer.id），验证对象级权限。
+    """
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import ReviewResult
+
+    fake_task_id = f"TEST-T04-{uuid.uuid4().hex[:8].upper()}"
+    eng_id = test_engineer_user["id"]
+
+    # 1. 直接构造 ReviewResult（created_by=engineer.id，绕过 Graph）
+    with get_db_session() as db:
+        db.add(ReviewResult(
+            task_id=fake_task_id,
+            task_status="done",
+            created_by=eng_id,
+            review_output_json={
+                "defects": [{
+                    "defect_id": "D1",
+                    "location": {},
+                    "root_cause": "r",
+                    "suggestion": "s",
+                    "category": "other",
+                    "risk": "medium",
+                    "confidence": 0.9,
+                }],
+                "errors": [],
+            },
+            evidence_coverage=0.8,
+        ))
+        db.commit()
+
+    try:
+        # 2. 访问详情
+        detail_resp = client_as_engineer.get(f"/api/v1/review/tasks/{fake_task_id}")
+        assert detail_resp.status_code == 200, detail_resp.text
+
+        # 3. 访问缺陷列表
+        defects_resp = client_as_engineer.get(f"/api/v1/review/tasks/{fake_task_id}/defects")
+        assert defects_resp.status_code == 200, defects_resp.text
+
+        # 4. 访问导出
+        export_resp = client_as_engineer.get(f"/api/v1/review/tasks/{fake_task_id}/export")
+        assert export_resp.status_code == 200, export_resp.text
+    finally:
+        # 5. 清理（避免污染其它测试）
+        with get_db_session() as db:
+            db.query(ReviewResult).filter(ReviewResult.task_id == fake_task_id).delete()
+            db.commit()

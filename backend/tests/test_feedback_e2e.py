@@ -448,3 +448,85 @@ def test_feedback_e2e_zhipu():
         ),
     )
     assert fb.rule_candidate_ref is not None
+
+# ============================================================
+# [S3-G5] E2E：knowledge_gap 反馈 → knowledge_gap + gap_feedback_link 生成
+# ============================================================
+
+def test_feedback_e2e_mock_knowledge_gap_generates_gap(
+    mock_llm_with_one_defect,
+    prepare_out_dir,
+):
+    """E2E：提交 knowledge_gap 反馈 → knowledge_gap 表 +1、gap_feedback_link 新增 1 条、API 返回 knowledge_gap_ref。
+
+    验证 G5 D12–D20 的完整链路：
+      feedback_item → knowledge_gap → gap_feedback_link → API response.knowledge_gap_ref
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.persistence.db import get_db_session
+    from app.persistence.models import GapFeedbackLink, KnowledgeGap
+
+    # 1. 前置：获取 task_id / defect_id
+    task_id, defect_id = _run_task_and_get_defect_id()
+
+    # 2. 前置：获取 knowledge_gap 总数
+    client = TestClient(app)
+    before_resp = client.get(
+        "/api/v1/knowledge-gaps",
+        headers={"X-User-Id": "3232"},
+    )
+    assert before_resp.status_code == 200, before_resp.text
+    total_before = before_resp.json()["total"]
+
+    # 3. 提交 knowledge_gap 反馈
+    fb_body = {
+        "task_id": task_id,
+        "defect_id": defect_id,
+        "feedback_type": "knowledge_gap",
+        "expert_suggestion": "[E2E-G5] 知识缺口生成链路验证",
+    }
+    fb_resp = client.post(
+        "/api/v1/feedbacks",
+        headers={"X-User-Id": "3232"},
+        json=fb_body,
+    )
+    assert fb_resp.status_code == 200, fb_resp.text
+    fb_data = fb_resp.json()
+
+    # 4. 断言 API 响应
+    assert fb_data["feedback_type"] == "knowledge_gap"
+    assert fb_data["knowledge_gap_ref"] is not None, (
+        f"knowledge_gap_ref 应该返回 gap_id，实际 None。响应：{fb_data}"
+    )
+    gap_id = fb_data["knowledge_gap_ref"]
+    assert gap_id.startswith("GAP-"), f"gap_id 格式非法：{gap_id}"
+
+    # 5. 断言 knowledge_gap 总数 +1（D20 动态断言）
+    after_resp = client.get(
+        "/api/v1/knowledge-gaps",
+        headers={"X-User-Id": "3232"},
+    )
+    assert after_resp.status_code == 200
+    total_after = after_resp.json()["total"]
+    assert total_after == total_before + 1, (
+        f"knowledge_gap total 应 +1，实际 {total_before} → {total_after}"
+    )
+
+    # 6. 断言 DB 落库
+    with get_db_session() as db:
+        gap = db.query(KnowledgeGap).filter(KnowledgeGap.gap_id == gap_id).first()
+        assert gap is not None, f"DB 中未找到 gap_id={gap_id}"
+        assert gap.title is not None and len(gap.title) > 0
+        assert gap.status == "open"
+        assert gap.source_feedback_id is not None, "source_feedback_id 应同步写入（D18）"
+
+        link = (
+            db.query(GapFeedbackLink)
+            .filter(GapFeedbackLink.gap_id == gap.id)
+            .first()
+        )
+        assert link is not None, f"DB 中未找到 gap_id={gap.id} 的 gap_feedback_link"
+        assert link.feedback_id == fb_data["id"], (
+            f"gap_feedback_link.feedback_id={link.feedback_id} 应等于 feedback_id={fb_data['id']}"
+        )
