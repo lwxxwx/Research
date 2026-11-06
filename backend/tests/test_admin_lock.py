@@ -147,3 +147,191 @@ def test_C2_verify_pg_advisory_xact_lock_exists():
             text("SELECT COUNT(*) FROM pg_proc WHERE proname = 'pg_advisory_xact_lock'")
         ).scalar()
         assert row >= 1
+
+# ============================================================
+# B 类：唯一约束冲突恢复（G6 补齐，Sprint3 §2.4）
+# ============================================================
+# B 类测试策略：
+#   - 用 monkeypatch 让 Session.commit 在第 1 次抛 IntegrityError，触发重试路径
+#   - 验证重试后按场景判断（不伪装成功，也不死循环）
+# B 类测试的公共 import
+from app.persistence.db import get_db_session
+
+def _run_bootstrap_cli(username: str) -> int:
+    """直接调 bootstrap_admin.main()，返回退出码（不走 subprocess，便于 monkeypatch）。"""
+    import sys
+    from scripts import bootstrap_admin
+
+    orig_argv = sys.argv
+    sys.argv = ["bootstrap_admin.py", "--username", username]
+    try:
+        return bootstrap_admin.main()
+    finally:
+        sys.argv = orig_argv
+
+
+def _cleanup_user(username: str) -> None:
+    """清理测试用户（按 username 精确删除）。"""
+    from app.persistence.db import get_db_session
+    with get_db_session() as db:
+        db.query(User).filter(User.username == username).delete(synchronize_session=False)
+        db.commit()
+
+
+def test_B1_integrity_conflict_retry_then_scene4(monkeypatch):
+    """B1：第 1 次 commit 抛 IntegrityError → 重试 → 场景 4（已有 admin）→ 返回 0。
+
+    验证：唯一约束冲突后回滚 + 重试 + 重读，按场景判断。
+    """
+    import uuid as _uuid
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session as ORMSession
+
+    # 1. 造一个活跃 admin
+    uname_admin = f"b1_admin_{_uuid.uuid4().hex[:8]}"
+    from app.persistence.db import get_db_session
+    with get_db_session() as db:
+        db.add(User(username=uname_admin, role="admin", is_active=True))
+        db.commit()
+
+    # 2. 让第 1 次 commit 抛 IntegrityError
+    orig_commit = ORMSession.commit
+    call_counter = {"n": 0}
+
+    def _mock_commit(self, *args, **kwargs):
+        call_counter["n"] += 1
+        if call_counter["n"] == 1:
+            raise IntegrityError("simulated unique violation", None, Exception("conflict"))
+        return orig_commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(ORMSession, "commit", _mock_commit)
+
+    # 3. 跑 CLI（新用户名，重试后应命中场景 4）
+    new_uname = f"b1_new_{_uuid.uuid4().hex[:8]}"
+    try:
+        exit_code = _run_bootstrap_cli(new_uname)
+        # 第 1 次 commit 冲突 → 重试 → 第 2 次发现已有 admin → 场景 4 → 0
+        assert exit_code == 0
+        # 确认没创建新用户
+        with get_db_session() as db:
+            assert db.query(User).filter(User.username == new_uname).first() is None
+    finally:
+        monkeypatch.setattr(ORMSession, "commit", orig_commit)
+        _cleanup_user(uname_admin)
+        _cleanup_user(new_uname)
+
+
+def test_B2_integrity_conflict_retry_then_scene1(monkeypatch):
+    """B2：第 1 次 commit 抛 IntegrityError → 重试 → 场景 1（用户名是 engineer）→ 返回 1。
+
+    验证：冲突后重试，发现用户名已存在且不是 admin，按场景 1 拒绝。
+    """
+    import uuid as _uuid
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session as ORMSession
+
+    # 1. 造一个 engineer 用户名
+    uname_eng = f"b2_eng_{_uuid.uuid4().hex[:8]}"
+    from app.persistence.db import get_db_session
+    with get_db_session() as db:
+        db.add(User(username=uname_eng, role="engineer", is_active=True))
+        db.commit()
+
+    # 2. 让第 1 次 commit 抛 IntegrityError
+    orig_commit = ORMSession.commit
+    call_counter = {"n": 0}
+
+    def _mock_commit(self, *args, **kwargs):
+        call_counter["n"] += 1
+        if call_counter["n"] == 1:
+            raise IntegrityError("simulated unique violation", None, Exception("conflict"))
+        return orig_commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(ORMSession, "commit", _mock_commit)
+
+    # 3. 跑 CLI（用 engineer 用户名，重试后应命中场景 1）
+    try:
+        exit_code = _run_bootstrap_cli(uname_eng)
+        assert exit_code == 1
+    finally:
+        monkeypatch.setattr(ORMSession, "commit", orig_commit)
+        _cleanup_user(uname_eng)
+
+
+def test_B3_integrity_conflict_retry_then_scene2(monkeypatch):
+    """B3：第 1 次 commit 抛 IntegrityError → 重试 → 场景 2（禁用 admin）→ 返回 1。
+
+    验证：冲突后重试，发现用户名是已禁用 admin，按场景 2 拒绝。
+    """
+    import uuid as _uuid
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session as ORMSession
+
+    # 1. 造一个禁用的 admin
+    uname_dis = f"b3_dis_{_uuid.uuid4().hex[:8]}"
+    from app.persistence.db import get_db_session
+    with get_db_session() as db:
+        db.add(User(username=uname_dis, role="admin", is_active=False))
+        db.commit()
+
+    # 2. 让第 1 次 commit 抛 IntegrityError
+    orig_commit = ORMSession.commit
+    call_counter = {"n": 0}
+
+    def _mock_commit(self, *args, **kwargs):
+        call_counter["n"] += 1
+        if call_counter["n"] == 1:
+            raise IntegrityError("simulated unique violation", None, Exception("conflict"))
+        return orig_commit(self, *args, **kwargs)
+
+    monkeypatch.setattr(ORMSession, "commit", _mock_commit)
+
+    # 3. 跑 CLI（用禁用 admin 用户名，重试后应命中场景 2）
+    try:
+        exit_code = _run_bootstrap_cli(uname_dis)
+        assert exit_code == 1
+    finally:
+        monkeypatch.setattr(ORMSession, "commit", orig_commit)
+        _cleanup_user(uname_dis)
+
+
+def test_B4_all_retries_exhausted_returns_2(monkeypatch):
+    """B4：场景 5（创建初始 admin）时每次 commit 都抛 IntegrityError → 重试耗尽 → 返回 2。"""
+    import uuid as _uuid
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session as ORMSession
+    from app.persistence.db import get_db_session
+
+    # 1. 临时禁用所有活跃 admin（finally 恢复）
+    with get_db_session() as db:
+        active_admin_ids = [u.id for u in db.query(User).filter(User.role == "admin", User.is_active.is_(True)).all()]
+        if active_admin_ids:
+            db.query(User).filter(User.id.in_(active_admin_ids)).update(
+                {User.is_active: False}, synchronize_session=False,
+            )
+            db.commit()
+
+    orig_commit = ORMSession.commit
+
+    def _always_fail_commit(self, *args, **kwargs):
+        raise IntegrityError("simulated unique violation", None, Exception("conflict"))
+
+    monkeypatch.setattr(ORMSession, "commit", _always_fail_commit)
+
+    new_uname = f"b4_{_uuid.uuid4().hex[:8]}"
+    try:
+        exit_code = _run_bootstrap_cli(new_uname)
+        assert exit_code == 2
+    finally:
+        # 先恢复 commit 方法，再恢复 admin 状态（否则恢复的 commit 也被拦截）
+        monkeypatch.setattr(ORMSession, "commit", orig_commit)
+        with get_db_session() as db:
+            if active_admin_ids:
+                db.query(User).filter(User.id.in_(active_admin_ids)).update(
+                    {User.is_active: True}, synchronize_session=False,
+                )
+                db.commit()
+
+    # 确认没创建用户
+    with get_db_session() as db:
+        assert db.query(User).filter(User.username == new_uname).first() is None
