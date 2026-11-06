@@ -2,8 +2,8 @@
 
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
-> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）🟡 进行中（Commit 3/5）
-> 最后更新：2026-11-06（新增 G4 章节、G5 章节 Commit 1、Commit 2、Commit 3）
+> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 主体完成（Commit 1–3，仅 T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）🟡 进行中（Commit 1/3）
+> 最后更新：2026-11-06（新增 G6 章节；补记 G4 章节、G5 章节 Commit 1、Commit 2、Commit 3）
 
 ---
 
@@ -842,8 +842,93 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | 1 | `feat(s3-g5): add create_gap_from_feedback + unify ID generator` | ✅ 完成 |
 | 2 | `feat(s3-g5): wire knowledge_gap generation in feedback_service`（`_dispatch_evolution` 加 `knowledge_gap` 分支；`FeedbackOut.knowledge_gap_ref` 采用方案 A+ 内存透传；三层 DTO 对齐） | ✅ 完成 |
 | 3 | `test(s3-g5): E2E test for knowledge_gap generation + gap_feedback_link`（`test_feedback_e2e.py` 加场景，D20：`total_before + 1`；另含 G4 遗留 4 个补测） | ✅ 完成 |
-| 4 | `test(s3-g5): G4 遗留 T-01~T-05 负面用例补全`（接口层 401 / rule_admin 正向 / engineer 知识库越权 / engineer 自身任务正向 / 状态码扫描） | ⏳ 待做（**T-01~T-04 已随 Commit 3 提前完成，仅剩 T-05 状态码扫描**） |
+| 4 | `test(s3-g5): G4 遗留 T-01~T-05 负面用例补全`（接口层 401 / rule_admin 正向 / engineer 知识库越权 / engineer 自身任务正向 / 状态码扫描） | ⏳ 待做（**T-01~T-04 已随 Commit 3 提前完成；T-05 状态码扫描改由 G6 Commit 2 承接**） |
 | 5 | `docs(s3-g5): G5 章节 + 完整回归` | ⏳ 待做 |
+
+---
+
+## G6：完整回归 + B 类并发测试 + 部署检查清单（2026-11-06）
+
+> 状态：🟡 进行中（Commit 1 已完成：B 类并发测试 + `bootstrap_admin.py` 重试逻辑 + `vite-env.d.ts` 补全）
+> 依据：`Sprint3_详细执行计划_V1.0.md` §2.4（B 类并发测试） + §13（统一验收）
+> 核心发现：`bootstrap_admin.py` 的 `except IntegrityError` 直接 `return 2`，**没有 §2.4 要求的"回滚 → 重试 → 重读 → 按场景判断"逻辑**。所以 B 类不只是"补测试"，而是"补代码 + 补测试"两件事。
+
+### G6.0 G6 与原计划的差异
+
+| 项 | 原计划 | 实际 |
+|---|---|---|
+| B 类（唯一约束冲突恢复） | §2.4 要求 A/C 类在 G2 完成、B 类延后至 G6 补测试 | 代码侧本身缺重试逻辑，G6 需先补 `bootstrap_admin.py`，再补 4 个 B 类测试 |
+| T-05 状态码全量扫描 | 原属 G5 Commit 4 | 并入 G6 Commit 2（与部署检查清单同批交付） |
+| `vite-env.d.ts` | G4 遗留的潜在问题 | G6 Commit 1 顺手修复（`declare module "*.vue"`） |
+
+### G6.1 Commit 1：`bootstrap_admin.py` 补齐 B 类重试逻辑
+
+**改造思路**：把"单次尝试"从 `main()` 里拆出来，让重试循环只管"要不要再来一次"，场景判断仍由单次尝试内的既有逻辑负责。
+
+| 改动 | 说明 |
+|---|---|
+| 拆出 `_bootstrap_once(args)` | 单次尝试 = 独立事务 + 独立 session + 重新 `acquire_admin_lock`；退出时由 `get_db_session()` 自动 rollback / commit |
+| `main()` 加 `for attempt in range(_MAX_INTEGRITY_RETRIES)` | 每次重试开新 session + 新事务，重新读 DB 状态，不复用上一次的脏 Session |
+| `except IntegrityError` 分支 | `attempt < max - 1` → 打印 `RETRY:` 并按 `0.1s * (attempt + 1)` 退避后重试；`attempt == max - 1` → 打印 `ERROR:` 并 `return 2`（**不伪装成功**） |
+| `except AdminLockTimeoutError` / `except Exception` 放在循环外 | 这两类不重试，直接 `return 2`，避免"锁超时被当成唯一约束冲突反复重试" |
+
+**关键点**：`with get_db_session() as db:` 退出时抛异常会**自动 rollback**，所以 `except IntegrityError` 里不需要再手动 `rollback()`。重试拿到的是干净的新 session，能正确重读到最新 DB 状态（例如并发进程已建好的 admin）。
+
+### G6.2 Commit 1：`test_admin_lock.py` 新增 4 个 B 类测试
+
+**背景**：B 类验证的核心不是"能重试"，而是"重试之后**按场景判断**"，以及"重试耗尽**不伪装成功**"。
+
+| 测试 | 构造场景 | 断言 |
+|---|---|---|
+| `test_B1_integrity_conflict_retry_then_scene4` | 第 1 次 commit 抛 `IntegrityError` → 重试时 DB 已有活跃 admin（场景 4） | 返回 `0`；不创建新 admin（走"已有 admin，无需创建"分支） |
+| `test_B2_integrity_conflict_retry_then_scene1` | 冲突 → 重试 → 目标用户名是 `engineer`（场景 1） | 返回 `1`（拒绝，符合角色约束） |
+| `test_B3_integrity_conflict_retry_then_scene2` | 冲突 → 重试 → 存在禁用 admin（场景 2） | 返回 `1`（拒绝，不覆盖禁用账号） |
+| `test_B4_all_retries_exhausted_returns_2` | 每次 commit 都冲突 → 重试耗尽 | 返回 `2`；DB 中不留下新用户 |
+
+**B4 的关键设计**：`monkeypatch Session.commit` 是**全局拦截**，会连 `get_db_session()` 退出时的自动 `commit()` 一起拦。若不处理，每次 attempt 都先命中场景 4（返回 0 "已有 admin"），根本走不到"创建分支"，测出来的就不是"重试耗尽"。所以 B4 **必须先临时禁用所有活跃 admin**（`finally` 恢复），强制 `_bootstrap_once` 进入场景 5（创建分支），再让每次 commit 抛 `IntegrityError`。
+
+**`finally` 恢复顺序**：先 `monkeypatch.setattr(...)` 恢复原始 `Session.commit`，**再**操作 DB 恢复 admin 状态——否则用来恢复 admin 的那次 `commit()` 也会被 mock 拦住。
+
+### G6.3 Commit 1：`frontend/src/vite-env.d.ts` 补全
+
+| 改动 | 说明 |
+|---|---|
+| 追加 `declare module "*.vue"` | 补上 `.vue` 单文件组件的模块声明，解决 TS 侧无法识别 `.vue` 的问题（G4 遗留的潜在问题，G6 顺手修） |
+
+> 配套说明：`@/*` 别名由 `tsconfig.app.json` 的 `baseUrl` + `paths` 承担，`vite.config.ts` 的 `resolve.alias` 负责运行时解析，三处必须同时存在，否则会出现"能跑但编辑器报 TS2307"。
+
+### G6.4 Commit 1 验收证据
+
+| 项 | 结果 |
+|---|---|
+| `bootstrap_admin.py` import 校验 | ✅ `OK` |
+| B 类测试（4 个） | ✅ **4 passed** |
+| 全量非 integration | ✅ **635 passed, 2 skipped, 24 deselected, 0 failed**（631 → 635，+4） |
+
+### G6.5 Commit 1 踩坑与修正（详见 `debug_03.md` §10）
+
+| # | 坑 | 修正 |
+|---|---|---|
+| 1 | `bootstrap_admin.py` 无 B 类重试逻辑，冲突即 `return 2` | 拆 `_bootstrap_once` + 重试循环，每次新 session / 新事务 / 重新加锁 |
+| 2 | B4 测试缺 `get_db_session` import，报 `NameError` | B1–B4 函数内显式 `from app.persistence.db import get_db_session` |
+| 3 | `monkeypatch Session.commit` 全局拦截，被场景 4 抢先命中 | B4 先临时禁用全部活跃 admin（`finally` 恢复），强制走场景 5 |
+| 4 | `finally` 中恢复 DB 时 commit 仍被 mock | 先恢复 `Session.commit` 方法，再恢复 admin 状态 |
+| 5 | `vite-env.d.ts` 缺 `*.vue` 声明 | 追加 `declare module "*.vue"` |
+
+**沉淀的两条通用规则**：
+
+1. **测试重试逻辑，先确认"命中哪个场景分支"**，否则测到的可能是"场景 1–4 的正常返回"，而不是"重试路径"。
+2. **`monkeypatch` 修改 Session / 连接这类全局对象时，恢复顺序必须与依赖关系反着来**：先解除 mock，再做需要 commit 的收尾。
+
+### G6.6 G6 后续 Commit（待做）
+
+| Commit | 内容 | 状态 |
+|---|---|---|
+| 1 | `feat(s3-g6): B-class concurrent tests + bootstrap retry + vite-env.d.ts` | ✅ 完成 |
+| 2 | `docs(s3-g6): deployment checklist + T-05 status code scan`（部署检查清单 + T-05 状态码全量扫描） | ⏳ 待做 |
+| 3 | `docs(s3): Sprint 3 phase complete - G1-G6 all done`（Sprint 3 封板） | ⏳ 待做 |
+
+> Commit 2 需一并处理 `debug_03.md` §2.2 记录的长期项：在 `docker-compose.dev.yml` 的 `backend.volumes` 补 `- ../../docs:/docs`，让容器内脚本可直接写 `docs/`，避免手工搬运。
 
 ---
 
@@ -855,8 +940,8 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G2 | Migration + auth 底座 + CLI + 用户管理 | ✅ 完成 |
 | G3 | RBAC 鉴权挂载 + 审计字段后端注入 + 对象级数据范围 + IDOR 安全测试 | ✅ G3-A / G3-B / G3-C / G3-D 全部完成，G3 封板 |
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
-| G5 | 反馈闭环 E2E | 🟡 进行中（Commit 3/5 完成：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测） |
-| G6 | 完整回归 + 负向安全测试 + B 类并发 | ⏳ 待开始 |
+| G5 | 反馈闭环 E2E | ✅ 主体完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测）；T-05 状态码扫描并入 G6 Commit 2 |
+| G6 | 完整回归 + B 类并发 + 部署检查清单 | 🟡 进行中（Commit 1/3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts`） |
 
 ### 测试基线演进
 
@@ -872,3 +957,4 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G5 Commit 1 完成 | 626 passed, 2 skipped, 24 deselected, 0 failed（新增函数未接线，零破坏） |
 | G5 Commit 2 完成 | 626 passed、0 failed（接线后零回归；`knowledge_gap` 32 → 33，`gap_feedback_link` 新增 1 条） |
 | G5 Commit 3 完成 | **631 passed, 2 skipped, 24 deselected, 0 failed**（626 → 631，+5 测试：E2E 1 + G4 遗留补测 4） |
+| G6 Commit 1 完成 | **635 passed, 2 skipped, 24 deselected, 0 failed**（631 → 635，+4 B 类并发测试） |

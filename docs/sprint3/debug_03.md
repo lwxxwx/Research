@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-06（新增 S3-G4-FrontendAuth、S3-G5-KnowledgeGap〈Commit 1、2、3〉）
+> **最后更新**：2026-11-06（新增 S3-G4-FrontendAuth、S3-G5-KnowledgeGap〈Commit 1、2、3〉、S3-G6-Concurrency）
 
 ---
 
@@ -17,8 +17,9 @@
 7. [S3-G3D-ErrorSemantics：错误语义统一与负面测试补全](#7-s3-g3d-errorsemantics错误语义统一与负面测试补全2026-11-05)
 8. [S3-G4-FrontendAuth：前端登录 + 路由守卫 + 菜单权限](#8-s3-g4-frontendauth前端登录--路由守卫--菜单权限2026-11-06)
 9. [S3-G5-KnowledgeGap：知识缺口生成链路补实现](#9-s3-g5-knowledgegap知识缺口生成链路补实现2026-11-06)
-10. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#10-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
-11. [附：版本与适用范围](#11-附版本与适用范围)
+10. [S3-G6-Concurrency：B 类并发测试与重试恢复](#10-s3-g6-concurrencyb-类并发测试与重试恢复2026-11-06)
+11. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#11-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
+12. [附：版本与适用范围](#12-附版本与适用范围)
 
 ---
 
@@ -1402,16 +1403,209 @@ with get_db_session() as db:
 
 ---
 
-## 10. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
+## 10. S3-G6-Concurrency：B 类并发测试与重试恢复（2026-11-06）
+
+> **状态**：✅ 已完成（G6 Commit 1）
+> **核心难点**：Sprint3 §2.4 把 B 类（唯一约束冲突恢复）留到 G6 补齐。但 `bootstrap_admin.py` 原本没有"回滚 → 重试 → 重读 → 按场景判断"逻辑，`except IntegrityError` 直接返回 2，所以既要**补代码**，也要**补测试**。
+> **最终结果**：全量非 integration **635 passed, 2 skipped, 0 failed**（631 → 635，+4 B 类测试）。
+
+### 10.1 坑 1：`bootstrap_admin.py` 缺少 B 类重试逻辑
+
+**现象**：
+
+`bootstrap_admin.py` 的 `except IntegrityError` 只有一行：
+
+```python
+except IntegrityError as exc:
+    _print(f"ERROR: integrity error: {exc}")
+    return 2
+```
+
+唯一约束冲突（典型场景：两个进程同时初始化 admin）直接被判为失败，不会回滚后重读 DB、也不会重新判定场景。这与 §2.4 要求的"冲突后能恢复"不符。
+
+**修复**：
+
+拆出 `_bootstrap_once(args)` 承担"单次尝试"（独立 session + 独立事务 + 重新 `acquire_admin_lock`），`main()` 外层加重试循环：
+
+```python
+for attempt in range(_MAX_INTEGRITY_RETRIES):
+    try:
+        return _bootstrap_once(args)
+    except IntegrityError as exc:
+        if attempt < _MAX_INTEGRITY_RETRIES - 1:
+            _print(f"RETRY: integrity error on attempt {attempt + 1}/{_MAX_INTEGRITY_RETRIES}...")
+            time.sleep(0.1 * (attempt + 1))
+            continue
+        _print(f"ERROR: integrity error after {_MAX_INTEGRITY_RETRIES} attempts: {exc}")
+        return 2
+    except AdminLockTimeoutError:
+        _print("ERROR: admin lock timeout, please retry")
+        return 2
+    except Exception as exc:
+        _print(f"ERROR: {type(exc).__name__}: {exc}")
+        return 2
+```
+
+**关键点**：
+
+1. `with get_db_session() as db:` 退出时抛异常会**自动 `rollback()`**，所以 `except IntegrityError` 里不需要手动 rollback。
+2. 每次重试都是**新 session + 新事务 + 重新加锁 + 重新读 DB**，这样"另一个进程已先建成 admin"能在重试里被正确识别为场景 4，而不是把冲突当失败。
+3. 重试耗尽时仍返回 2，**不伪装成功**——这是 B 类的底线。
+4. `AdminLockTimeoutError` / 通用 `Exception` 放在循环外，不参与重试，避免"锁超时被当成唯一约束冲突反复重试"。
+
+### 10.2 坑 2：B4 测试的 `get_db_session` 未 import
+
+**现象**：
+
+`test_B4` 报 `NameError: name 'get_db_session' is not defined`。
+
+**根因**：
+
+B 类测试函数体内直接用了 `get_db_session()`，但只在文件其它位置 import 过，函数作用域内没引入（该文件风格是函数内局部 import）。
+
+**修复**：
+
+B1–B4 函数内补 `from app.persistence.db import get_db_session`。
+
+### 10.3 坑 3：`monkeypatch Session.commit` 拦截了所有 `db.commit()`
+
+**现象**：
+
+B4 跑起来 stdout 是：
+
+```text
+OK: system already has 9 active admin(s), no need to create      ← 场景 4 命中
+RETRY: integrity error on attempt 1/3, retrying after rollback...
+OK: system already has 9 active admin(s), no need to create      ← 又一次场景 4
+...
+```
+
+即：每次 attempt 都先返回 0（"已有 admin，无需创建"），然后 `get_db_session()` 退出时的自动 commit 被 mock 抛 `IntegrityError`，于是"重试"了，但**重试走的还是场景 4**。测到的根本不是"重试耗尽"，而是"场景 4 + 退出时 commit 被拦"。
+
+**根因**：
+
+`monkeypatch Session.commit` 是**类级别全局拦截**，所有 `db.commit()` 都会被命中——包括显式业务 commit，也包括 `get_db_session()` 上下文退出时的自动 commit。只要 DB 里还有活跃 admin，`_bootstrap_once` 就会在场景 4 提前返回 0，压根走不到创建分支（场景 5）。
+
+**修复**：
+
+B4 先**临时禁用所有活跃 admin**（`finally` 恢复），强制 `_bootstrap_once` 走到场景 5（创建分支），再让每次 commit 冲突，从而真实验证"重试耗尽 → 返回 2 → 不创建用户"：
+
+```python
+def test_B4_all_retries_exhausted_returns_2(monkeypatch):
+    from app.persistence.db import get_db_session
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session as ORMSession
+
+    # 1. 临时禁用所有活跃 admin（finally 恢复）
+    with get_db_session() as db:
+        active_admin_ids = [
+            u.id for u in db.query(User)
+            .filter(User.role == "admin", User.is_active.is_(True)).all()
+        ]
+        if active_admin_ids:
+            db.query(User).filter(User.id.in_(active_admin_ids)).update(
+                {User.is_active: False}, synchronize_session=False,
+            )
+            db.commit()
+
+    orig_commit = ORMSession.commit
+
+    def _always_fail_commit(self, *args, **kwargs):
+        raise IntegrityError("simulated unique violation", None, Exception("conflict"))
+
+    monkeypatch.setattr(ORMSession, "commit", _always_fail_commit)
+
+    new_uname = f"b4_{uuid.uuid4().hex[:8]}"
+    try:
+        exit_code = _run_bootstrap_cli(new_uname)
+        assert exit_code == 2
+    finally:
+        # 先恢复 commit 方法，再恢复 admin 状态（否则恢复的 commit 也会被拦截）
+        monkeypatch.setattr(ORMSession, "commit", orig_commit)
+        with get_db_session() as db:
+            if active_admin_ids:
+                db.query(User).filter(User.id.in_(active_admin_ids)).update(
+                    {User.is_active: True}, synchronize_session=False,
+                )
+                db.commit()
+
+    # 确认没创建用户
+    with get_db_session() as db:
+        assert db.query(User).filter(User.username == new_uname).first() is None
+```
+
+**教训**：
+
+1. **`monkeypatch Session.commit` 是全局拦截**：显式 commit 和 `get_db_session` 退出时的自动 commit 都会被命中。测试重试逻辑前，必须想清楚"这次 attempt 会命中哪个场景分支"。
+2. **B 类"唯一约束冲突"的正确姿势**：先把 DB 调到"会走创建分支"的状态（此处是临时禁用活跃 admin），再让每次 commit 冲突，才能测到"重试耗尽"。
+3. **`finally` 恢复顺序**：先 `monkeypatch.setattr(...)` 还原 `commit` 方法，**再**操作 DB 恢复数据；顺序反了，恢复用的 commit 也会被 mock 拦住，数据恢复不了。
+
+### 10.4 坑 4：`vite-env.d.ts` 缺 `*.vue` 类型声明
+
+**现象**：
+
+`import CaseListPage from "@/pages/CaseListPage.vue"` 在编辑器里报 `TS(2307)：找不到模块"@/pages/CaseListPage.vue"或其相应的类型声明`，但 `npm run dev` / `npm run build` 都正常。
+
+**根因**：
+
+Vite 侧能解析 `.vue`（`@vitejs/plugin-vue` + `resolve.alias`），但 TypeScript 语言服务既不认识 `@` 别名（需 `paths`），也不认识 `.vue` 后缀（需模块声明）。所以是"编辑器静态检查告警"，不是运行时错误。
+
+**修复**：
+
+`frontend/src/vite-env.d.ts` 追加：
+
+```typescript
+declare module "*.vue" {
+  import type { DefineComponent } from "vue";
+  const component: DefineComponent<{}, {}, any>;
+  export default component;
+}
+```
+
+**配套确认**：
+
+| 位置 | 职责 | 缺了会怎样 |
+|---|---|---|
+| `tsconfig.app.json` 的 `baseUrl` + `paths`（`@/*` → `./src/*`） | 让 TS 认识 `@` 别名 | 报 TS2307（别名未解析） |
+| `vite-env.d.ts` 的 `declare module "*.vue"` | 让 TS 认识 `.vue` 文件 | 报 TS2307（模块无声明） |
+| `vite.config.ts` 的 `resolve.alias` | 运行时/打包时解析 `@` | `npm run dev` 直接失败 |
+
+**教训**：
+
+1. "能跑但报红"通常是 Vite 认识、TS 不认识——两套解析体系要分别配齐，不能只看运行结果。
+2. `paths` 要写在**业务代码实际使用的那个 tsconfig**（本项目是 `tsconfig.app.json`，根 `tsconfig.json` 只做 `references`），写错位置依旧报红。
+3. 改完执行 `Ctrl+Shift+P → Restart TypeScript Server`，否则缓存会让改动看起来不生效。
+
+### 10.5 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `bootstrap_admin.py` import 校验 | ✅ `OK` |
+| B 类测试（4 个） | ✅ 4 passed |
+| 全量非 integration | ✅ **635 passed, 2 skipped, 24 deselected, 0 failed**（631 → 635） |
+| `frontend`：`npm run type-check` | ✅ 0 errors（`*.vue` 声明生效） |
+
+### 10.6 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | `bootstrap_admin.py` 无 B 类重试逻辑 | 拆 `_bootstrap_once` + `for attempt in range(N)`，每次新 session、新事务、重新加锁、重新读场景 |
+| 2 | B4 的 `get_db_session` 未 import | B 类测试函数内补 `from app.persistence.db import get_db_session` |
+| 3 | `monkeypatch Session.commit` 全局拦截 | 测重试前先确认命中场景 5（创建分支），别被场景 4 抢先；`finally` 先还原方法再恢复 DB |
+| 4 | `vite-env.d.ts` 缺 `*.vue` 声明 | `paths` + `declare module "*.vue"` + `resolve.alias` 三处齐备，改完重启 TS Server |
+
+---
+
+## 11. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
 
 > **状态**：⏳ 待验证（G3 阶段执行，G2 不触发）
 > **规划依据**：[Sprint3_详细执行计划_V1.0.md §3.3](./Sprint3_详细执行计划_V1.0.md)
 
-### 10.1 为什么 G2 未触发
+### 11.1 为什么 G2 未触发
 
 G2 的 `get_current_user` 和 `update_user` / `soft_delete_user` 各自使用独立的 `with get_db_session() as db:`，不共享 Session。因此 admin_lock 和业务 Service 不冲突。
 
-### 10.2 G3 阶段可能触发
+### 11.2 G3 阶段可能触发
 
 G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_user` 和业务 Service。此时：
 
@@ -1423,7 +1617,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 - **方案 A（推荐）**：Service 层不 `db.begin()`，直接复用 `get_db_session` 的事务。
 - **方案 B**：最后管理员保护需要 READ COMMITTED，用独立 Session + `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`。
 
-### 10.3 验收测试用例（G3 阶段）
+### 11.3 验收测试用例（G3 阶段）
 
 1. **正常路径**：GET /auth/me 鉴权 → PATCH /auth/users/{id} 降级非最后 admin，不抛 `InvalidRequestError`。
 2. **受保护路径**：唯一 admin 降级 → 抛 `LastAdminProtectionError`，不抛 `InvalidRequestError`。
@@ -1431,7 +1625,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 
 ---
 
-## 11. 附：版本与适用范围
+## 12. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
