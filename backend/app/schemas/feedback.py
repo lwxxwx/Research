@@ -193,6 +193,7 @@ class FeedbackOut(BaseModel):
     )
 
     rule_candidate_ref: str | None = None
-    created_by: int | None = None
+    knowledge_gap_ref: str | None = None    # ← 加这行（D17 方案 A+）
 
+    created_by: int | None = None
     created_at: datetime

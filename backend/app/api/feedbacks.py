@@ -48,6 +48,7 @@ def submit_feedback(
         expert_suggestion=out.expert_suggestion,
         suggestion_diff=[d.model_dump() for d in out.suggestion_diff],
         rule_candidate_ref=out.rule_candidate_ref,
+        knowledge_gap_ref=out.knowledge_gap_ref,    # ← 加这行
         created_by=out.created_by,
         created_at=out.created_at,
     )

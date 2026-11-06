@@ -169,6 +169,7 @@ class FeedbackResponse(BaseModel):
     expert_suggestion: str | None = None
     suggestion_diff: list[dict[str, Any]] = Field(default_factory=list)
     rule_candidate_ref: str | None = None
+    knowledge_gap_ref: str | None = None    # ← 加这行
     created_by: int | None = None
     created_at: datetime
 
