@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-06（新增 S3-G4-FrontendAuth、S3-G5-KnowledgeGap〈Commit 1、2〉）
+> **最后更新**：2026-11-06（新增 S3-G4-FrontendAuth、S3-G5-KnowledgeGap〈Commit 1、2、3〉）
 
 ---
 
@@ -1157,10 +1157,11 @@ G3-A 手工测试报告报 `GET /api/knowledge-docs` → 404，初步判断为"�
 
 ## 9. S3-G5-KnowledgeGap：知识缺口生成链路补实现（2026-11-06）
 
-> **状态**：🟡 进行中（Commit 1、2 已完成）
+> **状态**：🟢 基本完成（Commit 1、2、3 已完成，E2E 链路打通，631 passed；仅剩 T-05 状态码全量扫描与 G5 最终文档收尾）
 > **核心发现**：Sprint 1/2 的 `knowledge_gap` / `gap_feedback_link` 表**没有任何生产代码写入路径**，DB 里 26 条 `knowledge_gap` 是 Sprint 2 测试 / demo 手工造的测试数据。G5 必须补实现。
 > **Commit 1 结果**：`create_gap_from_feedback` 函数 + 统一 ID 生成器 `make_prefixed_id` 落地，全量 626 passed 零破坏。
 > **Commit 2 结果**：`_dispatch_evolution` 接线 + `FeedbackOut`/`FeedbackResponse`/路由三层 DTO 透传，API 返回 `GAP-20261106-5708C0`，全量 626 passed。
+> **Commit 3 结果**：E2E 生成链路用例 + G4 遗留 4 个补测落地，全量 **631 passed、0 failed**（跨 Session 污染已在 9.5c 解决）。
 
 ### 9.1 坑 1：`_make_candidate_id` 的 U+2011 技术债源头（G5 顺带修复）
 
@@ -1293,8 +1294,9 @@ title_raw = (
 | `make_prefixed_id("RC", 6)` | ✅ `RC-20261106-5B167C`（ASCII `-`） |
 | 全量非 integration | ✅ 626 passed, 2 skipped, 24 deselected, 0 failed |
 | Commit 2 后回归 | ✅ 626 passed、0 failed（见 9.5b 结果） |
+| Commit 3 后全量 | ✅ 631 passed, 2 skipped, 24 deselected, 0 failed（见 9.5c 结果） |
 
-### 9.5b 坑 6：API 层 DTO 漏传字段导致 `knowledge_gap_ref` 为空
+### 9.5b 坑 5：API 层 DTO 漏传字段导致 `knowledge_gap_ref` 为空
 
 **现象**：
 
@@ -1325,13 +1327,76 @@ title_raw = (
 2. **DTO 字段必须逐层对齐**：新增字段必须同时检查 `Service DTO` → `API Schema` → `路由组装` 三处。
 3. **全链路 grep 是终极大法**：遇到字段静默丢失，直接 `grep` 字段名，缺哪补哪。
 
+### 9.5c 坑 6：E2E 测试中的真实 Graph 触发跨 Session 污染
+
+**现象**：
+
+G5 Commit 3 新增的 `test_engineer_own_task_details_200` 用 `client_as_engineer.post("/review/tasks")` 创建任务，走真实 Graph（Mock LLM 也要走 `task_service.create_task` → `run_review_graph` → `_persist_review_report`）。
+
+全量回归时，`test_db_schema.py::test_trigger_rule_definition_updated_at_refresh` 挂：
+
+```text
+t1 = 2026-11-06 10:52:33.339680+00:00
+t2 = 2026-11-06 10:52:17.510604+00:00
+assert t2 > t1        # ← t2 比 t1 早 16 秒
+```
+
+**排查思路（逐步缩小范围）**：
+
+1. **查 DB**：`SELECT * FROM rule_definition WHERE rule_id LIKE 'TRIG_RULE_%'` → **0 行**（测试数据已回滚）。
+2. **单独跑用例**：`pytest tests/test_db_schema.py::test_trigger_rule_definition_updated_at_refresh -v` → **PASSED**。
+3. **单独跑全文件**：`pytest tests/test_db_schema.py -v` → **69 passed**。
+4. **全量跑**：`pytest -m "not integration"` → **1 failed**（`t2 < t1`）。
+5. **定位污染源**：G5 Commit 3 的 `test_engineer_own_task_details_200` 走 `create_task`（真实 Graph），内部 `get_db_session()` 真实 commit，污染 `rule_definition` 的 `updated_at`。
+
+**根因**：
+
+- `test_db_schema.py` 的 `db_session` fixture 用 `@pytest.fixture()`（function 级），**外层事务回滚隔离**。
+- 但 PostgreSQL 的事务快照隔离会导致：`db_session` 开始时的快照是旧的，而 `test_engineer_own_task_details_200` 在之前的测试里通过 `get_db_session()` **真实提交**了 `rule_definition` 的 `updated_at`，两相对比就出现 `t2 < t1`。
+- **根本问题**：`create_task` 走真实 Graph 会写 DB（`review_result` / `review_defect` / 规则命中相关表），跨 Session 不可见，污染后续测试。
+
+**修复**：
+
+`test_engineer_own_task_details_200` 改为**直接构造 `ReviewResult`（`created_by=engineer.id`）+ `commit`**，不走 Graph：
+
+```python
+with get_db_session() as db:
+    db.add(ReviewResult(
+        task_id=fake_task_id,
+        task_status="done",
+        created_by=eng_id,
+        review_output_json={"defects": [{"defect_id": "D1", ...}], "errors": []},
+        evidence_coverage=0.8,
+    ))
+    db.commit()
+```
+
+测试后 delete 清理。
+
+**结果**：
+
+- G4 遗留补测：4 passed
+- `test_db_schema.py`：69 passed
+- 全量非 integration：**631 passed, 2 skipped, 24 deselected, 0 failed**
+
+**教训**：
+
+1. **测试中的 `create_task` 不要走真实 Graph**：Graph 内部 `get_db_session()` 真实 commit，会跨 Session 污染其它用事务回滚隔离的测试。
+2. **测试数据「最小构造」**：直接 `db.add(ORMModel(...)) + commit`，比真实业务流程更可控。
+3. **跨文件测试污染排查法**：① 查 DB 确认无残留 → ② 单独跑 PASS → ③ 全文件跑 PASS → ④ 全量跑 FAIL → 定位到「哪个测试真实提交了数据」。
+4. **`db_session` 用事务回滚的局限**：PostgreSQL 事务快照隔离下，跨 Session 的数据变更可能导致同事务内的 `updated_at` 对比失败。
+
+**同类问题预警**：
+
+`test_engineer_own_task_details_200` 的修复模式（直接构造 DB 数据 + 清理）应推广到所有「需要真实任务 / 真实缺陷」的测试。`test_feedback_e2e.py` 的 `_run_task_and_get_defect_id` 走真实 Graph 是已知污染源，但它的测试在 `test_feedback_e2e.py` 内部有 `prepare_out_dir` 清理，暂未引发问题。
+
 ### 9.6 G5 后续 Commit（待做）
 
 | # | Commit | 内容 | 状态 |
 |---|---|---|---|
 | 1 | `feat(s3-g5): add create_gap_from_feedback + unify ID generator` | 生成函数 + 统一 ID 生成器 | ✅ |
 | 2 | `feat(s3-g5): wire knowledge_gap generation in feedback_service` | `_dispatch_evolution` 加 `knowledge_gap` 分支 + 三层 DTO 对齐（见 9.5b） | ✅ |
-| 3 | `test(s3-g5): E2E test` | `test_feedback_e2e.py` 加场景（D20：`total_before + 1`） | ⏳ |
+| 3 | `test(s3-g5): E2E test` | `test_feedback_e2e.py` 加场景（D20：`total_before + 1`）+ G4 遗留 4 个补测（见 9.5c） | ✅ |
 | 4 | `test(s3-g5): G4 遗留 T-01~T-05` | 5 个负面用例 | ⏳ |
 | 5 | `docs(s3-g5): G5 章节 + 完整回归` | 本文件补全 | ⏳ |
 
