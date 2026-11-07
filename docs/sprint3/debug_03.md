@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-06（新增 S3-G4-FrontendAuth、S3-G5-KnowledgeGap〈Commit 1、2、3〉、S3-G6-Concurrency）
+> **最后更新**：2026-11-07（新增 §10.5 T-05 状态码扫描踩坑、§12 Sprint 3 复盘；G6 章节收尾为 Commit 1–3 完成）
 
 ---
 
@@ -19,7 +19,8 @@
 9. [S3-G5-KnowledgeGap：知识缺口生成链路补实现](#9-s3-g5-knowledgegap知识缺口生成链路补实现2026-11-06)
 10. [S3-G6-Concurrency：B 类并发测试与重试恢复](#10-s3-g6-concurrencyb-类并发测试与重试恢复2026-11-06)
 11. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#11-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
-12. [附：版本与适用范围](#12-附版本与适用范围)
+12. [Sprint 3 复盘：10 大类踩坑总览](#12-sprint-3-复盘10-大类踩坑总览)
+13. [附：版本与适用范围](#13-附版本与适用范围)
 
 ---
 
@@ -1405,9 +1406,9 @@ with get_db_session() as db:
 
 ## 10. S3-G6-Concurrency：B 类并发测试与重试恢复（2026-11-06）
 
-> **状态**：✅ 已完成（G6 Commit 1）
+> **状态**：✅ 已完成（G6 Commit 1–3）
 > **核心难点**：Sprint3 §2.4 把 B 类（唯一约束冲突恢复）留到 G6 补齐。但 `bootstrap_admin.py` 原本没有"回滚 → 重试 → 重读 → 按场景判断"逻辑，`except IntegrityError` 直接返回 2，所以既要**补代码**，也要**补测试**。
-> **最终结果**：全量非 integration **635 passed, 2 skipped, 0 failed**（631 → 635，+4 B 类测试）。
+> **最终结果**：全量非 integration **645 passed, 2 skipped, 0 failed**（B 类落地时 635 → G6 封板 645，+4 B 类测试 + T-05 扫描用例）；冒烟 6/6 全过。
 
 ### 10.1 坑 1：`bootstrap_admin.py` 缺少 B 类重试逻辑
 
@@ -1576,16 +1577,59 @@ declare module "*.vue" {
 2. `paths` 要写在**业务代码实际使用的那个 tsconfig**（本项目是 `tsconfig.app.json`，根 `tsconfig.json` 只做 `references`），写错位置依旧报红。
 3. 改完执行 `Ctrl+Shift+P → Restart TypeScript Server`，否则缓存会让改动看起来不生效。
 
-### 10.5 修复后验证结果
+### 10.5 坑 5：T-05 状态码全量扫描——"看起来是缺陷"的四类口径问题
+
+> **背景**：T-05（状态码全量扫描）原属 G5 Commit 4，G6 承接。扫描要求是"逐个端点核对非 2xx 的语义是否符合权限矩阵"，实际做下来发现**大部分告警不是代码问题，而是扫描口径问题**。这一节记录的是"如何不被自己的扫描器骗"。
+
+**现象（四类"假缺陷"）**：
+
+| # | 扫描报出 | 真实情况 |
+|---|---|---|
+| 1 | `GET /api/knowledge-docs` 全量 404 | 扫描脚本照抄了 changelog 里的简写路径（少了 `/v1`），后端真实路径是 `/api/v1/knowledge-docs`。这是 BUG-G3A-001 被误判为"P1 后端未注册"的同一根因 |
+| 2 | engineer 访问他人任务，期望 403 却拿到 404 | **这是设计如此**（D6 防枚举），不是缺陷。按"角色级 403 / 对象级 404"两条线分别核对即可收敛 |
+| 3 | `POST /rule-candidates/{id}/status` 传非法 `status`，期望 422 却先被判为"未覆盖" | Pydantic `Literal["accepted","rejected"]` 在入参校验阶段就拦成 422，service 层的 `BusinessValueError` 分支**正常路径不可达**。这不算漏测，但要显式记录"该分支为将来放开 `Literal` 预留" |
+| 4 | 部分端点返回 307 / 405 | 扫描器请求了尾斜杠变体（`/cases/` vs `/cases`）或用错 HTTP 方法。307 是 FastAPI 的尾斜杠重定向，405 是方法不匹配，均属扫描器构造错误 |
+
+**根因**：
+
+1. **扫描源不是代码，而是文档表格**：`changelog` / 计划文档为了可读性省略了 `/api/v1` 前缀、把 `/status` 简写成 `/approve`，扫描器照抄就必然 404。
+2. **状态码语义有两条正交维度**：角色级拒绝（403）与对象级拒绝（404 伪装）是两套规则（D6 / D11），用单一"越权应 403"的断言去套全部端点必然误报。
+3. **422 有两个来源**：Pydantic 入参校验（先拦）与 service 层 `BusinessValueError`。前者生效时后者不执行，扫描器只看"是否 422"会漏掉"由哪一层返回"的区分。
+4. **重定向与方法不匹配被当成业务错误**：307 / 405 是 HTTP 层语义，和权限矩阵无关。
+
+**修正**：
+
+1. **扫描源改为应用内路由表**：启动时 dump `app.routes`（`method` + `path` + 依赖），以真实路径为准；文档表格只用于交叉核对，不作为请求来源。
+2. **断言按端点分类写**：每个端点先标注"角色级"还是"对象级"，再套对应期望码；对象级统一按 D6 断言 404。
+3. **422 用例注明拦截层**：`Literal` 类 422 断言"由 Pydantic 返回"，`BusinessValueError` 类断言"由 service 返回"，两者分开登记。
+4. **扫描器固定请求形态**：统一不带尾斜杠、按路由声明的方法请求；307 / 405 视为扫描器错误并直接修正请求，不登记为缺陷。
+
+**结果**：
+
+- 全量扫描无 5xx、无未处理异常直出；
+- 401（缺 header / 非法身份）、403（角色不匹配）、404（对象越权）、422（参数非法）四类语义与权限矩阵一致；
+- 扫描用例纳入回归后基线 635 → **645 passed**，6 条冒烟路径全过。
+
+**教训**：
+
+1. **扫描器的输入必须来自代码，不来自文档**：文档是给人读的，允许简写；机器核对必须用 `app.routes` 这类真实来源。
+2. **"越权"不是单一状态码**：角色级 403、对象级 404，两条规则并存是设计（D6 防枚举），不能统一成一条断言。
+3. **同一个状态码可能有多个产生层**：422 既可能来自 Pydantic，也可能来自 service，登记缺陷前先确认"谁返回的"。
+4. **HTTP 层语义（307 / 405）先排除，再谈业务语义**，否则容易把构造错误的请求算成业务缺陷。
+
+### 10.6 修复后验证结果
 
 | 验证项 | 结果 |
 |---|---|
 | `bootstrap_admin.py` import 校验 | ✅ `OK` |
 | B 类测试（4 个） | ✅ 4 passed |
-| 全量非 integration | ✅ **635 passed, 2 skipped, 24 deselected, 0 failed**（631 → 635） |
+| 全量非 integration（Commit 1） | ✅ **635 passed, 2 skipped, 24 deselected, 0 failed**（631 → 635） |
+| 全量非 integration（Commit 2） | ✅ **645 passed, 2 skipped, 24 deselected, 0 failed** |
+| 冒烟测试（6 条） | ✅ 6/6 全过 |
+| T-05 状态码扫描 | ✅ 四类语义一致，无 5xx |
 | `frontend`：`npm run type-check` | ✅ 0 errors（`*.vue` 声明生效） |
 
-### 10.6 经验沉淀速查
+### 10.7 经验沉淀速查
 
 | # | 坑 | 一句话结论 |
 |---|---|---|
@@ -1593,6 +1637,7 @@ declare module "*.vue" {
 | 2 | B4 的 `get_db_session` 未 import | B 类测试函数内补 `from app.persistence.db import get_db_session` |
 | 3 | `monkeypatch Session.commit` 全局拦截 | 测重试前先确认命中场景 5（创建分支），别被场景 4 抢先；`finally` 先还原方法再恢复 DB |
 | 4 | `vite-env.d.ts` 缺 `*.vue` 声明 | `paths` + `declare module "*.vue"` + `resolve.alias` 三处齐备，改完重启 TS Server |
+| 5 | T-05 扫描照抄文档路径 | 扫描源用 `app.routes`，不用文档简写；403/404 分两条线；307/405 属扫描器构造错误 |
 
 ---
 
@@ -1625,9 +1670,140 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 
 ---
 
-## 12. 附：版本与适用范围
+## 12. Sprint 3 复盘：10 大类踩坑总览
+
+> **用途**：Sprint 3（G1–G6）共沉淀 10 篇阶段记录、约 40 个具体坑点。本节按"类别"重新归并，供 Sprint 4 开发、联调和运维按类检索，不必逐节翻。
+> **读法**：先看"一句话规则"，命中同一类现象再回原节看完整代码。
+
+### 12.1 十类总览
+
+#### ① Migration 与版本链
+
+- **一句话规则**：新增 Migration 前先跑 `alembic heads`，`down_revision` 必须指向当前唯一 head；`--sql` 离线模式必须显式指定起点 revision。
+- **典型现象**：`Multiple head revisions are present`；`upgrade head --sql` 输出整条历史建表语句。
+- **防复发**：提交 Migration 前跑一次 `alembic heads`（应为 1 行）+ `alembic current`；增量 SQL 用 `upgrade <current>:head --sql`。
+- **原节**：§1
+
+#### ② 容器路径与挂载
+
+- **一句话规则**：容器内路径按挂载点算，不按宿主机目录算；写文件只写已挂载目录。
+- **典型现象**：核查脚本报告"文件不存在"（实际是 `/app/backend/app/...` 与 `/app/app/...` 混用）；脚本跑完宿主机 `docs/` 看不到产物。
+- **防复发**：先 `docker compose exec backend ls <路径>` 确认挂载视图；输出统一走 `/scripts` `/data` `/out`；`docs` 已在 G6 Commit 2 补挂载。
+- **原节**：§2
+
+#### ③ 测试隔离与数据污染
+
+- **一句话规则**：跨 Session 的场景不能用事务回滚隔离；session 级 fixture 前缀必须唯一命名空间；测试不要为"真实"去走真实 Graph。
+- **典型现象**：单跑通过、全量失败；`ForeignKeyViolation`；`t2 < t1` 的 `updated_at` 比较失败；HTTP 请求看不到 fixture 写入的数据。
+- **防复发**：真实 commit + 前缀清理（`test_auth_%` / `test_xxx_global_%`）；"全库状态"断言用"临时修改 + `finally` 恢复"，不 delete；需要任务/缺陷时直接 `db.add(ORMModel(...)) + commit`。
+- **原节**：§3、§4.6、§9.5c
+
+#### ④ 并发与重试测试的断言假设
+
+- **一句话规则**：不要假设线程调度顺序与场景分支；只断言"互斥语义"和"目标分支命中"。
+- **典型现象**：并发用例时而 PASS 时而 FAIL；B4 一直打印"已有 admin，无需创建"（走的是场景 4，不是重试路径）。
+- **防复发**：两种合法顺序都覆盖；测重试前先把 DB 调到"会走创建分支"的状态，再让 commit 冲突。
+- **原节**：§3.2、§10.1–§10.3
+
+#### ⑤ 错误语义与异常层次
+
+- **一句话规则**：参数非法用自定义 `BusinessValueError`（422），资源不存在保留 `ValueError` 由 API 层转 404；子类 `except` 必须写在父类之前；`raise` 之后的同块语句永远不会执行。
+- **典型现象**：全局 `except ValueError → 422` 把代码 bug 伪装成用户输入错误；非法 `status` 返回"candidate not found"；`UnboundLocalError: q`。
+- **防复发**：异常注册只挂自定义类型；`except BusinessValueError` 放第一；改 `raise` 时检查整个 if 块缩进边界，并开 ruff F821/F841。
+- **原节**：§4.1、§4.8、§7.1
+
+#### ⑥ DTO / ORM / 路由的三层对齐
+
+- **一句话规则**：Pydantic 字段 ≠ ORM 列；Service DTO 有值 ≠ API 响应有值；路由签名里没声明的 Query 参数会被静默丢弃。
+- **典型现象**：`suggestion_diff is an invalid keyword argument`；DB 有数据但响应字段为 `null`；`?status=pending` 被忽略返回全量。
+- **防复发**：新增字段全链路 grep（`Service DTO → API Schema → 路由组装`）；写 DB 优先复用 service 业务入口，不手拼 ORM；路由每个 Query 显式声明并透传。
+- **原节**：§4.3–§4.5、§9.5b
+
+#### ⑦ 非 ASCII 字符与 ID 生成
+
+- **一句话规则**：ID 里只允许 ASCII `-`（U+002D）；"看起来像短横"的 U+2010 / U+2011 / U+2013 / U+2014 会毁掉 URL 与查询。
+- **典型现象**：`POST /rule-candidates/{id}/status` 404，日志里 ID 显示成 `RCâ20261104âB46BB4`。
+- **防复发**：统一走 `make_prefixed_id()`；手测用纯 ASCII ID 复测；存量数据不迁移，前端 `encodeURIComponent` 兜底。
+- **原节**：§5.3、§9.1
+
+#### ⑧ 跨层调用与接口契约
+
+- **一句话规则**：调用前核对函数名与签名，不凭记忆；service 返回类型变化要同步改所有调用方。
+- **典型现象**：`has no attribute 'get_summary'`；`CreateTaskResponse() argument after ** must be a mapping, not str`；`string indices must be integers`；`state.get(...)` 传给不接收 `state` 的函数。
+- **防复发**：改调用前先 `Select-String -Pattern "^def "` 看签名；返回值契约变更时全局 grep 调用点；`TypedDict, total=False` 加字段最省事。
+- **原节**：§4.2、§4.7、§5.2
+
+#### ⑨ 前端权限与错误分流
+
+- **一句话规则**：`role` 只存内存、每次从 `GET /auth/me` 刷新；401 清身份跳登录、403 提示权限不足、404 保持原样；启动拉取要加请求锁；`@` 别名与 `*.vue` 声明三处齐备。
+- **典型现象**：改 `localStorage.role` 就能看到管理员菜单；把对象越权 404 当 403 显示"权限不足"（等于暴露资源存在性）；快速点导航触发多次 `/auth/me`；`TS(2307)` 报红但项目能跑。
+- **防复发**：`localStorage` 只存 `user_id`；`http.ts` 按状态码分流；`bootstrapPromise` 模块级缓存；`paths` + `declare module "*.vue"` + `resolve.alias` 三处同配。
+- **原节**：§8、§10.4
+
+#### ⑩ 测试替身与工具口径
+
+- **一句话规则**：`monkeypatch` 全局对象是全局拦截；扫描/核查工具的数据源必须是代码，不是文档。
+- **典型现象**：`monkeypatch Session.commit` 连上下文退出时的自动 commit 一起拦；扫描器照抄省掉 `/v1` 的文档路径，全量 404；307/405 被登记成业务缺陷。
+- **防复发**：`finally` 先还原 mock 再恢复数据；扫描源用 `app.routes`；307/405 先当构造错误排除。
+- **原节**：§10.3、§10.5
+
+### 12.2 按现象快速定位
+
+| 你看到的现象 | 先看哪类 | 具体节 |
+|---|---|---|
+| `Multiple head revisions` | ① Migration | §1.1 |
+| 脚本说文件不存在 / 产物丢失 | ② 挂载 | §2.1 |
+| 单跑过、全量挂 | ③ 隔离 / ④ 并发 | §3、§9.5c |
+| 时间戳 `t2 < t1` | ③ 隔离 | §9.5c |
+| 参数非法却返回 404 / 500 掩盖 bug | ⑤ 异常语义 | §4.1、§7.1 |
+| 响应字段莫名 `null` | ⑥ DTO 三层 | §9.5b |
+| 按 ID 查 404、日志乱码 | ⑦ 非 ASCII | §5.3、§9.1 |
+| `AttributeError: no attribute` | ⑧ 接口契约 | §4.7 |
+| 前端菜单/权限错乱、跳转不对 | ⑨ 前端权限 | §8 |
+| 编辑器报 TS2307 但能跑 | ⑨ 前端权限 | §10.4 |
+| 测试"重试了但没测到重试" | ④ 并发 / ⑩ 替身 | §10.3 |
+| 扫描报告一堆 404 / 403 | ⑩ 工具口径 | §10.5 |
+
+### 12.3 新增坑点的登记模板
+
+后续遇到新坑，按同一结构追加，保证可检索、可复算：
+
+```markdown
+### N.x 坑：<一句话现象>
+
+> **状态**：✅ 已修复 / ⚠️ 技术债（注明归属阶段）
+> **核心难点**：<为什么难，难在哪一步判断>
+
+**现象**：<可复现的最小现象，含报错原文/日志片段>
+
+**根因**：<机制层面解释，不写"可能是"这种模糊表述>
+
+**修复**：<改了什么、为什么这样改>
+
+**验证**：<命令 + 数字结果，例如 645 passed / 0 failed>
+
+**教训**：
+1. <可迁移到其它模块的规则>
+2. <下次如何更早发现>
+```
+
+### 12.4 Sprint 3 交付回顾
+
+| 维度 | 结果 |
+|---|---|
+| 阶段 | G1–G6 全部完成，Sprint 3 封板（2026-11-07） |
+| 测试基线 | 568（Sprint 2）→ **645 passed**（封板），2 skipped / 24 deselected / 0 failed |
+| 冒烟 | 6/6 全过 |
+| 大类坑 | 10 类，约 40 个具体坑点，均有"现象—根因—修复—教训"四段记录 |
+| 反复出现的两个母题 | ① **"看起来对"的假象**（能跑但报红、DB 有值但响应空、重试了但没测到重试）；② **跨边界的信息丢失**（跨 Session、跨层 DTO、文档与代码不一致） |
+
+---
+
+## 13. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
 - 基础设施：Docker Compose + PostgreSQL 15
-- 适用范围：Sprint 3 G2–G6 开发联调阶段
+- 适用范围：Sprint 3 G2–G6 开发联调阶段（G6 于 2026-11-07 封板，基线 645 passed）
+- 配套文档：`changelog_03.md`（变更与决策）、`Sprint3_详细执行计划_V1.0.md`（计划依据）
+- 使用建议：Sprint 4 开工前先读 §12 的 10 类总览与"按现象快速定位"表；遇到新坑按 §12.3 模板登记，保持四段结构

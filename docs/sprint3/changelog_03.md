@@ -2,8 +2,8 @@
 
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
-> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 主体完成（Commit 1–3，仅 T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）🟡 进行中（Commit 1/3）
-> 最后更新：2026-11-06（新增 G6 章节；补记 G4 章节、G5 章节 Commit 1、Commit 2、Commit 3）
+> 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 完成（Commit 1–3；T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）✅ 完成（Commit 1–3，**Sprint 3 封板**）
+> 最后更新：2026-11-07（G6 收尾：Commit 2 部署检查清单 + T-05 状态码扫描、Commit 3 Sprint 3 封板；新增封板声明）
 
 ---
 
@@ -680,7 +680,7 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status
 
 ## G5：反馈闭环 E2E — 知识缺口生成链路（2026-11-06）
 
-> 状态：🟡 进行中（Commit 1、2、3 已完成：`knowledge_gap` 生成函数 + 统一 ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E 回归测试）
+> 状态：✅ 完成（Commit 1–3：`knowledge_gap` 生成函数 + 统一 ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E 回归测试；T-05 状态码扫描由 G6 Commit 2 收口）
 > 依据：`Sprint3_详细执行计划_V1.0.md` §10（反馈生成链路核实与判定规则）
 > 核心发现：**Sprint 1/2 的 `knowledge_gap` / `gap_feedback_link` 表没有任何生产代码写入路径**（grep 只命中 ORM 模型定义），DB 里 26 条 `knowledge_gap` 是 Sprint 2 测试 / demo 手工造的测试数据。G5 必须补实现。
 
@@ -761,8 +761,8 @@ Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status
 | 全量回归 | ✅ 626 passed, 0 failed |
 | API 响应 | ✅ `resp.knowledge_gap_ref = GAP-20261106-5708C0` |
 | 数据落库 | ✅ `knowledge_gap` 总数 32 → 33（delta=1），`gap_feedback_link` 新增关联 |
-| 幂等（重复提交同一 `feedback_id`） | ⏳ Commit 3 E2E 未覆盖（仅验证生成链路），递延至 G6 或补测 |
-| 非 knowledge_gap 类型 `knowledge_gap_ref = None` | ⏳ Commit 3 E2E 未覆盖，递延至 G6 或补测 |
+| 幂等（重复提交同一 `feedback_id`） | ⚠️ 未覆盖（仅验证生成链路），已登记为 Sprint 4 遗留项 #5 |
+| 非 knowledge_gap 类型 `knowledge_gap_ref = None` | ⚠️ 未覆盖，已登记为 Sprint 4 遗留项 #5 |
 
 ### G5.4c Commit 3 验收证据
 
@@ -842,14 +842,14 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | 1 | `feat(s3-g5): add create_gap_from_feedback + unify ID generator` | ✅ 完成 |
 | 2 | `feat(s3-g5): wire knowledge_gap generation in feedback_service`（`_dispatch_evolution` 加 `knowledge_gap` 分支；`FeedbackOut.knowledge_gap_ref` 采用方案 A+ 内存透传；三层 DTO 对齐） | ✅ 完成 |
 | 3 | `test(s3-g5): E2E test for knowledge_gap generation + gap_feedback_link`（`test_feedback_e2e.py` 加场景，D20：`total_before + 1`；另含 G4 遗留 4 个补测） | ✅ 完成 |
-| 4 | `test(s3-g5): G4 遗留 T-01~T-05 负面用例补全`（接口层 401 / rule_admin 正向 / engineer 知识库越权 / engineer 自身任务正向 / 状态码扫描） | ⏳ 待做（**T-01~T-04 已随 Commit 3 提前完成；T-05 状态码扫描改由 G6 Commit 2 承接**） |
-| 5 | `docs(s3-g5): G5 章节 + 完整回归` | ⏳ 待做 |
+| 4 | `test(s3-g5): G4 遗留 T-01~T-05 负面用例补全`（接口层 401 / rule_admin 正向 / engineer 知识库越权 / engineer 自身任务正向 / 状态码扫描） | ✅ 完成（T-01~T-04 随 Commit 3 完成；T-05 由 G6 Commit 2 完成） |
+| 5 | `docs(s3-g5): G5 章节 + 完整回归` | ✅ 完成 |
 
 ---
 
 ## G6：完整回归 + B 类并发测试 + 部署检查清单（2026-11-06）
 
-> 状态：🟡 进行中（Commit 1 已完成：B 类并发测试 + `bootstrap_admin.py` 重试逻辑 + `vite-env.d.ts` 补全）
+> 状态：✅ 完成（Commit 1–3 全部完成：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts` 补全 + 部署检查清单 + T-05 状态码扫描 + Sprint 3 封板）
 > 依据：`Sprint3_详细执行计划_V1.0.md` §2.4（B 类并发测试） + §13（统一验收）
 > 核心发现：`bootstrap_admin.py` 的 `except IntegrityError` 直接 `return 2`，**没有 §2.4 要求的"回滚 → 重试 → 重读 → 按场景判断"逻辑**。所以 B 类不只是"补测试"，而是"补代码 + 补测试"两件事。
 
@@ -920,15 +920,114 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 1. **测试重试逻辑，先确认"命中哪个场景分支"**，否则测到的可能是"场景 1–4 的正常返回"，而不是"重试路径"。
 2. **`monkeypatch` 修改 Session / 连接这类全局对象时，恢复顺序必须与依赖关系反着来**：先解除 mock，再做需要 commit 的收尾。
 
-### G6.6 G6 后续 Commit（待做）
+### G6.6 Commit 2：部署检查清单 + T-05 状态码全量扫描
+
+**交付物**：
+
+| 文件 | 内容 |
+|---|---|
+| `docs/sprint3/G6_部署检查清单.md` | 上线前逐项核对清单（环境、迁移、初始化、文件挂载、前端构建、健康检查、回滚预案） |
+| `docs/sprint3/T-05_状态码扫描报告.md` | 全量端点 × 状态码矩阵，标注每个非 2xx 的语义归属（参数非法 / 未认证 / 权限不足 / 资源不存在 / 服务端异常） |
+| `docs/sprint3/G6_冒烟测试记录.md` | 6 条端到端冒烟路径的执行结果 |
+
+**部署检查清单（核心项）**：
+
+| # | 检查项 | 判据 |
+|---|---|---|
+| 1 | `APP_ENV` | 生产环境取值明确，不为 `dev` / `test` |
+| 2 | 数据库迁移 | `alembic current` 与 `alembic heads` 一致，单 head 无分叉 |
+| 3 | 管理员初始化 | `bootstrap_admin.py` 幂等可重跑；已有 admin 时返回 0 不重复创建 |
+| 4 | 文件挂载 | `docker-compose.dev.yml` 已补 `- ../../docs:/docs`（§2.2 长期项收敛） |
+| 5 | 前端构建 | `npm run type-check` 0 errors、`npm run build` 成功，产物含 `LoginPage` / `ForbiddenPage` |
+| 6 | 鉴权链路 | 无 `X-User-Id` → 401；角色不匹配 → 403；对象越权 → 404（D6 防枚举语义） |
+| 7 | 健康检查 | 容器 healthcheck 通过，`/healthz` 可访问 |
+| 8 | 回滚预案 | 迁移 `downgrade` 路径、镜像版本、备份策略三项齐备 |
+| 9 | 身份方案说明 | 第一阶段为可信内网 + username-only / `X-User-Id`（C1），文档需明示"不可直接暴露公网" |
+
+**T-05 状态码全量扫描结论**：
+
+| 结论 | 说明 |
+|---|---|
+| 401 语义统一 | 所有受保护端点缺 `X-User-Id` 或缺非法身份均 401（D3 不降级为匿名），无端点漏拦 |
+| 403 与 404 分工清晰 | 角色不匹配统一 403（`require_roles`）；对象级越权统一 404（D6），扫描矩阵与 §9 权限矩阵一致 |
+| 422 覆盖到位 | 参数非法统一 422（`BusinessValueError`）；扫描顺带核实 `rule_candidates` 的 `status` 由 Pydantic `Literal` 先拦，service 层分支在正常路径不可达（§G3-D.1 结论复现） |
+| 无 5xx 泄露 | 全量扫描未出现未处理异常直出堆栈，`errors.py` 兜底生效 |
+| 路径口径统一 | 扫描器以应用内 `app.routes` 为准，不再照抄文档简写路径（BUG-G3A-001 的成因已在扫描器侧固化规避） |
+
+### G6.7 Commit 3：Sprint 3 封板
+
+| 项 | 内容 |
+|---|---|
+| Commit | `docs(s3): Sprint 3 phase complete - G1-G6 all done` |
+| 封板依据 | G1–G6 全部 ✅；全量非 integration **645 passed**；6 条冒烟路径全过 |
+| 文档收敛 | 本文件补 G6 全量证据 + 封板声明；`debug_03.md` 补 T-05 踩坑 + Sprint 3 复盘 |
+
+### G6.8 Commit 2 / 3 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 全量非 integration | ✅ **645 passed, 2 skipped, 24 deselected, 0 failed**（635 → 645） |
+| 冒烟测试（6 条） | ✅ **6/6 全过**（登录 → `/auth/me` → Case 列表 → 建任务 → 任务列表 / 详情 → 知识库 / 看板） |
+| 部署检查清单 | ✅ 9 项核心检查全部通过 |
+| T-05 状态码扫描 | ✅ 全量端点覆盖，401 / 403 / 404 / 422 语义与权限矩阵一致，无 5xx 泄露 |
+| 前端 | ✅ `npm run type-check` 0 errors、`npm run build` 成功 |
+
+### G6.9 Commit 清单（全部完成）
 
 | Commit | 内容 | 状态 |
 |---|---|---|
 | 1 | `feat(s3-g6): B-class concurrent tests + bootstrap retry + vite-env.d.ts` | ✅ 完成 |
-| 2 | `docs(s3-g6): deployment checklist + T-05 status code scan`（部署检查清单 + T-05 状态码全量扫描） | ⏳ 待做 |
-| 3 | `docs(s3): Sprint 3 phase complete - G1-G6 all done`（Sprint 3 封板） | ⏳ 待做 |
+| 2 | `docs(s3-g6): deployment checklist + T-05 status code scan`（部署检查清单 + T-05 状态码全量扫描） | ✅ 完成 |
+| 3 | `docs(s3): Sprint 3 phase complete - G1-G6 all done`（Sprint 3 封板） | ✅ 完成 |
 
-> Commit 2 需一并处理 `debug_03.md` §2.2 记录的长期项：在 `docker-compose.dev.yml` 的 `backend.volumes` 补 `- ../../docs:/docs`，让容器内脚本可直接写 `docs/`，避免手工搬运。
+> Commit 2 已把 `debug_03.md` §2.2 记录的长期项收敛：`docker-compose.dev.yml` 的 `backend.volumes` 补 `- ../../docs:/docs`，容器内脚本可直接写 `docs/`，不再需要手工搬运文件。
+
+---
+
+## Sprint 3 封板声明（2026-11-07）
+
+> **结论**：G1–G6 六个阶段全部完成，Sprint 3（角色权限与端到端闭环）达到封板标准。
+
+### 封板指标
+
+| 指标 | 数值 |
+|---|---|
+| 阶段完成度 | **G1–G6 全部 ✅（6/6）** |
+| 全量非 integration 测试 | **645 passed, 2 skipped, 24 deselected, 0 failed** |
+| 冒烟测试 | **6/6 全过** |
+| 前端质量门 | `type-check` 0 errors + `build` 成功 |
+| 安全验收 | 4 类状态码语义一致；IDOR 对象级越权统一 404；R2 负面用例按接口组覆盖 |
+| 测试基线演进 | 568（Sprint 2）→ 594（G2）→ 595（G3-A）→ 597（G3-C）→ 613（G3-B）→ 626（G3-D）→ 631（G5）→ 635（G6-1）→ **645（G6 封板）** |
+
+### 技术决策落地情况
+
+| 决策组 | 条目 | 数量 | 状态 |
+|---|---|---|---|
+| G2 认证与并发底座 | D1–D5 | 5 | ✅ 全部落地 |
+| G3-A 鉴权与测试规范 | R1–R7 | 7 | ✅ 全部落地 |
+| G3-B 对象级数据范围 | D6–D11 | 6 | ✅ 全部落地 |
+| G4 前端权限 | R8–R13 | 6 | ✅ 全部落地 |
+| G5 反馈生成链路 | D12–D20 | 9 | ✅ 全部落地 |
+| **合计** | | **33** | ✅ |
+
+> **口径说明**：G3 封板时，文档将 "D1–D5 + R1–R7 + D6–D11" 合计记为 17 项；按条目实数核对为 5 + 7 + 6 = **18 项**。本声明以条目实数为准：G2/G3 阶段 18 项 + G4 的 6 项 + G5 的 9 项 = **33 项**。若沿用旧口径"17 项"，请以本条说明为准修正后续引用，避免数字继续扩散。
+
+### 遗留项移交 Sprint 4
+
+| # | 遗留项 | 来源 | 处理建议 |
+|---|---|---|---|
+| 1 | `task_service.create_task` 返回完整 dict（当前返回 `str`，API 层用 `get_task` 回查绕过） | G3-A 遗留 1 | Sprint 4 重构时统一返回值契约，去掉回查 |
+| 2 | 反馈提交逻辑收敛进 `feedback_service`（路由层仍经 `task_service.submit_task_feedback`） | G3-A 遗留 2 | 与 1 同批做"路由层薄化" |
+| 3 | `feedback_item` 软删除（当前无 `is_deleted` 列，业务禁止物理删除） | G5 D18 | 加列 + migration + 删除接口改软删 |
+| 4 | `knowledge_gap.proposed_by` 展示字段 | G5 D19 | 需 migration，评估是否用 `source_feedback_id` 反查替代 |
+| 5 | 幂等（重复 `feedback_id`）与非 `knowledge_gap` 类型 `ref=None` 的测试覆盖 | G5.4b | 补 2 个用例即可闭环 |
+| 6 | JWT / 密码登录（当前 username-only + `X-User-Id`） | G1 C1 | 下一阶段身份方案，需配套 prod fail-closed 恢复 |
+| 7 | 存量候选 ID 的 U+2011 字符不迁移 | G3-C / G5 D12 | 保持"新生成 ASCII、存量兼容"策略，勿批量改数据 |
+| 8 | `scripts/rollback_rule.py` CLI 回滚验收 | Sprint3 附录 D 第 3 项 | Sprint 4 补一次手工验收 |
+| 9 | vLLM 实装（当前 Mock LLM） | Sprint3 附录 D 第 5 项 | 与性能验收同批做 |
+| 10 | MySQL / SQLite 适配（当前锁实现绑定 `pg_advisory_xact_lock`） | G1 C2 | 仅在明确需求时立项，不提前抽象 |
+
+**封板后的口径**：Sprint 3 不再接受功能变更；上述 10 项一律进 Sprint 4 排期。若发现 P0 缺陷，走热修复流程并回填本文件，不改封板结论。
 
 ---
 
@@ -940,8 +1039,10 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G2 | Migration + auth 底座 + CLI + 用户管理 | ✅ 完成 |
 | G3 | RBAC 鉴权挂载 + 审计字段后端注入 + 对象级数据范围 + IDOR 安全测试 | ✅ G3-A / G3-B / G3-C / G3-D 全部完成，G3 封板 |
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
-| G5 | 反馈闭环 E2E | ✅ 主体完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测）；T-05 状态码扫描并入 G6 Commit 2 |
-| G6 | 完整回归 + B 类并发 + 部署检查清单 | 🟡 进行中（Commit 1/3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts`） |
+| G5 | 反馈闭环 E2E | ✅ 完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测；T-05 状态码扫描并入 G6 Commit 2） |
+| G6 | 完整回归 + B 类并发 + 部署检查清单 | ✅ 完成（Commit 1–3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts` + 部署检查清单 + T-05 状态码扫描 + 封板） |
+
+> **G1–G6 全部 ✅（6/6）**，Sprint 3 封板，详见前节「Sprint 3 封板声明」。
 
 ### 测试基线演进
 
@@ -958,3 +1059,5 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G5 Commit 2 完成 | 626 passed、0 failed（接线后零回归；`knowledge_gap` 32 → 33，`gap_feedback_link` 新增 1 条） |
 | G5 Commit 3 完成 | **631 passed, 2 skipped, 24 deselected, 0 failed**（626 → 631，+5 测试：E2E 1 + G4 遗留补测 4） |
 | G6 Commit 1 完成 | **635 passed, 2 skipped, 24 deselected, 0 failed**（631 → 635，+4 B 类并发测试） |
+| G6 Commit 2 完成 | **645 passed, 2 skipped, 24 deselected, 0 failed**（+ T-05 状态码扫描用例；6 条冒烟路径全过） |
+| **Sprint 3 封板（G6 Commit 3）** | **645 passed, 2 skipped, 24 deselected, 0 failed** + 冒烟 6/6 + `type-check` 0 errors / `build` 成功 |
