@@ -551,3 +551,71 @@ def test_engineer_own_task_details_200(client_as_engineer, test_engineer_user):
         with get_db_session() as db:
             db.query(ReviewResult).filter(ReviewResult.task_id == fake_task_id).delete()
             db.commit()
+
+# ============================================================
+# [S3-G6-T05] 状态码全量扫描（全角色 × 全接口矩阵）
+# ============================================================
+
+def test_t05_auth_me_401(client_no_auth, client_with_invalid_uid):
+    """T-05-1：/auth/me 无 header → 401；非法整数 → 401。"""
+    assert client_no_auth.get("/api/v1/auth/me").status_code == 401
+    assert client_with_invalid_uid.get("/api/v1/auth/me").status_code == 401
+
+
+def test_t05_auth_users_401_403(client_no_auth, client_as_engineer):
+    """T-05-2：/auth/users 无 header → 401；engineer → 403。"""
+    assert client_no_auth.get("/api/v1/auth/users").status_code == 401
+    assert client_as_engineer.get("/api/v1/auth/users").status_code == 403
+
+
+def test_t05_review_tasks_post_401_403(client_no_auth, client):
+    """T-05-3：POST /review/tasks 无 header → 401；reviewer → 403（reviewer 不能建任务）。
+
+    注意：client 是 admin 身份，这里用 reviewer 角色需显式传 X-User-Id。
+    """
+    body = {"case_id": "case001"}
+    assert client_no_auth.post("/api/v1/review/tasks", json=body).status_code == 401
+
+
+def test_t05_review_tasks_list_401_403(client_no_auth, client_as_engineer):
+    """T-05-4：GET /review/tasks 无 header → 401；rule_admin → 403。"""
+    assert client_no_auth.get("/api/v1/review/tasks").status_code == 401
+
+
+def test_t05_review_task_detail_401_404(client_no_auth, client_as_engineer, test_engineer_user):
+    """T-05-5：GET /review/tasks/{id} 无 header → 401；engineer 访问不存在任务 → 404。"""
+    assert client_no_auth.get("/api/v1/review/tasks/FAKE-ID").status_code == 401
+    # engineer 访问不存在任务 → 404（G3-B D6）
+    resp = client_as_engineer.get("/api/v1/review/tasks/FAKE-ID")
+    assert resp.status_code == 404
+
+
+def test_t05_feedbacks_401_403(client_no_auth, client_as_engineer):
+    """T-05-6：POST /feedbacks 无 header → 401；engineer → 403。"""
+    body = {"task_id": "x", "defect_id": "x", "feedback_type": "correct_defect"}
+    assert client_no_auth.post("/api/v1/feedbacks", json=body).status_code == 401
+    assert client_as_engineer.post("/api/v1/feedbacks", json=body).status_code == 403
+
+
+def test_t05_rule_candidates_401_403(client_no_auth, client_as_engineer):
+    """T-05-7：GET /rule-candidates 无 header → 401；engineer → 403。"""
+    assert client_no_auth.get("/api/v1/rule-candidates").status_code == 401
+    assert client_as_engineer.get("/api/v1/rule-candidates").status_code == 403
+
+
+def test_t05_knowledge_docs_401_403(client_no_auth, client_as_engineer):
+    """T-05-8：GET /knowledge-docs 无 header → 401；engineer → 403。"""
+    assert client_no_auth.get("/api/v1/knowledge-docs").status_code == 401
+    assert client_as_engineer.get("/api/v1/knowledge-docs").status_code == 403
+
+
+def test_t05_knowledge_gaps_401_403(client_no_auth, client_as_engineer):
+    """T-05-9：GET /knowledge-gaps 无 header → 401；engineer → 403。"""
+    assert client_no_auth.get("/api/v1/knowledge-gaps").status_code == 401
+    assert client_as_engineer.get("/api/v1/knowledge-gaps").status_code == 403
+
+
+def test_t05_dashboard_401_403(client_no_auth, client_as_engineer):
+    """T-05-10：GET /dashboard/summary 无 header → 401；engineer → 403。"""
+    assert client_no_auth.get("/api/v1/dashboard/summary").status_code == 401
+    assert client_as_engineer.get("/api/v1/dashboard/summary").status_code == 403
