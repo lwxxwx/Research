@@ -19,6 +19,8 @@
 """
 from __future__ import annotations
 
+from app.core.jwt import create_access_token
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.deps import CurrentUser, get_current_user, require_roles, ROLE_ADMIN
@@ -33,7 +35,6 @@ from app.api.schemas import (
 )
 from app.persistence.db import get_db_session
 from app.services import user_service
-
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -58,6 +59,11 @@ def login(body: LoginRequest) -> LoginResponse:
         user_id=user["id"],
         username=user["username"],
         role=user["role"],
+        access_token=create_access_token(
+            user_id=user["id"], username=user["username"], role=user["role"],
+        ),
+        token_type="bearer",
+        expires_in=28800,
     )
 
 

@@ -411,6 +411,9 @@ class LoginResponse(BaseModel):
     user_id: int
     username: str
     role: str
+    access_token: str | None = None
+    token_type: str = "bearer"
+    expires_in: int = 28800   # 8h，与 D31 一致
 
 
 class AuthMeResponse(BaseModel):
