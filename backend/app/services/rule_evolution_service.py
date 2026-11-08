@@ -40,6 +40,7 @@ from app.persistence.models import (
     ReviewResult,
     RuleCandidate,
     RuleDefinition,      # F05 新增
+    RuleDefinitionHistory,   # ← 确认有这一行
 )
 from app.core.exceptions import BusinessValueError
 from app.rules.engine import load_rule_definitions  # F05 新增
@@ -651,6 +652,20 @@ class RuleEvolutionService:
                 .filter(RuleDefinition.rule_id == rule_id)
                 .first()
             )
+            # ===== [S3-LEGACY-B4] D33：更新主表前先快照旧行到 history =====
+            if existing_rd is not None:
+                db.add(RuleDefinitionHistory(
+                    rule_id=existing_rd.rule_id,
+                    version=existing_rd.version,
+                    rule_name=existing_rd.rule_name,
+                    rule_category=existing_rd.rule_category,
+                    rule_yaml=existing_rd.rule_yaml,
+                    description=existing_rd.description,
+                    severity=existing_rd.severity,
+                    enabled=existing_rd.enabled,
+                    change_source="publish",
+                ))
+            # ===== [S3-LEGACY-B4 END] =====
             if existing_rd is None:
                 db.add(RuleDefinition(
                     rule_id=rule_id,
@@ -729,6 +744,90 @@ class RuleEvolutionService:
         finally:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
+
+    def rollback_rule(
+        self,
+        db: Session,
+        rule_id: str,
+        to_version: str,
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any] | None:
+        """D33：把 rule_definition 回滚到 history 中的目标版本。
+
+        返回 None 表示目标版本或当前规则不存在（CLI 打印 REFUSE 退出 1）。
+        dry_run=True 只做存在性校验，不写任何数据（风险备忘 5）。
+        同事务：主表更新 + history 快照一起 commit（风险备忘 2）。
+        """
+        target = (
+            db.query(RuleDefinitionHistory)
+            .filter(
+                RuleDefinitionHistory.rule_id == rule_id,
+                RuleDefinitionHistory.version == to_version,
+            )
+            .first()
+        )
+        if target is None:
+            return None
+
+        current = (
+            db.query(RuleDefinition)
+            .filter(RuleDefinition.rule_id == rule_id)
+            .first()
+        )
+        if current is None:
+            return None
+
+        original_version = current.version   # 回滚前版本（from_version）
+
+        # ===== 幂等前置：当前版本已是目标版本 → 不写 history，直接返回 =====
+        if current.version == to_version:
+            return {
+                "rule_id": rule_id,
+                "from_version": current.version,
+                "to_version": to_version,
+                "dry_run": dry_run,
+                "noop": True,
+            }
+        # ===== 幂等前置 END =====        
+
+        if dry_run:
+            return {
+                "rule_id": rule_id,
+                "from_version": original_version,
+                "to_version": to_version,
+                "dry_run": True,
+            }
+
+        # 1. 当前行快照进 history（来源 rollback，便于再回滚）
+        db.add(RuleDefinitionHistory(
+            rule_id=current.rule_id,
+            version=current.version,
+            rule_name=current.rule_name,
+            rule_category=current.rule_category,
+            rule_yaml=current.rule_yaml,
+            description=current.description,
+            severity=current.severity,
+            enabled=current.enabled,
+            change_source="rollback",
+        ))
+        # 2. 主表恢复为目标版本内容
+        current.rule_name = target.rule_name
+        current.rule_category = target.rule_category
+        current.rule_yaml = target.rule_yaml
+        current.description = target.description
+        current.severity = target.severity
+        current.enabled = target.enabled
+        current.version = target.version
+
+        db.commit()
+        return {
+            "rule_id": rule_id,
+            "from_version": original_version,
+            "to_version": to_version,
+            "noop": False,
+            "dry_run": False,
+        }
 
 # ============================================================
 # 辅助函数：TP/FP/FN 匹配与 Precision/Recall 计算
