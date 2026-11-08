@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     Float,
     ForeignKey,
+    Identity,          # ← 新增
     Index,
     Integer,
     String,
@@ -123,7 +124,31 @@ class RuleDefinition(Base):
     executions: Mapped[List["RuleExecution"]] = relationship(back_populates="rule_def")
 
 # ============================================================
-# 6. RuleExecution
+# 6. RuleDefinitionHistory
+# ============================================================
+class RuleDefinitionHistory(Base):
+    __tablename__ = "rule_definition_history"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    version: Mapped[str] = mapped_column(String(20), nullable=False)
+    rule_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    rule_category: Mapped[str] = mapped_column(String(64), nullable=False)
+    rule_yaml: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    severity: Mapped[str] = mapped_column(String(20), server_default="medium")
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    change_source: Mapped[str] = mapped_column(String(16), server_default="publish")
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=text("NOW()")
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "rule_id", "version", name="uq_rule_definition_history_rule_version"
+        ),
+    )
+
+# ============================================================
+# 7. RuleExecution
 # ============================================================
 class RuleExecution(Base):
     __tablename__ = "rule_execution"
@@ -142,7 +167,7 @@ class RuleExecution(Base):
     rule_def: Mapped[Optional["RuleDefinition"]] = relationship(back_populates="executions")
 
 # ============================================================
-# 7. ReviewResult
+# 8. ReviewResult
 # ============================================================
 class ReviewResult(Base):
     __tablename__ = "review_result"
@@ -193,7 +218,7 @@ class ReviewResult(Base):
     )
 
 # ============================================================
-# 8. ReviewDefect（新增：缺陷明细表）
+# 9. ReviewDefect（新增：缺陷明细表）
 # ============================================================
 class ReviewDefect(Base):
     __tablename__ = "review_defect"
@@ -246,7 +271,7 @@ class ReviewDefect(Base):
     )
 
 # ============================================================
-# 9. FeedbackItem（增强：关联 review_defect）
+# 10. FeedbackItem（增强：关联 review_defect）
 # ===== ✅ MODIFIED Sprint0 Phase‑I：对齐002_schema.sql全部字段 =====
 #
 # ⚠️ 待解决问题（Sprint 1，不是 Sprint 0 阻塞项）：
@@ -307,7 +332,7 @@ class FeedbackItem(Base):
     )
 
 # ============================================================
-# 10. KnowledgeDoc
+# 11. KnowledgeDoc
 # ============================================================
 class KnowledgeDoc(Base):
     __tablename__ = "knowledge_doc"
@@ -324,7 +349,7 @@ class KnowledgeDoc(Base):
     chunks: Mapped[List["KnowledgeChunk"]] = relationship(back_populates="doc", cascade="all, delete-orphan")
 
 # ============================================================
-# 11. KnowledgeChunk
+# 12. KnowledgeChunk
 # ============================================================
 class KnowledgeChunk(Base):
     __tablename__ = "knowledge_chunk"
@@ -342,7 +367,7 @@ class KnowledgeChunk(Base):
     )
 
 # ============================================================
-# 12. RuleCandidate（P1，Sprint‑1业务使用）
+# 13. RuleCandidate（P1，Sprint‑1业务使用）
 # ===== ✅ MODIFIED Sprint0 Phase‑I：对齐002_schema.sql触发器、时区字段 =====
 # ===== ✅注意：数据库表名是复数 rule_candidates，不是 rule_candidate =====
 class RuleCandidate(Base):
@@ -410,7 +435,7 @@ class RuleCandidate(Base):
     )
 
 # ============================================================
-# 13. KnowledgeGap（S2-A 新增，一对多：一条反馈可派生多条缺口）
+# 14. KnowledgeGap（S2-A 新增，一对多：一条反馈可派生多条缺口）
 # ============================================================
 class KnowledgeGap(Base):
     __tablename__ = "knowledge_gap"
@@ -448,7 +473,7 @@ class KnowledgeGap(Base):
     )
 
 # ============================================================
-# 14. GapFeedbackLink（S2-A 新增，中间表：支撑一对多）
+# 15. GapFeedbackLink（S2-A 新增，中间表：支撑一对多）
 # ============================================================
 class GapFeedbackLink(Base):
     __tablename__ = "gap_feedback_link"
@@ -468,7 +493,7 @@ class GapFeedbackLink(Base):
     )
 
 # ============================================================
-# 15. CaseBenchmarkResult（F07 新增，单 Case Benchmark 历史结果）
+# 16. CaseBenchmarkResult（F07 新增，单 Case Benchmark 历史结果）
 # ============================================================
 class CaseBenchmarkResult(Base):
     __tablename__ = "case_benchmark_result"
