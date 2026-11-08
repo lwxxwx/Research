@@ -4,12 +4,20 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
 
+
 from app.api.schemas import (
     KnowledgeGapListResponse,
     KnowledgeGapDetail,
     UpdateGapStatusRequest,
 )
 from app.persistence.db import get_db_session
+
+from app.api.deps import (
+    CurrentUser,
+    ROLE_ADMIN,
+    ROLE_RULE_ADMIN,
+    require_roles,
+)
 from app.services import knowledge_gap_service
 
 router = APIRouter(prefix="/knowledge-gaps", tags=["knowledge_gaps"])
@@ -28,6 +36,7 @@ def list_knowledge_gaps(
     limit: int = Query(default=20, ge=0),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(_get_db),
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
 ) -> KnowledgeGapListResponse:
     try:
         result = knowledge_gap_service.list_gaps(
@@ -40,7 +49,11 @@ def list_knowledge_gaps(
 
 
 @router.get("/{gap_id}", response_model=KnowledgeGapDetail)
-def get_knowledge_gap(gap_id: str, db: Session = Depends(_get_db)) -> KnowledgeGapDetail:
+def get_knowledge_gap(
+    gap_id: str,
+    db: Session = Depends(_get_db),
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
+) -> KnowledgeGapDetail:
     result = knowledge_gap_service.get_gap(db, gap_id)
     if result is None:
         raise HTTPException(status_code=404, detail=f"gap_id={gap_id} 不存在")
@@ -52,6 +65,7 @@ def update_knowledge_gap(
     gap_id: str,
     body: UpdateGapStatusRequest,
     db: Session = Depends(_get_db),
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
 ) -> KnowledgeGapDetail:
     try:
         result = knowledge_gap_service.update_gap_status(

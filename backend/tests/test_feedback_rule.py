@@ -518,3 +518,394 @@ def test_export_candidate_yaml_refuses_overwrite(
     # 原文件内容未被修改
     content_second = target.read_text(encoding="utf-8")
     assert content_first == content_second, "第二次导出失败后原文件不应被修改"
+
+def test_update_candidate_status_writes_reviewed_by(client, test_admin_user):
+    """G3-C：POST /rule-candidates/{id}/status 写入 reviewed_by = 当前登录用户。
+
+    用纯 ASCII candidate_id，避开 Sprint 2 遗留的 U+2011 特殊连字符问题。
+    """
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleCandidate
+
+    cid = f"RC-TEST-{uuid.uuid4().hex[:8].upper()}"
+    with get_db_session() as db:
+        db.add(RuleCandidate(
+            candidate_id=cid, title="test", description="test",
+            status="proposed", proposed_yaml="rule_id: TEST\n",
+        ))
+        db.commit()
+
+    try:
+        resp = client.post(
+            f"/api/v1/rule-candidates/{cid}/status",
+            json={"status": "accepted"},
+        )
+        assert resp.status_code == 200, resp.text
+
+        with get_db_session() as db:
+            rc = db.query(RuleCandidate).filter(RuleCandidate.candidate_id == cid).first()
+            assert rc.status == "accepted"
+            assert rc.reviewed_by == test_admin_user["id"]
+    finally:
+        with get_db_session() as db:
+            db.query(RuleCandidate).filter(RuleCandidate.candidate_id == cid).delete()
+            db.commit()
+
+# ============================================================
+# G3-D: rule_candidates 负面用例（R2 要求：无 header / 非法整数 / 角色 403）
+# ============================================================
+
+def test_rule_candidates_no_auth_401(client_no_auth):
+    """无 X-User-Id 访问 /rule-candidates → 401。"""
+    resp = client_no_auth.get("/api/v1/rule-candidates")
+    assert resp.status_code == 401
+
+
+def test_rule_candidates_invalid_uid_401(client_with_invalid_uid):
+    """非法整数 X-User-Id 访问 /rule-candidates → 401。"""
+    resp = client_with_invalid_uid.get("/api/v1/rule-candidates")
+    assert resp.status_code == 401
+
+
+def test_rule_candidates_engineer_403(client_as_engineer):
+    """engineer 访问 /rule-candidates → 403。"""
+    resp = client_as_engineer.get("/api/v1/rule-candidates")
+    assert resp.status_code == 403
+
+
+def test_rule_candidates_invalid_status_422(client, test_admin_user):
+    """admin 传 rejected 但缺 rejected_reason → 422（Pydantic 或业务校验）。"""
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleCandidate
+
+    cid = f"RC-DTEST-{uuid.uuid4().hex[:8]}"
+    with get_db_session() as db:
+        db.add(RuleCandidate(
+            candidate_id=cid, title="test", description="test",
+            status="proposed", proposed_yaml="rule_id: TEST\n",
+        ))
+        db.commit()
+
+    try:
+        # 传 status=rejected 但缺 rejected_reason → 触发 API 层 422
+        resp = client.post(
+            f"/api/v1/rule-candidates/{cid}/status",
+            json={"status": "rejected"},   # 缺 rejected_reason
+        )
+        assert resp.status_code == 422
+    finally:
+        with get_db_session() as db:
+            db.query(RuleCandidate).filter(RuleCandidate.candidate_id == cid).delete()
+            db.commit()
+
+# ============================================================
+# [S3-LEGACY-B2] #5：幂等 + 非 gap 类型 ref=None
+# ============================================================
+
+def test_create_gap_from_feedback_idempotent():
+    """#5：同一 feedback_id 重复调 create_gap_from_feedback → 只生成 1 条 gap（D16 幂等）。
+
+    注意：不能走 API 连点两次（会生成两个不同 feedback_id），
+    必须直接用同一 feedback_id 调 service 两次。
+    """
+    from app.persistence.db import get_db_session
+    from app.persistence.models import FeedbackItem, GapFeedbackLink, KnowledgeGap
+    from app.services import knowledge_gap_service
+
+    with get_db_session() as db:
+        fb = FeedbackItem(
+            feedback_type="knowledge_gap",
+            expert_suggestion="[B2-IDEMPOTENT] 幂等测试",
+            suggestion_diff_json=[],
+            attached_refs=[],
+        )
+        db.add(fb)
+        db.commit()
+        feedback_id = fb.id
+
+    try:
+        with get_db_session() as db:
+            gap_id_1 = knowledge_gap_service.create_gap_from_feedback(db, feedback_id)
+            db.commit()
+        with get_db_session() as db:
+            gap_id_2 = knowledge_gap_service.create_gap_from_feedback(db, feedback_id)
+            db.commit()
+
+        assert gap_id_1 is not None
+        assert gap_id_2 == gap_id_1, f"幂等失败：第一次 {gap_id_1}，第二次 {gap_id_2}"
+
+        with get_db_session() as db:
+            link_count = (
+                db.query(GapFeedbackLink)
+                .filter(GapFeedbackLink.feedback_id == feedback_id)
+                .count()
+            )
+            gap_count = (
+                db.query(KnowledgeGap)
+                .filter(KnowledgeGap.source_feedback_id == feedback_id)
+                .count()
+            )
+        assert link_count == 1, f"gap_feedback_link 应只有 1 条，实际 {link_count}"
+        assert gap_count == 1, f"knowledge_gap 应只有 1 条，实际 {gap_count}"
+    finally:
+        with get_db_session() as db:
+            db.query(GapFeedbackLink).filter(
+                GapFeedbackLink.feedback_id == feedback_id
+            ).delete(synchronize_session=False)
+            db.query(KnowledgeGap).filter(
+                KnowledgeGap.source_feedback_id == feedback_id
+            ).delete(synchronize_session=False)
+            db.query(FeedbackItem).filter(FeedbackItem.id == feedback_id).delete(
+                synchronize_session=False
+            )
+            db.commit()
+
+
+def test_submit_feedback_non_gap_type_ref_none(client, test_admin_user):
+    """#5：非 knowledge_gap 类型（correct_defect）→ 响应 knowledge_gap_ref 为 None。"""
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import ReviewDefect, ReviewResult
+
+    tid = f"TEST-B2-{uuid.uuid4().hex[:8].upper()}"
+    did = f"D-{uuid.uuid4().hex[:8].upper()}"     # ← defect_id 全局唯一，避免撞存量
+    rr_id = None
+    with get_db_session() as db:
+        rr = ReviewResult(
+            task_id=tid,
+            task_status="done",
+            created_by=test_admin_user["id"],
+            review_output_json={"defects": [], "errors": []},
+            evidence_coverage=0.8,
+        )
+        db.add(rr)
+        db.flush()
+        rr_id = rr.id
+        rd = ReviewDefect(
+            review_result_id=rr_id,
+            defect_id=did,
+            category="other",
+            location={},
+            risk="medium",
+            confidence=0.9,
+            root_cause="r",
+            suggestion="s",
+        )
+        db.add(rd)
+        db.commit()
+
+    try:
+        resp = client.post(
+            "/api/v1/feedbacks",
+            json={
+                "task_id": tid,
+                "defect_id": did,
+                "feedback_type": "correct_defect",
+                "expert_suggestion": "[B2] 非 gap 类型",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["knowledge_gap_ref"] is None
+    finally:
+        with get_db_session() as db:
+            db.query(ReviewDefect).filter(
+                ReviewDefect.review_result_id == rr_id
+            ).delete(synchronize_session=False)
+            db.query(ReviewResult).filter(ReviewResult.task_id == tid).delete(
+                synchronize_session=False
+            )
+            db.commit()
+
+# ============================================================
+# [S3-LEGACY-B4] #8 rule rollback
+# ============================================================
+
+def _make_rule_with_history(version_current: str, version_target: str):
+    """造一条 rule_definition + 一条 history 目标版本，返回 rule_id。"""
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+
+    rule_id = f"RULE-B4-{uuid.uuid4().hex[:8].upper()}"
+    with get_db_session() as db:
+        db.add(RuleDefinition(
+            rule_id=rule_id,
+            rule_name="current",
+            rule_category="other",
+            rule_yaml="rule_id: x\nversion: " + version_current,
+            severity="medium",
+            enabled=True,
+            version=version_current,
+        ))
+        db.add(RuleDefinitionHistory(
+            rule_id=rule_id,
+            version=version_target,
+            rule_name="target",
+            rule_category="other",
+            rule_yaml="rule_id: x\nversion: " + version_target,
+            severity="medium",
+            enabled=True,
+            change_source="publish",
+        ))
+        db.commit()
+    return rule_id
+
+
+def _cleanup_rule(rule_id: str) -> None:
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    with get_db_session() as db:
+        db.query(RuleDefinitionHistory).filter(
+            RuleDefinitionHistory.rule_id == rule_id
+        ).delete(synchronize_session=False)
+        db.query(RuleDefinition).filter(
+            RuleDefinition.rule_id == rule_id
+        ).delete(synchronize_session=False)
+        db.commit()
+
+
+def test_rollback_rule_success():
+    """回滚成功：主表内容/版本变目标值，history 新增 rollback 来源一条。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    from app.services.rule_evolution_service import RuleEvolutionService
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        svc = RuleEvolutionService()
+        with get_db_session() as db:
+            result = svc.rollback_rule(db, rule_id, "v1.0")
+        assert result is not None
+        assert result["from_version"] == "v2.0"
+        assert result["to_version"] == "v1.0"
+        with get_db_session() as db:
+            rd = db.query(RuleDefinition).filter(RuleDefinition.rule_id == rule_id).first()
+            assert rd.version == "v1.0"
+            assert rd.rule_name == "target"
+            rollback_rows = (
+                db.query(RuleDefinitionHistory)
+                .filter(
+                    RuleDefinitionHistory.rule_id == rule_id,
+                    RuleDefinitionHistory.change_source == "rollback",
+                )
+                .count()
+            )
+            assert rollback_rows == 1
+    finally:
+        _cleanup_rule(rule_id)
+
+
+def test_rollback_rule_target_not_found():
+    """目标版本不存在：返回 None，主表不变，history 无新增。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    from app.services.rule_evolution_service import RuleEvolutionService
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        svc = RuleEvolutionService()
+        with get_db_session() as db:
+            before = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+            result = svc.rollback_rule(db, rule_id, "v9.9")
+        assert result is None
+        with get_db_session() as db:
+            rd = db.query(RuleDefinition).filter(RuleDefinition.rule_id == rule_id).first()
+            assert rd.version == "v2.0"
+            after = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+            assert after == before
+    finally:
+        _cleanup_rule(rule_id)
+
+
+def test_rollback_rule_dry_run_no_write():
+    """dry_run=True：只校验，主表与 history 均无变化。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    from app.services.rule_evolution_service import RuleEvolutionService
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        svc = RuleEvolutionService()
+        with get_db_session() as db:
+            before = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+            result = svc.rollback_rule(db, rule_id, "v1.0", dry_run=True)
+        assert result is not None
+        assert result["dry_run"] is True
+        with get_db_session() as db:
+            rd = db.query(RuleDefinition).filter(RuleDefinition.rule_id == rule_id).first()
+            assert rd.version == "v2.0"
+            after = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+            assert after == before
+    finally:
+        _cleanup_rule(rule_id)
+
+
+def test_rollback_rule_cli_refuse_exit_1(monkeypatch):
+    """CLI：目标版本不存在 → main() 返回 1。"""
+    import sys
+    from scripts import rollback_rule
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        monkeypatch.setattr(
+            sys, "argv",
+            ["rollback_rule.py", "--rule-id", rule_id, "--to-version", "v9.9"],
+        )
+        assert rollback_rule.main() == 1
+    finally:
+        _cleanup_rule(rule_id)
+
+def test_rollback_rule_idempotent():
+    """连续回滚两次同一目标：第二次返回 noop=True，history 不再新增。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    from app.services.rule_evolution_service import RuleEvolutionService
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        svc = RuleEvolutionService()
+
+        # 第一次回滚：正常执行
+        with get_db_session() as db:
+            first = svc.rollback_rule(db, rule_id, "v1.0")
+        assert first is not None
+        assert first.get("noop") is False
+        assert first["from_version"] == "v2.0"
+        assert first["to_version"] == "v1.0"
+
+        # 记录第一次回滚后 history 行数
+        with get_db_session() as db:
+            count_after_first = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+
+        # 第二次回滚同一目标：应命中幂等前置，返回 noop=True
+        with get_db_session() as db:
+            second = svc.rollback_rule(db, rule_id, "v1.0")
+        assert second is not None
+        assert second.get("noop") is True
+
+        # 主表版本仍为 v1.0，history 未新增
+        with get_db_session() as db:
+            rd = db.query(RuleDefinition).filter(
+                RuleDefinition.rule_id == rule_id
+            ).first()
+            assert rd.version == "v1.0"
+            count_after_second = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+        assert count_after_second == count_after_first, (
+            f"幂等命中时 history 不应新增：第一次 {count_after_first}，第二次 {count_after_second}"
+        )
+    finally:
+        _cleanup_rule(rule_id)

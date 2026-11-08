@@ -1,63 +1,57 @@
 # backend/app/api/feedbacks.py
-"""反馈路由（G4 新增）。
-
-【决策 6：FeedbackCreateAPI，传业务标识】
-  - API body 含 task_id + defect_id + 6 类反馈字段
-  - 端点内翻译为 service.submit_task_feedback 的参数
-  - service 抛 FeedbackNotFoundError（继承 ValueError）→ 404
-
-【约束 1：except 顺序】
-  FeedbackNotFoundError 继承 ValueError，必须先于 ValueError 捕获。
-  当前只有 FeedbackNotFoundError，若将来加 except ValueError，必须放后面。
+"""反馈路由。
+Sprint 3 G3 鉴权：
+  - POST /feedbacks → reviewer / admin（不开放 engineer）
+审计字段注入（G3‑C）：
+  - feedback_item.created_by 由后端从 current_user.id 注入。
 """
 from __future__ import annotations
-
-from fastapi import APIRouter, HTTPException
-
+from fastapi import APIRouter, Depends, HTTPException
+from app.api.deps import CurrentUser, ROLE_ADMIN, ROLE_REVIEWER, require_roles
 from app.api.schemas import FeedbackCreateAPI, FeedbackResponse
-from app.schemas.feedback import FeedbackType
-from app.services import task_service
-from app.services.feedback_service import FeedbackNotFoundError
+from app.persistence.db import get_db_session
+from app.services import feedback_service, task_service
+from app.schemas.feedback import FeedbackCreate, FeedbackType
+from app.persistence.models import ReviewResult, ReviewDefect, FeedbackItem  # 新增导入
+
 
 router = APIRouter(prefix="/feedbacks", tags=["feedbacks"])
 
-
 @router.post("", response_model=FeedbackResponse)
-def submit_feedback(body: FeedbackCreateAPI) -> FeedbackResponse:
-    """提交专家反馈。
-
-    【状态码】
-      - task_id / defect_id 不存在 → 404（FeedbackNotFoundError）
-      - 成功 → 200
+def submit_feedback(
+    body: FeedbackCreateAPI,
+    current: CurrentUser = Depends(require_roles(ROLE_REVIEWER, ROLE_ADMIN)),
+) -> FeedbackResponse:
+    """提交专家反馈。reviewer / admin 可用。
+    created_by 后端注入（G3‑C 会改 feedback_service.submit_feedback 签名）。
     """
-    try:
-        fb_out = task_service.submit_task_feedback(
+    with get_db_session() as db:
+        # 使用已有对外入口：自动做task_id/defect_id翻译成外键，内部调用FeedbackService
+        out = task_service.submit_task_feedback(
             task_id=body.task_id,
             defect_id=body.defect_id,
-            # 显式转 FeedbackType，不依赖 Pydantic 隐式转换
             feedback_type=FeedbackType(body.feedback_type),
             expert_suggestion=body.expert_suggestion,
             suggestion_adopted=body.suggestion_adopted,
             suggestion_diff=body.suggestion_diff,
             rule_candidate=body.rule_candidate,
-            created_by=body.created_by,
+            created_by=current.id,
         )
-    except FeedbackNotFoundError as exc:
-        # 约束 1：FeedbackNotFoundError 先于 ValueError
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    dumped = fb_out.model_dump()
     return FeedbackResponse(
-        id=dumped["id"],
-        task_id=dumped.get("task_id"),
-        defect_id=dumped.get("defect_id"),
-        review_result_id=dumped.get("review_result_id"),
-        review_defect_id=dumped.get("review_defect_id"),
-        feedback_type=dumped["feedback_type"],
-        expert_suggestion=dumped.get("expert_suggestion"),
-        suggestion_diff=dumped.get("suggestion_diff") or [],
-        rule_candidate_ref=dumped.get("rule_candidate_ref"),
-        created_by=dumped.get("created_by"),
-        # 约束 3：直接传 datetime，FastAPI 自动序列化
-        created_at=dumped["created_at"],
+        id=out.id,
+        task_id=out.task_id,
+        defect_id=out.defect_id,
+        review_result_id=out.review_result_id,
+        review_defect_id=out.review_defect_id,
+        feedback_type=out.feedback_type.value,
+        expert_suggestion=out.expert_suggestion,
+        suggestion_diff=[d.model_dump() for d in out.suggestion_diff],
+        rule_candidate_ref=out.rule_candidate_ref,
+        knowledge_gap_ref=out.knowledge_gap_ref,    # ← 加这行
+        created_by=out.created_by,
+        created_at=out.created_at,
     )
+
+
+

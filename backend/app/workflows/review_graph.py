@@ -1046,6 +1046,9 @@ def node_feedback_save(state: ReviewGraphState) -> ReviewGraphState:
             report, state["case_id"], state["task_id"],
             rule_hits=state.get("rule_hits", []),
             ir_doc=state.get("ir"),
+            # ===== [S3-G3C] 审计字段：任务创建者 users.id =====
+            created_by=state.get("created_by"),
+            # ===== [S3-G3C END] =====
         )
         # ===== [S1-F 修正 END] =====
     except Exception as exc:
@@ -1117,6 +1120,7 @@ def _persist_review_report(
     task_id: str,
     rule_hits: list | None = None,
     ir_doc=None,
+    created_by: int | None = None,   # ← 加这行
 ) -> None:
     """
     将 ReviewReport 落库到 review_result + review_defect。
@@ -1188,6 +1192,9 @@ def _persist_review_report(
             # ===== [S1-D 修正] 用 Graph 的 task_id，不依赖 LLM 回显 =====
             task_id=task_id,
             # ===== [S1-D 修正 END] =====
+            # ===== [S3-G3C] 审计字段：任务创建者 users.id =====
+            created_by=created_by,
+            # ===== [S3-G3C END] =====
             schematic_case_id=schematic_case_id,
             # ===== [S1-D 修正] 补 review_output_json（NOT NULL 字段），
             # 存完整报告 JSON，供 get_task / API 报告查询使用 =====
@@ -1306,7 +1313,11 @@ def build_review_graph():
 # ============================================================
 # 入口：运行 Graph
 # ============================================================
-def run_review_graph(case_id: str, task_id: str) -> ReviewGraphState:
+def run_review_graph(
+    case_id: str, 
+    task_id: str, 
+    created_by: int | None = None
+) -> ReviewGraphState:
     """
     运行 6 节点评审工作流。
 
@@ -1321,7 +1332,9 @@ def run_review_graph(case_id: str, task_id: str) -> ReviewGraphState:
     from app.workflows.state import make_initial_state
 
     graph = build_review_graph()
-    initial_state = make_initial_state(case_id, task_id)
+    # ===== [S3-G3C] 审计字段：任务创建者 users.id =====
+    initial_state = make_initial_state(case_id, task_id, created_by=created_by)
+    # ===== [S3-G3C END] =====
     initial_state["task_status"] = TASK_STATUS_RUNNING
 
     try:

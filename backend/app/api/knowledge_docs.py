@@ -15,13 +15,19 @@ import uuid
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import func
 
 from app.api.schemas import (
     KnowledgeDocItem,
     KnowledgeDocListResponse,
     KnowledgeUploadResponse,
+)
+from app.api.deps import (
+    CurrentUser,
+    ROLE_ADMIN,
+    ROLE_RULE_ADMIN,
+    require_roles,
 )
 from app.persistence.db import get_db_session
 from app.persistence.models import KnowledgeDoc, KnowledgeChunk
@@ -35,7 +41,9 @@ router = APIRouter(prefix="/knowledge-docs", tags=["knowledge_docs"])
 # GET /knowledge-docs
 # ============================================================
 @router.get("", response_model=KnowledgeDocListResponse)
-def list_knowledge_docs() -> KnowledgeDocListResponse:
+def list_knowledge_docs(
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
+) -> KnowledgeDocListResponse:
     """查询已入库的知识文档列表。"""
     with get_db_session() as db:
         docs = db.query(KnowledgeDoc).order_by(KnowledgeDoc.id.desc()).all()
@@ -57,7 +65,10 @@ def list_knowledge_docs() -> KnowledgeDocListResponse:
 # POST /knowledge-docs/upload
 # ============================================================
 @router.post("/upload", response_model=KnowledgeUploadResponse)
-async def upload_knowledge_doc(file: UploadFile = File(...)) -> KnowledgeUploadResponse:
+async def upload_knowledge_doc(
+    file: UploadFile = File(...),
+    current: CurrentUser = Depends(require_roles(ROLE_RULE_ADMIN, ROLE_ADMIN)),
+) -> KnowledgeUploadResponse:
     """上传 Markdown 文件，落盘临时文件 -> 切片向量化 -> 删除临时文件。"""
     if not file.filename or not file.filename.endswith(".md"):
         raise HTTPException(status_code=400, detail="仅支持上传 .md 后缀的 Markdown 文件")

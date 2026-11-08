@@ -1,18 +1,15 @@
 name: CI
-
 on:
   push:
     branches: [main, develop, "feature/**"]
   pull_request:
     branches: [main, develop]
-
 jobs:
   backend:
     runs-on: ubuntu-latest
-
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg15
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -24,7 +21,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
     env:
       APP_ENV: "test"
       DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/schematic_review"
@@ -34,10 +30,8 @@ jobs:
       LLM_API_KEY: "mock-key-for-ci"
       # 关键：用 zhipu 而不是 fake，因为 DB 是 1024 维（Sprint 1 定死的）
       RAG_EMBEDDING_BACKEND: "zhipu"
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Create symlinks for CI compatibility
         run: |
           # 把 /data 和 /out 指向仓库目录，绕过硬编码路径
@@ -49,32 +43,33 @@ jobs:
           # 改用 cp -r 更稳
           sudo cp -r $(pwd)/data/* /data/ 2>/dev/null || true
           sudo cp -r $(pwd)/out/* /out/ 2>/dev/null || true
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install uv
         uses: astral-sh/setup-uv@v4
         with:
           version: "0.12.6"
           enable-cache: true
-
       - name: Install dependencies (backend)
         working-directory: backend
         run: uv sync --extra dev --frozen
-
       - name: Initialize database schema
         working-directory: backend
         run: |
           sleep 5
           uv run alembic upgrade head
-
+      - name: Verify migration head
+        working-directory: backend
+        run: |
+          uv run alembic current
+          uv run alembic current | grep -q "s3_b4_rule_history (head)"
       - name: Run backend tests (non-integration)
         working-directory: backend
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: uv run python -m pytest -m "not integration" -v
-
   frontend:
     runs-on: ubuntu-latest
     steps:

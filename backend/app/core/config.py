@@ -1,7 +1,7 @@
 # app/core/config.py
 from typing import List, Optional
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # ⚠️ V1.3：Pydantic v2 已废弃 v1 的 env= 写法；字段名默认映射
     # 环境变量 RAG_EMBEDDING_BACKEND（大小写不敏感）
     rag_embedding_backend: str = "fake"
+    # ===== [S3-LEGACY-B3] D30：鉴权模式（jwt / header / both）=====
+    auth_mode: str = "both"
+    # ===== [S3-LEGACY-B3 END] =====    
 
 
     @property
@@ -66,5 +69,12 @@ class Settings(BaseSettings):
         if env == "prod" and ("localhost" in v or "127.0.0.1" in v):
             raise ValueError("DATABASE_URL 在生产环境不能使用 localhost/127.0.0.1，请使用服务名 postgres")
         return v
+
+    @model_validator(mode="after")
+    def force_auth_mode_in_prod(self):
+        """D30：APP_ENV=prod 时强制 auth_mode='jwt'，忽略外部 AUTH_MODE 配置。"""
+        if self.app_env.lower() == "prod":
+            object.__setattr__(self, "auth_mode", "jwt")
+        return self
 
 settings = Settings()

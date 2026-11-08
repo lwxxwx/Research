@@ -241,8 +241,18 @@ class FeedbackService:
         #     db.flush()
         # ------------------------------------------------------------
         # ★ 改进 5：抽取到 _dispatch_evolution，逻辑 1:1 保持
-        candidate_ref = self._dispatch_evolution(db, feedback_id, feedback_in, db_feedback)
+        #candidate_ref = self._dispatch_evolution(db, feedback_id, feedback_in, db_feedback)
+        candidate_ref, gap_id = self._dispatch_evolution(
+                    db, feedback_id, feedback_in, db_feedback,
+                )
 
+        # ===== [S3-G5] knowledge_gap 分支日志（_dispatch_evolution 内部已打分发日志，此处打事务层日志）=====
+        if gap_id is not None:
+            logger.info(
+                f"knowledge_gap 已生成：feedback_id={feedback_id}, gap_id={gap_id}"
+            )        
+        # gap_id 当前不写 FeedbackItem（D17 方案 A+），FeedbackOut.knowledge_gap_ref 由 _build_out 反查
+        # 保留变量避免解包报错；如需日志可在下方追加
         # knowledge_gap 不生成rule_candidate，知识缺口导出由rule_evolution导出接口处理
         # --- 原代码（保留，已弃用） ---
         # db.commit()
@@ -259,7 +269,7 @@ class FeedbackService:
         # ★ 改进 4：完成日志
         logger.info(
             f"submit_feedback 完成：feedback_id={feedback_id}, "
-            f"candidate_ref={candidate_ref}"
+            f"candidate_ref={candidate_ref}, gap_id={gap_id}"
         )
 
         # ============================================================
@@ -282,7 +292,7 @@ class FeedbackService:
         # return out
         # ------------------------------------------------------------
         # ★ 改进 5：抽取到 _build_out，逻辑 1:1 保持
-        return self._build_out(db_feedback, review_result, review_defect)
+        return self._build_out(db, db_feedback, review_result, review_defect)
 
     # ============================================================
     # ★ 改进 5：内部辅助方法（拆分主流程，逻辑与原代码 1:1 对应）
@@ -382,23 +392,21 @@ class FeedbackService:
         feedback_id: int,
         feedback_in: FeedbackCreate,
         db_feedback: FeedbackItem,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
         """
-        根据 feedback_type 分发规则演进逻辑
+        根据 feedback_type 分发规则演进逻辑。
 
-        返回 candidate_ref（未触发时为 None）
+        返回 (candidate_ref, gap_id) 元组：
+          - candidate_ref: 规则候选 ID（false_negative / new_rule_candidate 时非 None）
+          - gap_id       : 知识缺口 ID（knowledge_gap 时非 None）
+        两者互斥（同一 feedback_type 不会同时生成候选和缺口），未触发时为 None。
         """
-        # --- 原代码（保留，已弃用） ---
-        # if feedback_in.feedback_type in (FeedbackType.FALSE_NEGATIVE, FeedbackType.NEW_RULE_CANDIDATE):
-        #     candidate_ref = self.rule_evolution.generate_candidate_from_feedback(...)
-        #     db_feedback.rule_candidate_ref = candidate_ref
-        #     db.flush()
         candidate_ref: str | None = None
+        gap_id: str | None = None
         if feedback_in.feedback_type in (
             FeedbackType.FALSE_NEGATIVE,
             FeedbackType.NEW_RULE_CANDIDATE,
         ):
-            # ★ 改进 4：日志
             logger.info(
                 f"触发规则候选生成：feedback_id={feedback_id}, "
                 f"feedback_type={feedback_in.feedback_type}"
@@ -407,11 +415,6 @@ class FeedbackService:
                 db=db,
                 feedback_id=feedback_id,
                 case_id=None,
-                # ★ v1.2：RuleCandidate（Pydantic）→ dict，
-                # 字段集已与 rule_evolution_service 期望的 key 对齐（11 字段）
-                # 无需字段名映射
-                # --- 原代码（保留，已弃用） ---
-                # hint_payload=feedback_in.rule_candidate,
                 hint_payload=(
                     feedback_in.rule_candidate.model_dump()
                     if feedback_in.rule_candidate is not None
@@ -420,10 +423,29 @@ class FeedbackService:
             )
             db_feedback.rule_candidate_ref = candidate_ref
             db.flush()
-        return candidate_ref
+
+        # ===== [S3-G5] knowledge_gap 分支（D12–D20）=====
+        elif feedback_in.feedback_type == FeedbackType.KNOWLEDGE_GAP:
+            from app.services import knowledge_gap_service
+            logger.info(
+                f"触发知识缺口生成：feedback_id={feedback_id}, "
+                f"feedback_type={feedback_in.feedback_type}"
+            )
+            gap_id = knowledge_gap_service.create_gap_from_feedback(
+                db, feedback_id, case_id=None,
+            )
+            logger.info(
+                f"知识缺口已生成：feedback_id={feedback_id}, gap_id={gap_id}"
+            )
+            # 注意：gap_id 不写 db_feedback（FeedbackItem 无 knowledge_gap_ref 列，D17 方案 A+）
+            # FeedbackOut.knowledge_gap_ref 由 _build_out 从 GapFeedbackLink 反查
+        # ===== [S3-G5 END] =====
+
+        return candidate_ref, gap_id
 
     def _build_out(
         self,
+        db: Session,
         db_feedback: FeedbackItem,
         review_result: ReviewResult,
         review_defect: ReviewDefect,
@@ -446,6 +468,20 @@ class FeedbackService:
         #     created_at=db_feedback.created_at.isoformat() if db_feedback.created_at else ""
         # )
         # return out
+        # ===== [S3-G5] 单次 outer-join 反查 knowledge_gap_ref（D17 方案 A+，不落库）=====
+        # 用原生 SQL 绕过 SQLAlchemy identity_map 缓存（同 session 内 commit 后查询可能失效）
+        from sqlalchemy import text
+        row = db.execute(
+            text(
+                "SELECT kg.gap_id FROM knowledge_gap kg "
+                "JOIN gap_feedback_link gfl ON gfl.gap_id = kg.id "
+                "WHERE gfl.feedback_id = :fid"
+            ),
+            {"fid": db_feedback.id},
+        ).fetchone()
+        knowledge_gap_ref: str | None = row[0] if row else None
+        # ===== [S3-G5 END] =====
+
         return FeedbackOut(
             id=db_feedback.id,
             review_result_id=db_feedback.review_result_id,
@@ -458,13 +494,8 @@ class FeedbackService:
                 SuggestionDiff(**x) for x in db_feedback.suggestion_diff_json
             ],
             rule_candidate_ref=db_feedback.rule_candidate_ref,
+            knowledge_gap_ref=knowledge_gap_ref,   # ← 显式传入（修正 ②，防 extra="forbid"）
             created_by=db_feedback.created_by,
-            # ★ schema v1.1：FeedbackOut.created_at 已改为 datetime 类型
-            # 直接传 datetime 对象，由 Pydantic 处理
-            # --- 原代码（保留，已弃用） ---
-            # created_at=(
-            #     db_feedback.created_at.isoformat() if db_feedback.created_at else ""
-            # ),
             created_at=db_feedback.created_at,
         )
 

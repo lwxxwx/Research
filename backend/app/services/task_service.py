@@ -30,6 +30,9 @@ from typing import Any
 
 from app.persistence.db import get_db_session
 from app.persistence.models import ReviewDefect, ReviewResult
+# ===== [S3-G3] 业务参数校验异常 → 422 =====
+from app.core.exceptions import BusinessValueError
+# ===== [S3-G3 END] =====
 from app.schemas.feedback import (
     FeedbackCreate,   # ← 新增
     FeedbackOut,
@@ -87,7 +90,7 @@ def _make_task_id() -> str:
 # ============================================================
 # create_task：创建并运行评审任务
 # ============================================================
-def create_task(case_id: str) -> str:
+def create_task(case_id: str, created_by: int | None = None) -> str:
     """
     创建并运行一次评审任务。
 
@@ -106,36 +109,59 @@ def create_task(case_id: str) -> str:
         get_task 返回 None，调用方需处理
 
     :param case_id: 业务 Case 标识（如 "case001"）
-    :return: task_id（即使失败也返回，供查询错误详情）
+    :param created_by: 创建人 ID（可选）
+    :return: {
+        "task_id": str,
+        "status": str,              # done / failed / pending
+        "defects_count": int,       # 优先取 Graph parsed_defects；为空时单次查 ReviewResult 兜底
+    }
+    失败时仍返回 dict（status=failed，defects_count 取已解析缺陷数，不查库）。
     """
     task_id = _make_task_id()
     logger.info("create_task start: case_id=%s task_id=%s", case_id, task_id)
 
-    final_state: ReviewGraphState = run_review_graph(case_id, task_id)
+    final_state: ReviewGraphState = run_review_graph(
+        case_id, task_id, created_by=created_by,
+    )
 
     status = final_state.get("task_status", TASK_STATUS_FAILED)
     errors = final_state.get("errors", [])
+    parsed_defects = final_state.get("parsed_defects", []) or []
+    defects_count = len(parsed_defects)
 
     if status == TASK_STATUS_FAILED:
-        logger.error(
-            "create_task failed: case_id=%s task_id=%s errors=%s",
-            case_id, task_id, errors,
-        )
+        logger.error(...)
     else:
         logger.info(
-            "create_task done: case_id=%s task_id=%s defects=%d errors=%d",
-            case_id, task_id,
-            len(final_state.get("parsed_defects", [])),
-            len(errors),
+            "create_task done: case_id=%s task_id=%s defects=%s errors=%s",
+            case_id, task_id, defects_count, len(errors),
         )
 
-    return task_id
+    # ===== [S3-LEGACY-B1] D24：parsed_defects 为空时单次查 ReviewResult 兜底 =====
+    if status != TASK_STATUS_FAILED and defects_count == 0:
+        with get_db_session() as db:
+            rr = (
+                db.query(ReviewResult)
+                .filter(ReviewResult.task_id == task_id)
+                .order_by(ReviewResult.id.desc())
+                .first()
+            )
+            if rr is not None:
+                report_json = rr.review_output_json or {}
+                defects_count = len(report_json.get("defects", []) or [])
+    # ===== [S3-LEGACY-B1 END] =====
+
+    return {
+        "task_id": task_id,
+        "status": status,
+        "defects_count": defects_count,
+    }
 
 
 # ============================================================
 # get_task：查询任务状态 + 报告
 # ============================================================
-def get_task(task_id: str) -> dict[str, Any] | None:
+def get_task(task_id: str, current_user=None) -> dict[str, Any] | None:
     """
     按 task_id 查询任务状态与报告。
 
@@ -170,10 +196,35 @@ def get_task(task_id: str) -> dict[str, Any] | None:
             .first()
         )
         if rr is None:
-            logger.warning("get_task: task_id=%s 未找到 review_result", task_id)
+            # 分支 1：真不存在
+            logger.info(
+                "task.not_found: task_id=%s current_user_id=%s current_user_role=%s",
+                task_id,
+                getattr(current_user, "id", None),
+                getattr(current_user, "role", None),
+            )
             return None
 
+        # ===== [S3-G3B] engineer 对象级数据范围（D6：对外 404，日志区分）=====
+        if current_user is not None and getattr(current_user, "role", None) == "engineer":
+            if rr.created_by is None:
+                # 分支 2：历史数据（created_by NULL），engineer 无权访问
+                logger.warning(
+                    "audit.historical_unauthorized: task_id=%s current_user_id=%s reason=created_by_is_null",
+                    task_id, current_user.id,
+                )
+                return None
+            if rr.created_by != current_user.id:
+                # 分支 3：真实越权（engineer 访问他人任务）
+                logger.warning(
+                    "audit.idor_hidden: task_id=%s current_user_id=%s owner_id=%s",
+                    task_id, current_user.id, rr.created_by,
+                )
+                return None
+        # ===== [S3-G3B END] =====
+
         report_json = rr.review_output_json or {}
+
         errors = report_json.get("errors", []) if isinstance(report_json, dict) else []
         defects = report_json.get("defects", []) if isinstance(report_json, dict) else []
 
@@ -281,6 +332,7 @@ def _infer_case_class(case_id: str | None) -> str | None:
 
 def list_tasks_filtered(
     *,
+    current_user=None,   # ← 加这行（CurrentUser | None，避免循环 import）
     case_class: str | None = None,
     review_status: str | None = None,
     status: str | None = None,   # ← [S2-C] 任务状态过滤（pending/done/failed）
@@ -340,24 +392,28 @@ def list_tasks_filtered(
     _VALID_STATUS = {"pending", "done", "failed"}
 
     if case_class is not None and case_class not in _VALID_CASE_CLASS:
-        raise ValueError(
+        raise BusinessValueError(
             f"case_class 必须为 'A' / 'B' / None，实际: {case_class!r}"
         )
+    # ============ 新增下面这一段 ============
     if review_status is not None and review_status not in _VALID_REVIEW_STATUS:
-        raise ValueError(
-            f"review_status 必须为 AI_CONFIRMED / NEED_EXPERT_REVIEW / "
-            f"LOW_CONFIDENCE / None，实际: {review_status!r}"
-        )
+        raise BusinessValueError(f"review_status 必须为 {_VALID_REVIEW_STATUS} 之一，实际: {review_status!r}")
+    #if review_status is not None and review_status not in _VALID_REVIEW_STATUS:
+    #    raise BusinessValueError(
+    #        f"review_status 必须为 AI_CONFIRMED / NEED_EXPERT_REVIEW / "
+    #        f"LOW_CONFIDENCE / None，实际: {review_status!r}"
+    #    )
+
     # ===== [S2-C] status 校验 =====
     if status is not None and status not in _VALID_STATUS:
-        raise ValueError(
+        raise BusinessValueError(
             f"status 必须为 'pending' / 'done' / 'failed' / None，实际: {status!r}"
         )
     # ===== [S2-C END] =====
     if limit < 0:
-        raise ValueError(f"limit 必须 >= 0，实际: {limit}")
+        raise BusinessValueError(f"limit 必须 >= 0，实际: {limit}")
     if offset < 0:
-        raise ValueError(f"offset 必须 >= 0，实际: {offset}")
+        raise BusinessValueError(f"offset 必须 >= 0，实际: {offset}")
 
     # ===== 决策 3：JOIN 拿 case_id，避免 N+1 =====
     errors: list[str] = []
@@ -372,6 +428,15 @@ def list_tasks_filtered(
             )
             .order_by(ReviewResult.id.desc())
         )
+
+        # ===== [S3-G3B] created_by 过滤：仅 engineer =====
+        if current_user is not None and getattr(current_user, "role", None) == "engineer":
+            query = query.filter(ReviewResult.created_by == current_user.id)
+        # ===== [S3-G3B END] =====
+
+        # DB 层过滤：review_status
+        if review_status:
+            query = query.filter(ReviewResult.review_status == review_status)
 
         # DB 层过滤：review_status
         if review_status:
@@ -430,7 +495,7 @@ def list_tasks_filtered(
 # ============================================================
 # get_task_defects：查询任务下的缺陷明细
 # ============================================================
-def get_task_defects(task_id: str) -> list[dict[str, Any]]:
+def get_task_defects(task_id: str, current_user=None) -> list[dict[str, Any]]:
     """
     查询任务下的缺陷明细（review_defect 表）。
 
@@ -450,7 +515,27 @@ def get_task_defects(task_id: str) -> list[dict[str, Any]]:
             .first()
         )
         if rr is None:
+            logger.info(
+                "task.not_found: task_id=%s endpoint=get_task_defects current_user_id=%s",
+                task_id, getattr(current_user, "id", None),
+            )
             return []
+
+        # ===== [S3-G3B] engineer 对象级数据范围（D6：对外 404，日志区分）=====
+        if current_user is not None and getattr(current_user, "role", None) == "engineer":
+            if rr.created_by is None:
+                logger.warning(
+                    "audit.historical_unauthorized: task_id=%s endpoint=get_task_defects current_user_id=%s",
+                    task_id, current_user.id,
+                )
+                return []
+            if rr.created_by != current_user.id:
+                logger.warning(
+                    "audit.idor_hidden: task_id=%s endpoint=get_task_defects current_user_id=%s owner_id=%s",
+                    task_id, current_user.id, rr.created_by,
+                )
+                return []
+        # ===== [S3-G3B END] =====
 
         defects = (
             db.query(ReviewDefect)
@@ -481,6 +566,9 @@ def get_task_defects(task_id: str) -> list[dict[str, Any]]:
                 #      导致 API 层无法展示"谁在什么时候做了什么判定"。
                 # 修法：只补 2 个字段，expert_decision 已有。
                 #      不改查询、不改签名，保持向后兼容。
+                #[S3-LEGACY-B1] 薄兼容层：task/defect → 外键的翻译逻辑暂留此处，
+                #实际反馈落库与规则演进由 FeedbackService 负责。逻辑迁入 feedback_service
+                #安排在后续批次（D25），本层届时改为直接转发或删除。
                 # --- 原代码（保留，已注释） ---
                 # "expert_decision": d.expert_decision,
                 # --- 原代码（保留，已注释） ---
@@ -763,7 +851,7 @@ def update_expert_decision(
 
     _ALLOWED = {"pending", "confirmed", "rejected", "needs_verification"}
     if expert_decision not in _ALLOWED:
-        raise ValueError(f"非法 expert_decision: {expert_decision!r}")
+        raise BusinessValueError(f"非法 expert_decision: {expert_decision!r}")
 
     with get_db_session() as db:
         # 1. 查 review_result

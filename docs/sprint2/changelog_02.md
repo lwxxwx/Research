@@ -819,3 +819,27 @@ Content-Type: application/json
 | 本地全量（含 integration） | **592 passed, 1 skipped, 0 failed** |
 | GitHub Actions `backend` | ✅ 全绿 |
 | GitHub Actions `frontend` | ✅ 全绿 |
+
+---
+
+## [S2-Git-Fix] 2026-11-02 - Git 历史治理与主干分支对齐
+
+> 状态：✅ 完成
+> 背景：Sprint 2 封板推送后，发现本地分支与远端 `main` 分支存在“历史分叉”（entirely different commit histories），导致 GitHub 无法正常创建 PR。为彻底解决此问题，进行了 Git 历史重构与分支清理。
+
+### 核心操作
+
+1. **分析分叉原因**：早期项目初始化时，本地仓库与远端 `main` 的根节点不同。后续开发直接基于本地历史迭代（Sprint 0 ~ Sprint 2），导致两条时间线完全没有交集。
+2. **强制对齐主干**：使用 `git checkout -B main` 将本地的 `main` 分支强制指向当前完整代码的最新 commit；随后用 `git push -f origin main` 强制推送到远端，将远端 `main` 覆盖为 Sprint 2 的最终成果。
+3. **清理历史分支**：
+   - 远端：在 GitHub 网页删除了 `feature/sprint1-core-review` 和 `feature/schema-a-flat-mounts`。
+   - 本地：执行 `git branch -D develop feature/schema-a-flat-mounts feature/schema-b-symlink sprint0/base`，清理所有废弃的本地分支。
+4. **建立新开发分支**：从干净的 `main` 切出 `feature/sprint3-rbac`，正式开启 Sprint 3。
+
+### 结果验证
+
+| 项 | 状态 |
+|---|---|
+| 远端 `main` 分支 | ✅ 包含完整的 Sprint 0 ~ 2 代码（`49a2733`） |
+| CI 流水线 | ✅ 全绿（2/2） |
+| 本地/远端分支 | ✅ 极简状态，仅剩 `main` 和 `feature/sprint3-rbac` |

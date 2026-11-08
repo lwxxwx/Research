@@ -169,6 +169,7 @@ class FeedbackResponse(BaseModel):
     expert_suggestion: str | None = None
     suggestion_diff: list[dict[str, Any]] = Field(default_factory=list)
     rule_candidate_ref: str | None = None
+    knowledge_gap_ref: str | None = None    # ← 加这行
     created_by: int | None = None
     created_at: datetime
 
@@ -373,6 +374,7 @@ class KnowledgeGapItem(BaseModel):
     updated_at: str | None = None
     resolved_at: str | None = None
     resolved_by: int | None = None
+    proposed_by: int | None = None   # ← 新增（运行时 JOIN，无 DB 物理列）
 
 
 class KnowledgeGapFeedbackRef(BaseModel):
@@ -399,3 +401,71 @@ class KnowledgeGapListResponse(BaseModel):
 class UpdateGapStatusRequest(BaseModel):
     status: Literal["open", "in_progress", "resolved", "wontfix"]
     resolved_by: int | None = None
+
+# ===== [S3-G2] Auth / 用户管理 =====
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+
+
+class LoginResponse(BaseModel):
+    user_id: int
+    username: str
+    role: str
+    access_token: str | None = None
+    token_type: str = "bearer"
+    expires_in: int = 28800   # 8h，与 D31 一致
+
+
+class AuthMeResponse(BaseModel):
+    user_id: int
+    username: str
+    role: str
+    is_active: bool
+
+
+class UserCreateRequest(BaseModel):
+    username: str = Field(..., min_length=1, max_length=128)
+    email: str | None = None
+    role: Literal["admin", "engineer", "reviewer", "rule_admin"] = "engineer"
+
+
+class UserPatchRequest(BaseModel):
+    """PATCH /auth/users/{id} 请求体。
+
+    关键：字段允许缺省（None），但"显式 null"要通过 model_fields_set 判断。
+    """
+    role: Literal["admin", "engineer", "reviewer", "rule_admin"] | None = None
+    is_active: bool | None = None
+
+
+class UserListItem(BaseModel):
+    id: int
+    username: str
+    email: str | None = None
+    role: str
+    is_active: bool
+    created_at: str | None = None
+
+
+class UserListResponse(BaseModel):
+    total: int
+    items: list[UserListItem]
+
+
+# ===== [S3-G3A] 批量评审 =====
+class BatchReviewRequest(BaseModel):
+    """批量发起评审请求"""
+    case_ids: list[str]
+
+
+class BatchReviewItem(BaseModel):
+    """批量评审单个 case 的结果"""
+    case_id: str
+    task_id: str | None = None
+    status: str  # "success" / "failed"
+    error: str | None = None
+
+
+class BatchReviewResponse(BaseModel):
+    """批量发起评审返回"""
+    items: list[BatchReviewItem]

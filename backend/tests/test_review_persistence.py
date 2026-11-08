@@ -48,7 +48,7 @@ def mock_llm_custom_payload(monkeypatch):
 def _run_and_get_defects(payload: dict) -> list[dict]:
     """跑一次 case001 的 Full Review，返回落库的 review_defect 列表。"""
     from app.services.task_service import create_task, get_task_defects
-    tid = create_task("case001")
+    tid = create_task("case001")["task_id"]
     return get_task_defects(tid)
 
 
@@ -383,7 +383,7 @@ def test_list_tasks_filtered_by_review_status():
     from app.services.task_service import create_task, list_tasks_filtered
 
     # 确保有数据
-    create_task("case001")
+    create_task("case001")["task_id"]
 
     # 过滤 AI_CONFIRMED
     result = list_tasks_filtered(review_status="AI_CONFIRMED", limit=100)
@@ -409,8 +409,8 @@ def test_list_tasks_filtered_by_case_class():
     from app.services.task_service import create_task, list_tasks_filtered
 
     # 确保 A/B 都有数据
-    create_task("case001")                                # A 类
-    create_task("case_b01_buck_thermal_derating_B")       # B 类
+    create_task("case001")["task_id"]                                # A 类
+    create_task("case_b01_buck_thermal_derating_B")["task_id"]        # B 类
 
     # A 类过滤
     result_a = list_tasks_filtered(case_class="A", limit=100)
@@ -438,8 +438,8 @@ def test_list_tasks_filtered_pagination():
     from app.services.task_service import create_task, list_tasks_filtered
 
     # 确保至少 2 条任务
-    create_task("case001")
-    create_task("case001")
+    create_task("case001")["task_id"]
+    create_task("case001")["task_id"]
 
     # 全量
     full = list_tasks_filtered(limit=100, offset=0)
@@ -1027,3 +1027,264 @@ def test_list_tasks_filtered_by_status():
                 ReviewResult.task_id.in_([done_tid, failed_tid])
             ).delete(synchronize_session=False)
             db.commit()
+
+# ============================================================
+# G3-B: IDOR 对象级数据范围测试矩阵
+# 5 核心接口 × 4 角色（engineer / reviewer / admin / rule_admin）
+# D6: engineer 越权 → 404；D11: rule_admin → 403
+# ============================================================
+
+import uuid
+from fastapi.testclient import TestClient
+from app.main import app
+from app.persistence.db import get_db_session
+from app.persistence.models import ReviewResult, User
+
+
+def _make_idor_user(role: str) -> dict:
+    """造一个指定角色的用户（commit 到 DB，测试结束需手工清理）。"""
+    uname = f"idor_{role}_{uuid.uuid4().hex[:6]}"
+    with get_db_session() as db:
+        user = User(username=uname, role=role, is_active=True)
+        db.add(user)
+        db.flush()
+        uid = user.id
+        db.commit()
+    return {"id": uid, "username": uname, "role": role}
+
+
+def _cleanup_idor_user(uid: int) -> None:
+    """清理 IDOR 测试用户（先清 review_result.created_by 再删 user）。"""
+    with get_db_session() as db:
+        db.query(ReviewResult).filter(ReviewResult.created_by == uid).update(
+            {ReviewResult.created_by: None}, synchronize_session=False
+        )
+        db.commit()
+        db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+        db.commit()
+
+
+def _client_for(uid: int) -> TestClient:
+    """返回带 X-User-Id 的 TestClient。"""
+    c = TestClient(app)
+    c.headers["X-User-Id"] = str(uid)
+    return c
+
+
+def _create_task_as(client: TestClient) -> str:
+    """用指定 client 身份建一个任务，返回 task_id。"""
+    resp = client.post("/api/v1/review/tasks", json={"case_id": "case001"})
+    assert resp.status_code == 200, resp.text
+    return resp.json()["task_id"]
+
+
+# ---------- 矩阵 1: GET /review/tasks/{id} ----------
+
+def test_idor_get_task_engineer_other_404():
+    """D6: engineer 访问他人任务 → 404。"""
+    admin = _make_idor_user("admin")
+    eng = _make_idor_user("engineer")
+    try:
+        admin_task = _create_task_as(_client_for(admin["id"]))
+        resp = _client_for(eng["id"]).get(f"/api/v1/review/tasks/{admin_task}")
+        assert resp.status_code == 404
+        assert "不存在" in resp.json()["detail"]
+    finally:
+        _cleanup_idor_user(admin["id"])
+        _cleanup_idor_user(eng["id"])
+
+
+def test_idor_get_task_engineer_own_200():
+    eng = _make_idor_user("engineer")
+    try:
+        eng_client = _client_for(eng["id"])
+        eng_task = _create_task_as(eng_client)
+        resp = eng_client.get(f"/api/v1/review/tasks/{eng_task}")
+        assert resp.status_code == 200
+    finally:
+        _cleanup_idor_user(eng["id"])
+
+
+def test_idor_get_task_reviewer_other_200():
+    admin = _make_idor_user("admin")
+    rev = _make_idor_user("reviewer")
+    try:
+        admin_task = _create_task_as(_client_for(admin["id"]))
+        resp = _client_for(rev["id"]).get(f"/api/v1/review/tasks/{admin_task}")
+        assert resp.status_code == 200
+    finally:
+        _cleanup_idor_user(admin["id"])
+        _cleanup_idor_user(rev["id"])
+
+
+def test_idor_get_task_admin_own_200():
+    admin = _make_idor_user("admin")
+    try:
+        admin_client = _client_for(admin["id"])
+        admin_task = _create_task_as(admin_client)
+        resp = admin_client.get(f"/api/v1/review/tasks/{admin_task}")
+        assert resp.status_code == 200
+    finally:
+        _cleanup_idor_user(admin["id"])
+
+
+def test_idor_get_task_rule_admin_403():
+    """D11: rule_admin → 403。"""
+    admin = _make_idor_user("admin")
+    ra = _make_idor_user("rule_admin")
+    try:
+        admin_task = _create_task_as(_client_for(admin["id"]))
+        resp = _client_for(ra["id"]).get(f"/api/v1/review/tasks/{admin_task}")
+        assert resp.status_code == 403
+    finally:
+        _cleanup_idor_user(admin["id"])
+        _cleanup_idor_user(ra["id"])
+
+
+# ---------- 矩阵 2: GET /review/tasks/{id}/defects ----------
+
+def test_idor_get_defects_engineer_other_404():
+    admin = _make_idor_user("admin")
+    eng = _make_idor_user("engineer")
+    try:
+        admin_task = _create_task_as(_client_for(admin["id"]))
+        resp = _client_for(eng["id"]).get(f"/api/v1/review/tasks/{admin_task}/defects")
+        assert resp.status_code == 404
+    finally:
+        _cleanup_idor_user(admin["id"])
+        _cleanup_idor_user(eng["id"])
+
+
+def test_idor_get_defects_engineer_own_200():
+    eng = _make_idor_user("engineer")
+    try:
+        eng_client = _client_for(eng["id"])
+        eng_task = _create_task_as(eng_client)
+        resp = eng_client.get(f"/api/v1/review/tasks/{eng_task}/defects")
+        assert resp.status_code == 200
+    finally:
+        _cleanup_idor_user(eng["id"])
+
+
+def test_idor_get_defects_rule_admin_403():
+    admin = _make_idor_user("admin")
+    ra = _make_idor_user("rule_admin")
+    try:
+        admin_task = _create_task_as(_client_for(admin["id"]))
+        resp = _client_for(ra["id"]).get(f"/api/v1/review/tasks/{admin_task}/defects")
+        assert resp.status_code == 403
+    finally:
+        _cleanup_idor_user(admin["id"])
+        _cleanup_idor_user(ra["id"])
+
+
+# ---------- 矩阵 3: GET /review/tasks/{id}/export ----------
+
+def test_idor_export_engineer_other_404():
+    admin = _make_idor_user("admin")
+    eng = _make_idor_user("engineer")
+    try:
+        admin_task = _create_task_as(_client_for(admin["id"]))
+        resp = _client_for(eng["id"]).get(f"/api/v1/review/tasks/{admin_task}/export")
+        assert resp.status_code == 404
+    finally:
+        _cleanup_idor_user(admin["id"])
+        _cleanup_idor_user(eng["id"])
+
+
+def test_idor_export_engineer_own_200():
+    eng = _make_idor_user("engineer")
+    try:
+        eng_client = _client_for(eng["id"])
+        eng_task = _create_task_as(eng_client)
+        resp = eng_client.get(f"/api/v1/review/tasks/{eng_task}/export")
+        assert resp.status_code == 200
+    finally:
+        _cleanup_idor_user(eng["id"])
+
+
+def test_idor_export_rule_admin_403():
+    admin = _make_idor_user("admin")
+    ra = _make_idor_user("rule_admin")
+    try:
+        admin_task = _create_task_as(_client_for(admin["id"]))
+        resp = _client_for(ra["id"]).get(f"/api/v1/review/tasks/{admin_task}/export")
+        assert resp.status_code == 403
+    finally:
+        _cleanup_idor_user(admin["id"])
+        _cleanup_idor_user(ra["id"])
+
+
+# ---------- 矩阵 4: GET /review/tasks（列表过滤） ----------
+
+def test_idor_list_tasks_engineer_only_sees_own():
+    """D7: engineer 列表只返回 created_by = me 的任务。"""
+    eng_a = _make_idor_user("engineer")
+    eng_b = _make_idor_user("engineer")
+    try:
+        b_client = _client_for(eng_b["id"])
+        b_task = _create_task_as(b_client)
+
+        a_client = _client_for(eng_a["id"])
+        resp = a_client.get("/api/v1/review/tasks")
+        assert resp.status_code == 200
+        task_ids = [it["task_id"] for it in resp.json()["items"]]
+        assert b_task not in task_ids
+    finally:
+        _cleanup_idor_user(eng_a["id"])
+        _cleanup_idor_user(eng_b["id"])
+
+
+def test_idor_list_tasks_admin_sees_all():
+    admin = _make_idor_user("admin")
+    eng = _make_idor_user("engineer")
+    try:
+        eng_client = _client_for(eng["id"])
+        eng_task = _create_task_as(eng_client)
+
+        admin_client = _client_for(admin["id"])
+        resp = admin_client.get("/api/v1/review/tasks")
+        assert resp.status_code == 200
+        task_ids = [it["task_id"] for it in resp.json()["items"]]
+        assert eng_task in task_ids
+    finally:
+        _cleanup_idor_user(admin["id"])
+        _cleanup_idor_user(eng["id"])
+
+
+def test_idor_list_tasks_rule_admin_403():
+    ra = _make_idor_user("rule_admin")
+    try:
+        resp = _client_for(ra["id"]).get("/api/v1/review/tasks")
+        assert resp.status_code == 403
+    finally:
+        _cleanup_idor_user(ra["id"])
+
+
+# ---------- 矩阵 5: PATCH /review/tasks/{id}/defects/{did} ----------
+
+def test_idor_patch_defect_engineer_403():
+    """engineer 无 PATCH 权限（G3-A require_roles 拦截）。"""
+    eng = _make_idor_user("engineer")
+    try:
+        eng_client = _client_for(eng["id"])
+        eng_task = _create_task_as(eng_client)
+        resp = eng_client.patch(
+            f"/api/v1/review/tasks/{eng_task}/defects/DUMMY",
+            json={"expert_decision": "confirmed"},
+        )
+        assert resp.status_code == 403
+    finally:
+        _cleanup_idor_user(eng["id"])
+
+
+def test_idor_patch_defect_rule_admin_403():
+    ra = _make_idor_user("rule_admin")
+    try:
+        resp = _client_for(ra["id"]).patch(
+            "/api/v1/review/tasks/DUMMY/defects/DUMMY",
+            json={"expert_decision": "confirmed"},
+        )
+        assert resp.status_code == 403
+    finally:
+        _cleanup_idor_user(ra["id"])

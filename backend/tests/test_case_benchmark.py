@@ -10,11 +10,6 @@ from app.persistence.db import get_db_session
 from app.persistence.models import CaseBenchmarkResult
 
 
-@pytest.fixture()
-def client():
-    return TestClient(app)
-
-
 def test_get_case_detail_200(client):
     """GET /cases/{case_id} 返回资产预览。"""
     resp = client.get("/api/v1/cases/case001")

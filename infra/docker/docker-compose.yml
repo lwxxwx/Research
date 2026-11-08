@@ -149,18 +149,17 @@ services:
     networks:
       - backend_net
 
-  # --------------------------------------------------------------------------
-  # Frontend Placeholder
-  # Sprint0边界：仅占位UI，不属于Sprint0核心验收阻塞项
-  # 挂载静态占位页面目录，无业务逻辑
-  #
-  # 基座职责：定义镜像、卷挂载、网络
-  # 运行时配置下沉到 overlay
-  # ⚠️ 基座不定义healthcheck：nginx:alpine无内置/healthz端点
+    # --------------------------------------------------------------------------
+  # Frontend（Vite 构建产物 → Nginx）
+  # Sprint 3 legacy 批次④：Dockerfile 多阶段构建，COPY dist 进 /usr/share/nginx/html
+  # 本地开发调试用 5173（vite dev server）；3000 用于验证生产打包制品
+  # 运行时配置（container_name / restart / ports）下沉到 overlay
   # --------------------------------------------------------------------------
   frontend:
-    image: nginx:alpine
-    volumes:
-      - ./frontend-placeholder:/usr/share/nginx/html:ro
+    # Sprint 3 legacy 批次④（D23）：由 frontend/Dockerfile 构建，COPY dist 进 Nginx
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    image: schematic-review-frontend:${TAG:-latest}
     networks:
       - backend_net

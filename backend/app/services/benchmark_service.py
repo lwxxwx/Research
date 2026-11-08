@@ -855,7 +855,7 @@ def run_single_case_full_review(
 
     # --- 跑 Full Review（create_task 走 6 节点 Graph） ---
     try:
-        task_id = create_task(case_id)
+        task_id = create_task(case_id)["task_id"]
     except Exception as exc:
         return BenchmarkResult(
             case_id=case_id,

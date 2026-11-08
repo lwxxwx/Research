@@ -1,51 +1,41 @@
-# backend/tests/test_feedback_e2e.py
 """
 阶段 E2：六类反馈 E2E 测试（Sprint 1 §14 阶段 E 验收）
-
 【覆盖目标】
   验证"真实评审链路 → 反馈提交 → 规则演进"的完整闭环，而非 Sprint 0 的手工构造。
-
 【双轨设计】
   - Mock 轨（默认）：create_task 用 MockProvider，不触网，CI 稳定
   - 真实轨：create_task 用智谱 API，打 @pytest.mark.integration，无 Key 时 skip
-
 【Mock 轨用 case001 的理由】
   1. A 类 Case 规则命中稳定（POWER_001 + POWER_002），缺陷可控
   2. 六类反馈不依赖 AI 发现的复杂性；B 类 AI 发现链路已在
      tests/test_review_graph_e2e.py::test_e2e_case_b01_zhipu 验证过，E2 不必重复
   3. case001 的 IR 结构简单，Mock 缺陷容易构造
-
 【包含候选 Benchmark 验证的理由】
   E4 的 run_benchmark_for_candidate 骨架刚写完，E2 顺手验证一下：
     - 成本低（内存执行，不落库）
     - 能确认骨架返回结构含 baseline / candidate / delta / per_case
     - 若骨架有问题，E2 早暴露，避免阶段 F 才发现
-
 【不验证的内容】
   - 真实 LLM 输出质量（由阶段 D 的 zhipu 轨验证）
   - Benchmark 的 CSV 输出（留阶段 F）
   - 候选规则的正式启用（Sprint 1 §10.3 明确禁止自动发布）
-
 【运行】
   # Mock 轨（CI）
   pytest tests/test_feedback_e2e.py -v -k "mock"
-
   # 真实轨（开发环境，需 Key）
   pytest tests/test_feedback_e2e.py -v -k "zhipu"
-
   # 全部
   pytest tests/test_feedback_e2e.py -v
 """
 from __future__ import annotations
-
 import json
 import os
 import uuid
 from pathlib import Path
-
 import pytest
-
 from app.llm.provider import MockProvider
+from app.persistence.db import get_db_session
+from app.persistence.models import User
 from app.schemas.feedback import (
     FeedbackType,
     RuleCandidate,
@@ -60,21 +50,55 @@ from app.services.task_service import (
     submit_task_feedback,
 )
 
-
 # ============================================================
 # 常量
 # ============================================================
 CASE_ID = "case001"
 _API_KEY = os.environ.get("ZHIPUAI_API_KEY")
-
 # 测试输出目录（与 test_demo.py 一致）
 OUT_DIR = Path("/out/test_feedback_e2e")
+
+
+@pytest.fixture()
+def test_admin_user():
+    """
+    为API测试生成临时admin用户，测试完成自动删除；返回 dict {"id":int,"username":str}
+    """
+    uname = f"test_e2e_admin_{uuid.uuid4().hex[:8]}"
+    from app.persistence.models import (
+        FeedbackItem, GapFeedbackLink, KnowledgeGap,
+        ReviewDefect, ReviewResult, RuleCandidate,
+    )
+    uname = f"test_e2e_admin_{uuid.uuid4().hex[:8]}"
+    with get_db_session() as db:
+        u = User(username=uname, role="admin", is_active=True)
+        db.add(u)
+        db.commit()
+        db.refresh(u)
+        uid = u.id
+        uname_out = u.username
+    yield {"id": uid, "username": uname_out}
+    # teardown：先解除引用再删，避免 FK 约束
+    with get_db_session() as db:
+        db.query(FeedbackItem).filter(FeedbackItem.created_by == uid).update(
+            {FeedbackItem.created_by: None}, synchronize_session=False
+        )
+        db.query(ReviewResult).filter(ReviewResult.created_by == uid).update(
+            {ReviewResult.created_by: None}, synchronize_session=False
+        )
+        db.query(RuleCandidate).filter(RuleCandidate.reviewed_by == uid).update(
+            {RuleCandidate.reviewed_by: None}, synchronize_session=False
+        )
+        db.query(ReviewDefect).filter(ReviewDefect.expert_decision_by == uid).update(
+            {ReviewDefect.expert_decision_by: None}, synchronize_session=False
+        )
+        db.query(User).filter(User.id == uid).delete(synchronize_session=False)
+        db.commit()
 
 
 def _make_defect_payload() -> dict:
     """
     构造 MockProvider 返回的单条缺陷 payload。
-
     说明：
       - defect_id 动态生成，避免 DB unique 约束导致第二次跑测试时幂等跳过
         （Sprint 1 阶段 D 坑 5 的教训）
@@ -134,14 +158,12 @@ def _make_defect_payload() -> dict:
 def mock_llm_with_one_defect(monkeypatch):
     """
     把 review_graph.get_provider 替换为返回"一条缺陷"的 MockProvider。
-
     patch 目标：app.workflows.review_graph.get_provider
       原因：node_expert_analysis 内部是
             `from app.llm.provider import get_provider`，
             实际调用的是 review_graph 模块内的引用。
     """
     from app.workflows import review_graph as rg
-
     payload = _make_defect_payload()
 
     def _fake_get_provider(name=None):
@@ -164,19 +186,17 @@ def prepare_out_dir():
 def _run_task_and_get_defect_id() -> tuple[str, str]:
     """
     跑一次 create_task，返回 (task_id, defect_id)。
-
     说明：
       - 用 case001 + MockProvider（一条缺陷）
       - create_task 内部走 6 节点 Graph，feedback_save 落库 review_result + review_defect
       - 从 get_task_defects 取第一条缺陷的 defect_id
     """
-    task_id = create_task(CASE_ID)
+    task_id = create_task(CASE_ID)["task_id"]
     task_info = get_task(task_id)
     assert task_info is not None, f"create_task 后 get_task 返回 None，task_id={task_id}"
     assert task_info["status"] == "done", (
         f"任务未完成，status={task_info['status']}, errors={task_info['errors']}"
     )
-
     defects = get_task_defects(task_id)
     assert len(defects) >= 1, (
         f"任务 {task_id} 无缺陷，defects={defects}, "
@@ -191,7 +211,6 @@ def _run_task_and_get_defect_id() -> tuple[str, str]:
 def test_feedback_e2e_mock_six_types(mock_llm_with_one_defect, prepare_out_dir):
     """
     Mock 轨：六类反馈全部通过 submit_task_feedback 落库，闭环完整。
-
     验证点：
       1. 六类反馈都能提交成功，返回 FeedbackOut
       2. false_negative / new_rule_candidate 生成候选（rule_candidate_ref 非空）
@@ -200,7 +219,6 @@ def test_feedback_e2e_mock_six_types(mock_llm_with_one_defect, prepare_out_dir):
       4. knowledge_gap 可通过 export_knowledge_gap_backlog 导出
     """
     task_id, defect_id = _run_task_and_get_defect_id()
-
     # --- 1. correct_defect：不生成候选 ---
     fb1 = submit_task_feedback(
         task_id=task_id,
@@ -209,7 +227,6 @@ def test_feedback_e2e_mock_six_types(mock_llm_with_one_defect, prepare_out_dir):
         expert_suggestion="确认 VCC 缺少去耦电容的判断正确",
     )
     assert fb1.rule_candidate_ref is None
-
     # --- 2. false_positive：不生成候选 ---
     fb2 = submit_task_feedback(
         task_id=task_id,
@@ -218,7 +235,6 @@ def test_feedback_e2e_mock_six_types(mock_llm_with_one_defect, prepare_out_dir):
         expert_suggestion="该缺陷为误报，VCC 已有去耦电容",
     )
     assert fb2.rule_candidate_ref is None
-
     # --- 3. false_negative：生成候选 ---
     fb3 = submit_task_feedback(
         task_id=task_id,
@@ -242,7 +258,6 @@ def test_feedback_e2e_mock_six_types(mock_llm_with_one_defect, prepare_out_dir):
     )
     assert fb3.rule_candidate_ref is not None, "false_negative 应生成候选"
     candidate_id = fb3.rule_candidate_ref
-
     # --- 4. suggestion_update：不生成候选 ---
     fb4 = submit_task_feedback(
         task_id=task_id,
@@ -258,7 +273,6 @@ def test_feedback_e2e_mock_six_types(mock_llm_with_one_defect, prepare_out_dir):
         ],
     )
     assert fb4.rule_candidate_ref is None
-
     # --- 5. new_rule_candidate：生成候选 ---
     fb5 = submit_task_feedback(
         task_id=task_id,
@@ -274,7 +288,6 @@ def test_feedback_e2e_mock_six_types(mock_llm_with_one_defect, prepare_out_dir):
         ),
     )
     assert fb5.rule_candidate_ref is not None, "new_rule_candidate 应生成候选"
-
     # --- 6. knowledge_gap：不生成候选，可导出 backlog ---
     fb6 = submit_task_feedback(
         task_id=task_id,
@@ -283,15 +296,12 @@ def test_feedback_e2e_mock_six_types(mock_llm_with_one_defect, prepare_out_dir):
         expert_suggestion="缺少 STC89C55RC 电源章节 datasheet 片段",
     )
     assert fb6.rule_candidate_ref is None
-
     # --- 7. knowledge_gap 导出验证 ---
     from app.persistence.db import get_db_session
-
     evol_svc = RuleEvolutionService()
     gap_path = OUT_DIR / "knowledge_gap_backlog.json"
     with get_db_session() as db:
         evol_svc.export_knowledge_gap_backlog(db, str(gap_path))
-
     assert gap_path.exists()
     gap_data = json.loads(gap_path.read_text(encoding="utf-8"))
     assert len(gap_data) >= 1, "knowledge_gap backlog 应至少含 1 条"
@@ -313,9 +323,8 @@ def test_feedback_e2e_mock_not_found(mock_llm_with_one_defect):
             feedback_type=FeedbackType.CORRECT_DEFECT,
             expert_suggestion="x",
         )
-
     # 存在的 task_id，但不存在的 defect_id
-    task_id = create_task(CASE_ID)
+    task_id = create_task(CASE_ID)["task_id"]
     with pytest.raises(FeedbackNotFoundError, match="review_defect"):
         submit_task_feedback(
             task_id=task_id,
@@ -328,7 +337,6 @@ def test_feedback_e2e_mock_not_found(mock_llm_with_one_defect):
 def test_feedback_e2e_mock_candidate_benchmark(mock_llm_with_one_defect):
     """
     Mock 轨：候选规则临时 Benchmark 骨架验证。
-
     验证点：
       1. false_negative 生成的候选 YAML 可被 run_benchmark_for_candidate 解析
       2. 返回结构含 candidate_rule_id / case_ids / baseline / candidate / delta / per_case
@@ -337,7 +345,6 @@ def test_feedback_e2e_mock_candidate_benchmark(mock_llm_with_one_defect):
       5. 候选规则只在内存跑，不写入 data/rules/（由函数实现保证，此处只验证返回结构）
     """
     task_id, defect_id = _run_task_and_get_defect_id()
-
     # 提交 false_negative 生成候选
     fb = submit_task_feedback(
         task_id=task_id,
@@ -361,11 +368,9 @@ def test_feedback_e2e_mock_candidate_benchmark(mock_llm_with_one_defect):
         ),
     )
     assert fb.rule_candidate_ref is not None
-
     # 读取候选 YAML
     from app.persistence.db import get_db_session
     from app.persistence.models import RuleCandidate as RuleCandidateORM
-
     with get_db_session() as db:
         rc = (
             db.query(RuleCandidateORM)
@@ -374,19 +379,16 @@ def test_feedback_e2e_mock_candidate_benchmark(mock_llm_with_one_defect):
         )
         assert rc is not None
         candidate_yaml = rc.proposed_yaml
-
     # 调候选 Benchmark
     evol_svc = RuleEvolutionService()
     result = evol_svc.run_benchmark_for_candidate(
         candidate_yaml=candidate_yaml,
         case_ids=[CASE_ID],
     )
-
     # 结构验证
     assert "candidate_rule_id" in result
     assert result["candidate_rule_id"] == "POWER_DECOUP_E2E_BENCH_001"
     assert result["case_ids"] == [CASE_ID]
-
     for key in ("baseline", "candidate", "delta"):
         assert key in result, f"缺少 {key}"
         assert "tp" in result[key]
@@ -394,7 +396,6 @@ def test_feedback_e2e_mock_candidate_benchmark(mock_llm_with_one_defect):
         assert "fn" in result[key]
         assert "precision" in result[key]
         assert "recall" in result[key]
-
     assert "per_case" in result
     assert len(result["per_case"]) == 1
     assert result["per_case"][0]["case_id"] == CASE_ID
@@ -410,30 +411,26 @@ def test_feedback_e2e_mock_candidate_benchmark(mock_llm_with_one_defect):
 def test_feedback_e2e_zhipu():
     """
     真实轨：create_task 用智谱 API，跑一条 false_negative 反馈，验证闭环。
-
     只跑一条反馈（不是六类），原因：
       - 真实轨较慢（每次 LLM 调用约 20–30s），六类反馈会跑 6 次，超时风险高
       - 六类反馈的落库与触发逻辑已由 Mock 轨覆盖
       - 真实轨只需要验证"真实 LLM 产出的缺陷能被反馈"这一件事
-
     验证点：
       1. create_task 用真实 LLM 完成
       2. 至少 1 条缺陷
       3. 提交 false_negative 成功，生成候选
     """
-    task_id = create_task(CASE_ID)
+    task_id = create_task(CASE_ID)["task_id"]
     task_info = get_task(task_id)
     assert task_info is not None
     assert task_info["status"] == "done", (
         f"真实轨任务未完成，errors={task_info['errors']}"
     )
-
     defects = get_task_defects(task_id)
     assert len(defects) >= 1, (
         f"真实轨无缺陷，errors={task_info['errors']}"
     )
     defect_id = defects[0]["defect_id"]
-
     fb = submit_task_feedback(
         task_id=task_id,
         defect_id=defect_id,
@@ -448,3 +445,78 @@ def test_feedback_e2e_zhipu():
         ),
     )
     assert fb.rule_candidate_ref is not None
+
+
+# ============================================================
+# [S3-G5] E2E：knowledge_gap 反馈 → knowledge_gap + gap_feedback_link 生成
+# ============================================================
+def test_feedback_e2e_mock_knowledge_gap_generates_gap(
+    mock_llm_with_one_defect,
+    prepare_out_dir,
+    test_admin_user,
+):
+    """E2E：提交 knowledge_gap 反馈 → knowledge_gap 表 +1、gap_feedback_link 新增 1 条、API 返回 knowledge_gap_ref。
+    验证 G5 D12–D20 的完整链路：
+      feedback_item → knowledge_gap → gap_feedback_link → API response.knowledge_gap_ref
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.persistence.db import get_db_session
+    from app.persistence.models import GapFeedbackLink, KnowledgeGap
+    # 1. 前置：获取 task_id / defect_id
+    task_id, defect_id = _run_task_and_get_defect_id()
+    # 2. 前置：获取 knowledge_gap 总数
+    client = TestClient(app)
+    before_resp = client.get(
+        "/api/v1/knowledge-gaps",
+        headers={"X-User-Id": str(test_admin_user["id"])},
+    )
+    assert before_resp.status_code == 200, before_resp.text
+    total_before = before_resp.json()["total"]
+    # 3. 提交 knowledge_gap 反馈
+    fb_body = {
+        "task_id": task_id,
+        "defect_id": defect_id,
+        "feedback_type": "knowledge_gap",
+        "expert_suggestion": "[E2E-G5] 知识缺口生成链路验证",
+    }
+    fb_resp = client.post(
+        "/api/v1/feedbacks",
+        headers={"X-User-Id": str(test_admin_user["id"])},
+        json=fb_body,
+    )
+    assert fb_resp.status_code == 200, fb_resp.text
+    fb_data = fb_resp.json()
+    # 4. 断言 API 响应
+    assert fb_data["feedback_type"] == "knowledge_gap"
+    assert fb_data["knowledge_gap_ref"] is not None, (
+        f"knowledge_gap_ref 应该返回 gap_id，实际 None。响应：{fb_data}"
+    )
+    gap_id = fb_data["knowledge_gap_ref"]
+    assert gap_id.startswith("GAP-"), f"gap_id 格式非法：{gap_id}"
+    # 5. 断言 knowledge_gap 总数 +1（D20 动态断言）
+    after_resp = client.get(
+        "/api/v1/knowledge-gaps",
+        headers={"X-User-Id": str(test_admin_user["id"])},
+    )
+    assert after_resp.status_code == 200
+    total_after = after_resp.json()["total"]
+    assert total_after == total_before + 1, (
+        f"knowledge_gap total 应 +1，实际 {total_before} → {total_after}"
+    )
+    # 6. 断言 DB 落库
+    with get_db_session() as db:
+        gap = db.query(KnowledgeGap).filter(KnowledgeGap.gap_id == gap_id).first()
+        assert gap is not None, f"DB 中未找到 gap_id={gap_id}"
+        assert gap.title is not None and len(gap.title) > 0
+        assert gap.status == "open"
+        assert gap.source_feedback_id is not None, "source_feedback_id 应同步写入（D18）"
+        link = (
+            db.query(GapFeedbackLink)
+            .filter(GapFeedbackLink.gap_id == gap.id)
+            .first()
+        )
+        assert link is not None, f"DB 中未找到 gap_id={gap.id} 的 gap_feedback_link"
+        assert link.feedback_id == fb_data["id"], (
+            f"gap_feedback_link.feedback_id={link.feedback_id} 应等于 feedback_id={fb_data['id']}"
+        )

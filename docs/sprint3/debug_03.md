@@ -1,0 +1,2215 @@
+# Sprint 3 开发与调试问题记录（Debugging Notes）
+
+> **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
+> **归档日期**：2026-11-03
+> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈后端 + 前端 + 测试〉、§15 S3-LEGACY-B4 Nginx 前端镜像化与规则回滚（含 15.9 CI 环境适配）；原复盘顺延为 §16）
+
+---
+
+## 目录
+
+1. [S3-G2-Migration：多 Head 问题与增量 SQL 生成](#1-s3-g2-migration多-head-问题与增量-sql-生成2026-11-03)
+2. [S3-G2-PreCheck：脚本路径与容器挂载陷阱](#2-s3-g2-precheck脚本路径与容器挂载陷阱2026-11-03)
+3. [S3-G2-TestIsolation：测试隔离与并发断言修正](#3-s3-g2-testisolation测试隔离与并发断言修正2026-11-03)
+4. [S3-G3A-API：G3-A 鉴权改造后的 API 层排障](#4-s3-g3a-apig3-a-鉴权改造后的-api-层排障2026-11-04)
+5. [S3-G3C-AuditFields：审计字段注入与手测踩坑](#5-s3-g3c-auditfields审计字段注入与手测踩坑2026-11-05)
+6. [S3-G3B-DataScope：对象级数据范围与 IDOR 防护](#6-s3-g3b-datascope对象级数据范围与-idor-防护2026-11-05)
+7. [S3-G3D-ErrorSemantics：错误语义统一与负面测试补全](#7-s3-g3d-errorsemantics错误语义统一与负面测试补全2026-11-05)
+8. [S3-G4-FrontendAuth：前端登录 + 路由守卫 + 菜单权限](#8-s3-g4-frontendauth前端登录--路由守卫--菜单权限2026-11-06)
+9. [S3-G5-KnowledgeGap：知识缺口生成链路补实现](#9-s3-g5-knowledgegap知识缺口生成链路补实现2026-11-06)
+10. [S3-G6-Concurrency：B 类并发测试与重试恢复](#10-s3-g6-concurrencyb-类并发测试与重试恢复2026-11-06)
+11. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#11-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
+12. [S3-LEGACY-B1：返回值契约升级的技术总结](#12-s3-legacy-b1返回值契约升级的技术总结2026-11-08)
+13. [S3-LEGACY-B2：软删除迁移与提出人反查](#13-s3-legacy-b2软删除迁移与提出人反查2026-11-08)
+14. [S3-LEGACY-B3：用户名模式 JWT 的技术总结与风险备忘](#14-s3-legacy-b3用户名模式-jwt-的技术总结与风险备忘2026-11-08)
+15. [S3-LEGACY-B4：Nginx 前端镜像化与规则回滚](#15-s3-legacy-b4nginx-前端镜像化与规则回滚2026-11-08)
+16. [Sprint 3 复盘：10 大类踩坑总览](#16-sprint-3-复盘10-大类踩坑总览)
+17. [附：版本与适用范围](#17-附版本与适用范围)
+
+---
+
+## 1. S3-G2-Migration：多 Head 问题与增量 SQL 生成（2026-11-03）
+
+> **状态**：✅ 已修复
+> **核心难点**：新增 Migration 后 Alembic 出现双 Head（`s2_f07_case_benchmark` 和 `s2j_g2_roles` 并行），导致 `alembic upgrade head` 直接报错。
+
+### 1.1 坑点与修复全过程
+
+#### 坑 1：Migration 分叉（Multiple head revisions）
+
+**现象**：
+
+```text
+$ alembic upgrade head
+ERROR [alembic.util.messaging] Multiple head revisions are present for given argument 'head';
+please specify a specific target revision, '<branchname>@head' to narrow to a specific head, or 'heads' for all heads
+```
+
+**根因**：
+
+新建的 `s2j_g2_roles.py` 里 `down_revision = "s2a_schema_updates"`，但 Sprint 2 已经有 `s2a_schema_updates → s2_f05_rule_publish → s2_f07_case_benchmark` 的链，导致两条时间线并行：
+
+```text
+s2a_schema_updates
+├─→ s2_f05_rule_publish → s2_f07_case_benchmark (head 1)
+└─→ s2j_g2_roles (head 2) ← 这里分叉了
+```
+
+**修复**：
+
+把 `s2j_g2_roles.py` 的 `down_revision` 改为 `"s2_f07_case_benchmark"`（接在 Sprint 2 最新 Migration 之后）。
+
+```python
+# 改前
+down_revision = "s2a_schema_updates"
+
+# 改后
+down_revision = "s2_f07_case_benchmark"
+```
+
+修复后的链：
+
+```text
+s2a_schema_updates → s2_f05_rule_publish → s2_f07_case_benchmark → s2j_g2_roles (head)
+```
+
+#### 坑 2：`alembic upgrade head --sql` 生成的 SQL 包含完整历史
+
+**现象**：
+
+执行 `alembic upgrade head --sql > preview.sql` 后，生成的 SQL 文件里包含了：
+
+- `CREATE TABLE alembic_version`
+- `CREATE TABLE users`
+- `CREATE TABLE knowledge_doc`
+- ……
+
+全部从 `<base>` 开始的完整建表语句，不是仅包含 G2 增量 SQL。
+
+**根因**：
+
+`alembic upgrade head --sql` 模式下，Alembic 不知道当前库的真实版本（因为 `--sql` 是纯离线模式，不连接数据库读 `alembic_version` 表），所以假设从空库开始，打印完整迁移链的 SQL。
+
+**修复**：
+
+指定起点 revision，用 `alembic upgrade s2_f07_case_benchmark:head --sql`，只打印从 `s2_f07_case_benchmark` 到 head 的增量 SQL。
+
+```powershell
+docker compose ... exec backend alembic upgrade s2_f07_case_benchmark:head --sql | Out-String | Set-Content docs\sprint3\s2j_g2_roles_preview.sql
+```
+
+**生成结果（已验证正确）**：
+
+```sql
+BEGIN;
+-- Running upgrade s2_f07_case_benchmark -> s2j_g2_roles
+ALTER TABLE users ADD COLUMN role VARCHAR(32) DEFAULT 'engineer' NOT NULL;
+ALTER TABLE users ADD COLUMN is_active BOOLEAN DEFAULT true NOT NULL;
+ALTER TABLE users ADD CONSTRAINT check_users_role CHECK (role IN ('admin','engineer','reviewer','rule_admin'));
+CREATE INDEX idx_users_role ON users (role);
+ALTER TABLE review_result ADD COLUMN created_by BIGINT;
+ALTER TABLE review_result ADD CONSTRAINT fk_review_result_created_by_users FOREIGN KEY(created_by) REFERENCES users (id) ON DELETE SET NULL;
+CREATE INDEX idx_review_result_created_by ON review_result (created_by);
+ALTER TABLE rule_candidates ADD COLUMN reviewed_by BIGINT;
+ALTER TABLE rule_candidates ADD CONSTRAINT fk_rule_candidates_reviewed_by_users FOREIGN KEY(reviewed_by) REFERENCES users (id) ON DELETE SET NULL;
+CREATE INDEX idx_rule_candidates_reviewed_by ON rule_candidates (reviewed_by);
+UPDATE alembic_version SET version_num='s2j_g2_roles' WHERE alembic_version.version_num = 's2_f07_case_benchmark';
+COMMIT;
+```
+
+这个文件现在可以作为 G2 Migration 的验收证据 commit 进 git。
+
+### 1.2 核心认知与总结
+
+1. **新增 Migration 必须显式确认 `down_revision`**：每次新增 Migration 前，先跑 `alembic heads` 看当前 head。把 `down_revision` 设成当前 head，形成线性链。忘了改会导致分叉，之后 `upgrade head` 直接报错。
+2. **`--sql` 模式必须指定起点 revision**：`alembic upgrade head --sql` 从 `<base>` 开始，不是从当前库版本开始。要生成增量 SQL，用 `alembic upgrade <current>:head --sql`。
+
+---
+
+## 2. S3-G2-PreCheck：脚本路径与容器挂载陷阱（2026-11-03）
+
+> **状态**：⚠️ 临时规避（存在长期优化点）
+> **核心难点**：为 G2 前期核查写的 `g2_pre_check.py` 脚本，因容器内路径与宿主机路径不一致，导致核查结果全部误判。
+
+### 2.1 坑点与修复全过程
+
+#### 坑 1：容器内 ROOT_DIR 误解
+
+**现象**：
+
+`g2_pre_check.py` 报告 `deps.py` 缺失、`db.py` 缺失、CI 配置缺失，几乎全部 ❌。但实际这些文件在宿主机上都存在。
+
+**根因**：
+
+脚本的 `ROOT_DIR = Path("/app")` 在容器内是 backend 的根（因为 `docker-compose.dev.yml` 里 `../../backend:/app`），但脚本里检查 `backend/app/api/deps.py` 变成了 `/app/backend/app/api/deps.py`（不存在）。实际路径是 `/app/app/api/deps.py`。
+
+**修复**：
+
+不改脚本逻辑，直接用 PowerShell 手工跑 4 条命令：
+
+```powershell
+Get-ChildItem backend\app\api\deps.py, backend\app\persistence\db.py
+Get-Content backend\app\api\deps.py
+Select-String -Path "backend\app\persistence\db.py" -Pattern "def get_db_session" -Context 0,15
+Select-String -Path "backend\alembic\versions\s2a_schema_updates.py" -Pattern "^revision\s*="
+```
+
+**确认结果**：
+
+- `deps.py` 存在，为空壳（预留位置：认证 / 限流 / trace）
+- `db.py` 的 `get_db_session` 是标准 `@contextmanager`，auto commit/rollback/close
+- `s2a_schema_updates` revision = `"s2a_schema_updates"`
+
+#### 坑 2：`docs/` 目录未挂载进容器
+
+**现象**：
+
+脚本 `REPORT_PATH = Path("/app/../docs/sprint3/g2_pre_check_audit.md")` 想写进 `docs/sprint3/`，但执行后宿主机 `docs/sprint3/` 里看不到文件。
+
+**根因**：
+
+`docker-compose.dev.yml` 的 backend 服务 volumes 只有：
+
+```yaml
+volumes:
+  - ../../backend:/app
+  - ../../data:/data
+  - ../../scripts:/scripts
+  - ../../infra:/infra
+  - ../../out:/out
+```
+
+`docs/` 未挂载，所以容器内的 `/docs` 是容器内部目录，宿主机看不到。而 `/app/../docs` 被解析为 `/docs`（根目录），也是容器内部。
+
+**修复**：
+
+改用 `/scripts/g2_pre_check_audit.md`（`scripts/` 已挂载），跑完后手动 `Move-Item` 到 `docs/sprint3/`。
+
+**长期建议**：
+
+在 `docker-compose.dev.yml` 的 `backend.volumes` 里加一行 `- ../../docs:/docs`，让容器内的 `/docs` 直接等于宿主机 `docs/`，所有脚本都能直接写。这个改动建议在 G6 Demo 脚本升级前完成。
+
+### 2.2 核心认知与总结
+
+1. **容器内视角 vs 宿主机视角**：写脚本时，路径要按容器内挂载点来算（`/app/app/api/deps.py`），而不是宿主机路径（`backend/app/api/deps.py`）。
+2. **写文件前先确认挂载点**：不要在未挂载的目录（如 `/docs`、`/tmp` 之类）写文件，否则文件只存在于容器内，`docker compose restart` 就丢。
+3. **优先用已挂载目录做输出**：`/scripts/`、`/data/`、`/out/` 都已挂载，直接写这些目录就不会丢文件。
+
+---
+
+## 3. S3-G2-TestIsolation：测试隔离与并发断言修正（2026-11-03）
+
+> **状态**：✅ 已修复
+> **核心难点**：3 个测试文件首次编写时全部失败，暴露出 3 个工程化问题。
+
+### 3.1 坑 1：pg_session fixture 用「事务回滚」导致 HTTP 请求看不到数据
+
+**现象**：
+
+`test_auth.py` / `test_bootstrap_admin.py` 首次跑时大量 FAILED，报 `user not found`、`admin 不存在` 等。
+
+**根因**：
+
+原 `pg_session` fixture 用：
+
+```python
+conn = engine.connect()
+trans = conn.begin()
+sess = Session(bind=conn)
+yield sess
+trans.rollback()  # ← 试图用外层事务隔离
+```
+
+但 `create_user` / `login` 等 HTTP 请求走 `get_db_session()`，开的是完全独立的新连接。外层事务里 `db.add(user)` + `db.flush()` 的数据，HTTP 请求的 Session 根本看不到（PostgreSQL 默认 READ COMMITTED 也不会跨越未提交事务）。
+
+**修复**：改为「真实 commit + 事后清理」：
+
+```python
+@pytest.fixture()
+def pg_session():
+    engine = create_engine(settings.database_url)
+    sess = Session(bind=engine)
+    yield sess
+    # 测试结束按前缀清理
+    sess.query(User).filter(
+        User.username.like("test_admin_%") |
+        User.username.like("test_eng_%") |
+        User.username.like("test_dis_%")
+    ).delete(synchronize_session=False)
+    sess.commit()
+    sess.close()
+```
+
+`admin_user` / `engineer_user` / `disabled_user` fixture 也都改为 `pg_session.commit()` 真正落库。
+
+**教训**：
+
+- 测试隔离不能靠事务回滚（跨 Session 场景下根本隔离不了）。
+- 只能靠「唯一前缀 + 事后清理」（`test_admin_xxx` 前缀确保不撞生产数据）。
+- 这是 Sprint 2 `test_review_persistence.py` 已经踩过的坑，但 G2 第一次写测试时没复用这个模式。
+
+### 3.2 坑 2：并发测试假设线程调度确定，断言不稳定
+
+**现象**：
+
+`test_A4_concurrent_acquire_serialized` 时而 PASS 时而 FAIL，特别是 `results.index("A:released") < results.index("B:acquired")` 这条断言。
+
+**根因**：
+
+原代码假设「A 线程先拿到锁，B 线程后拿」。但 Python GIL + 操作系统调度是随机的——B 线程完全可能先跑到 DB 拿到锁。断言写死「A 先拿」会随机 FAIL。
+
+**修复**：改为「两种合法情况都覆盖」：
+
+```python
+if idx_a_acq < idx_b_acq:
+    # A 先拿锁，则必须 A 释放后 B 才能 acquire
+    assert idx_a_rel < idx_b_acq
+else:
+    # B 先拿锁，则必须 B 释放后 A 才能 acquire
+    idx_b_rel = results.index("B:released")
+    assert idx_b_rel < idx_a_acq
+```
+
+**教训**：
+
+并发测试不能假设线程调度顺序，只能验证「互斥语义」本身（谁先拿都行，但拿到锁时对方必须已释放）。
+
+### 3.3 坑 3：最后管理员保护未触发（真实 DB 有历史 admin）
+
+**现象**：
+
+`test_last_admin_protection` 首次 FAILED，`active_admin_count` 实际是 2，不是 1，所以保护逻辑没触发。
+
+**根因**：
+
+`admin_user` fixture 创建的 admin（`test_admin_xxx`）和真实 DB 里已有的 admin（id=3107）同时是启用状态。`count(*) WHERE role='admin' AND is_active=true` 返回 2，> 1 所以允许降级。
+
+**修复**：测试内主动清理其它所有 admin：
+
+```python
+def test_last_admin_protection(client, admin_user, pg_session):
+    admin_id, _ = admin_user
+    # 关键：删除其它所有活跃 admin，保证当前是系统仅剩的活跃管理员
+    pg_session.query(User).filter(
+        User.id != admin_id,
+        User.role == "admin",
+        User.is_active.is_(True)
+    ).delete(synchronize_session=False)
+    pg_session.commit()
+    # 然后才 PATCH
+```
+
+**教训**：
+
+- 测试的前置条件必须由测试自己保证，不能靠「碰运气不撞上历史数据」。
+- 涉及「全库状态」的断言（如 `count`），必须先收窄到「本测试构造的场景」，避免被生产数据污染。
+
+### 3.4 修复后验证结果
+
+| 验证项 | 执行结果 |
+|---|---|
+| 3 个测试文件单独跑 | ✅ 26 passed, 2 skipped（2 skip 是场景 4/5，需隔离 DB 环境） |
+| 全量非 integration | ✅ 594 passed, 3 skipped, 24 deselected（从 568 → 594，新增 26 个测试） |
+
+---
+
+## 4. S3-G3A-API：G3-A 鉴权改造后的 API 层排障（2026-11-04）
+
+> **状态**：✅ 已修复
+> **核心难点**：G3-A 给业务路由挂 RBAC 鉴权后，`test_api.py` / `test_dashboard.py` / `test_feedback_rule.py` / `test_review_persistence.py` 合并跑时出现 8 类问题，横跨 API 层、Service 层、全局异常处理器、ORM 模型、测试脚手架。
+> **最终结果**：全量非 integration `595 passed, 2 skipped, 0 failed`。
+
+### 4.1 坑 1：全局 ValueError handler 过度捕获（掩盖代码 bug）
+
+**现象**：
+
+`task_service.list_tasks_filtered` 对非法 `case_class` 抛 `ValueError`，路由层没做 `try/except`，最初注册了全局 `@app.exception_handler(ValueError) → 422`。测试 `test_list_tasks_invalid_params_422` 通过。但同类 `review_status` 非法值却返回 200（因为路由未透传 Query 参数）。
+
+**根因**：
+
+1. **全局 `except ValueError → 422` 过度捕获**：`json.loads` 解析 DB 脏数据失败、`int()` 类型转换失败等代码 bug 也会被伪装成 422，掩盖真实故障。
+2. **路由 Query 参数漏声明**：`review_status` / `status` 参数未在 `@router.get` 签名里声明，FastAPI 静默丢弃，service 收到 `None`，校验分支不触发。
+
+**修复**：
+
+1. **新建 `app/core/exceptions.py` 定义 `BusinessValueError(ValueError)`**（不 import 任何 service，避免循环依赖）。
+2. **`errors.py` 只注册 `BusinessValueError → 422`**，删除全局 `ValueError` handler，标准 `ValueError` 走兜底 500 暴露代码 bug。
+3. **只把"用户输入参数校验失败"的 6 处改为 `raise BusinessValueError`**：
+   - `task_service.list_tasks_filtered` 5 处（`case_class` / `review_status` / `status` / `limit` / `offset`）
+   - `task_service.update_expert_decision` 1 处（`expert_decision` 枚举）
+4. 其余 `raise ValueError` **一律保留**：
+   - 路由层已有 `try/except` 转 400 的（`case_service.py` 2 处、`report_service.py` 2 处）
+   - 服务内部数据一致性校验（`rule_evolution_service.py` 7 处、`benchmark_service.py` 1 处）
+   - 被注释掉的旧代码（`feedback_service.py` 4 处）
+   - G3-A 第 3 批：`knowledge_gap_service.py` 2 处（挂鉴权时同步改）
+5. **`task_service.py` import 从 `app.core.exceptions` 而非 `app.core.errors`**，避免 `task_service → errors → feedback_service` 的耦合链。
+
+**教训**：
+
+业务异常必须用**自定义类型**与标准异常区分，不能图省事用宽泛的 `except ValueError` / `@app.exception_handler(ValueError)` 一刀切。否则"系统内部坏了"被伪装成"用户输入错了"，掩盖真实故障。
+
+### 4.2 坑 2：`task_service.create_task` 返回类型与 API 解包不一致
+
+**现象**：
+
+```text
+TypeError: CreateTaskResponse() argument after ** must be a mapping, not str
+```
+
+**根因**：
+
+`task_service.create_task()` 返回**字符串 task_id**，不是 dict。`CreateTaskResponse(**resp)` 只能解包 mapping。
+
+**修复（临时，G3-A）**：
+
+```python
+task_id = task_service.create_task(body.case_id)
+detail = task_service.get_task(task_id)
+if detail is None:
+    return CreateTaskResponse(task_id=task_id, status="failed", defects_count=0)
+return CreateTaskResponse(
+    task_id=detail["task_id"],
+    status=detail["status"],
+    defects_count=detail["defects_count"],
+)
+```
+
+> 遗留（G3-C）：升级 `task_service.create_task` 返回完整 dict 后恢复 `CreateTaskResponse(**resp)`。
+
+### 4.3 坑 3：批量创建 `resp["task_id"]` 访问字符串索引
+
+**现象**：
+
+`POST /review/tasks/batch` 每次调用抛 `TypeError: string indices must be integers`，被 `except Exception` 吞掉，所有子任务记 `status="failed"`。
+
+**根因**：
+
+`task_service.create_task` 返回 str，但 batch 里 `resp["task_id"]` 当 dict 访问。
+
+**修复**：
+
+```python
+resp = task_service.create_task(cid)   # 返回 str
+items.append({
+    "case_id": cid,
+    "task_id": resp,                   # ← 直接用 str
+    "status": "success",
+    "error": None,
+})
+```
+
+### 4.4 坑 4：`list_review_tasks` 缺 status 参数 + 缺 `ROLE_REVIEWER` 角色
+
+**现象**：
+
+1. 前端传 `?status=pending` 被静默丢弃，service 收到 None，无过滤。
+2. reviewer 角色访问 `GET /review/tasks` 返回 403（权限矩阵要求 engineer / reviewer / admin 三角色）。
+
+**根因**：
+
+路由签名漏 `status: Optional[str] = Query(None)`；`require_roles` 漏 `ROLE_REVIEWER`。
+
+**修复**：
+
+```python
+@router.get("", response_model=TaskListResponse)
+def list_review_tasks(
+    current: CurrentUser = Depends(
+        require_roles(ROLE_ENGINEER, ROLE_REVIEWER, ROLE_ADMIN)   # ← 补 REVIEWER
+    ),
+    status: Optional[str] = Query(None, description="pending / done / failed"),   # ← 补
+    case_class: Optional[str] = Query(None),
+    review_status: Optional[str] = Query(None),
+    limit: int = Query(20, ge=0),
+    offset: int = Query(0, ge=0),
+):
+    result = task_service.list_tasks_filtered(
+        status=status,             # ← 补透传
+        case_class=case_class,
+        review_status=review_status,
+        limit=limit,
+        offset=offset,
+    )
+    return result
+```
+
+### 4.5 坑 5：Pydantic schema 字段 ≠ SQLAlchemy ORM 列
+
+**现象**：
+
+```text
+TypeError: 'suggestion_diff' is an invalid keyword argument for FeedbackItem
+```
+
+**根因**：
+
+`feedbacks.py` 手动构造 `FeedbackItem(suggestion_diff=...)`，但 `suggestion_diff` 是 Pydantic 结构字段，DB 列名是 `suggestion_diff_json`；`rule_candidate` 同样不是 DB 列（列名是 `rule_candidate_ref`）。
+
+**修复**：
+
+不在 API 路由层手动 `db.add(ORMModel(...))`，改用项目已封装的业务入口 `task_service.submit_task_feedback(...)`，内部完成 task/defect 翻译、ORM 映射与 FeedbackService 调用。
+
+**教训**：
+
+Pydantic schema 字段 ≠ DB ORM 列。写 DB 前先确认目标 ORM 模型的真实列名，优先复用 service 已有业务入口，不自行拼 ORM。
+
+### 4.6 坑 6：`test_auth.py` 的 pg_session 前缀与 conftest 冲突
+
+**现象**：
+
+单跑 `test_auth.py` 全过，全量跑时 `test_api.py` / `test_feedback_rule.py` 出现大量 `ForeignKeyViolation` 或 401 ERROR。
+
+**根因**：
+
+1. `test_auth.py` 的 `pg_session` teardown 用 `like("test_admin_%")` 清理，误删了 `conftest.py` 的 session 级 `test_admin_global_xxx`，而后者被其它测试的 `feedback_item.created_by` / `review_result.created_by` 引用。
+2. `test_last_admin_protection` 里 delete 其它所有 admin（包括 conftest 的 session 级 admin），触发 FK 违反，且后续 fixture 找不到 admin，一连串 ERROR。
+
+**修复**：
+
+**1. `pg_session` 前缀命名空间隔离：**
+
+- `test_auth.py` 的 `pg_session` teardown 只用 `like("test_auth_%")`；
+- 3 个 user fixture 的前缀改为 `test_auth_admin_` / `test_auth_eng_` / `test_auth_dis_`。
+
+**2. `test_last_admin_protection` 不删其它 admin，改用"临时降级 + finally 恢复"：**
+
+```python
+def test_last_admin_protection(client, admin_user, pg_session):
+    admin_id, _ = admin_user
+    # 1. 其它 active admin 临时降级为 engineer（不删，避免 FK 违反）
+    other_admins = pg_session.query(User).filter(
+        User.id != admin_id,
+        User.role == "admin",
+        User.is_active.is_(True),
+    ).all()
+    original_roles = {u.id: u.role for u in other_admins}
+    for u in other_admins:
+        u.role = "engineer"
+    pg_session.commit()
+
+    try:
+        resp = client.patch(
+            f"/api/v1/auth/users/{admin_id}",
+            headers={"X-User-Id": str(admin_id)},
+            json={"role": "engineer"},
+        )
+        assert resp.status_code == 422, resp.text
+        assert "最后一个启用管理员" in resp.json()["detail"]
+    finally:
+        # 3. 恢复其它 admin
+        for uid, original_role in original_roles.items():
+            pg_session.query(User).filter(User.id == uid).update(
+                {User.role: original_role}, synchronize_session=False
+            )
+        pg_session.commit()
+```
+
+**教训**：
+
+1. session 级 fixture 的前缀必须唯一命名空间，避免跨文件误删。
+2. 涉及"全库状态"的测试，不能直接 delete，用"临时修改 + finally 恢复"更安全。
+3. 删除被业务表引用的 user 前，先想清楚 FK 链；即使 FK 是 ON DELETE SET NULL，并发事务下也可能报错。
+
+### 4.7 坑 7：`dashboard.py` 跨层调用函数名笔误
+
+**现象**：
+
+6 个 dashboard 测试全挂：
+
+```text
+AttributeError: module 'app.services.dashboard_service' has no attribute 'get_summary'
+```
+
+**根因**：
+
+G3-A 给 dashboard.py 挂鉴权时，凭记忆写了 `dashboard_service.get_summary()`，但实际函数名是 `get_dashboard_summary()`。
+
+**修复**：
+
+```python
+# 改前
+return DashboardSummaryResponse(**dashboard_service.get_summary())
+
+# 改后
+return DashboardSummaryResponse(**dashboard_service.get_dashboard_summary())
+```
+
+**教训**：
+
+API 层调用 Service 时，函数名必须先用 `Select-String -Path "backend\app\services\<file>.py" -Pattern "^def "` 核对，不能凭记忆写。这类笔误如果测试覆盖了会立刻暴露；如果没测试覆盖，会静默 404/500，最坑。
+
+### 4.8 坑 8：`knowledge_gap_service.list_gaps` 缩进 bug（改 `raise` 类型时误伤后续语句）
+
+**现象**：
+
+admin 访问 `GET /knowledge-gaps` 返回 500，日志：
+
+```text
+File "/app/app/services/knowledge_gap_service.py", line 60, in list_gaps
+total = q.count()
+UnboundLocalError: cannot access local variable 'q' where it is not associated with a value
+```
+
+**根因**：
+
+把 `raise ValueError` 改成 `raise BusinessValueError` 时，误把紧随其后的 `q = db.query(KnowledgeGap)` 也缩进到了 `if` 块内部。
+
+```python
+# 改后（错误版本）
+if status is not None and status not in _ALLOWED_STATUS:
+    raise BusinessValueError(f"status 必须为 {_ALLOWED_STATUS}，实际: {status!r}")
+    q = db.query(KnowledgeGap)          # ← 错误缩进，进入 if 块
+if status is not None:
+    q = q.filter(...)
+```
+
+> `raise` 执行会直接中断控制流，`q = db.query(...)` 永远不会执行；后续访问 `q.count()` 触发 `UnboundLocalError`。
+
+**修复**：
+
+`q = db.query(KnowledgeGap)` 与 `if` 语句平级，顶格书写，raise 后空一行隔开：
+
+```python
+# 改后（正确）
+if status is not None and status not in _ALLOWED_STATUS:
+    raise BusinessValueError(f"status 必须为 {_ALLOWED_STATUS}，实际: {status!r}")
+
+q = db.query(KnowledgeGap)
+if status is not None:
+    q = q.filter(...)
+```
+
+**教训**：
+
+1. 修改 `raise` 所在 if 块代码，务必完整检查 if 的缩进边界，不要仅修改 raise 一行。
+2. raise 之后缩进在同一个 if 块内的代码永远不会被执行。
+3. 该类 `UnboundLocalError` 静态检查工具（ruff / pylint F821/F841）可以提前捕获，G6 CI 建议开启该规则。
+
+**验证**：修复后 admin 访问 `/knowledge-gaps` 返回 200，全量回归 `595 passed, 0 failed`。
+
+### 4.9 修复后验证结果
+
+| 验证项 | 执行结果 |
+|---|---|
+| test_api.py 单文件 | ✅ 17 passed（含 2 个 422 关键用例） |
+| test_dashboard.py 单文件 | ✅ 6 passed |
+| 全量非 integration | ✅ 595 passed, 2 skipped, 24 deselected, 0 failed |
+
+### 4.10 遗留到 G3-D 的待办
+
+> 注：原第 4 项「审计字段注入升级」已于 **G3-C 完成**（4 个审计字段全部由后端 `get_current_user` 注入，Schema 不接受前端传入，详见 §5），本项从待办中移除。
+
+1. **升级 `task_service.create_task`**：返回完整 dict，恢复 `CreateTaskResponse(**resp)` 解包，去掉接口 `get_task` 回查。
+2. **反馈提交逻辑收敛**：将 `task_service.submit_task_feedback` 内部逻辑完整收敛进 `feedback_service`，路由层恢复调用 service、移除路由内直连 DB。
+
+**已评估、无需修复**：
+
+- **`ReviewResult.total_defects` 落库语义**：G3-C 已确认 `len(report.defects)` 取值逻辑正确，DB 持久化数量与运行内存解析数量一致，判定无 bug，不再列入待办。
+
+### 4.11 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | 全局 ValueError handler 过度捕获 | 业务参数校验异常要用自定义类型（`BusinessValueError`），标准 `ValueError` 留给兜底 500 暴露 bug |
+| 2 | service 返回 str，API `**resp` 解包 | `Model(**x)` 只能解包 dict，返回 str 会 TypeError |
+| 3 | batch 的 `resp["task_id"]` 访问字符串索引 | 确认 service 返回类型后再取字段 |
+| 4 | 路由漏声明 Query 参数 + 缺角色 | 路由签名每个 Query 都要声明并透传；角色矩阵逐一核对 |
+| 5 | Pydantic 字段 ≠ ORM 列 | 不手动 `db.add(ORMModel(pydantic字段))`，优先复用 service 业务入口 |
+| 6 | fixture 前缀冲突 + 全库状态测试 | session fixture 用唯一前缀命名空间；全库状态测试用"临时修改 + finally 恢复"而非 delete |
+| 7 | 跨层函数名笔误 | 调用前用 `Select-String "^def "` 核对，不凭记忆 |
+| 8 | if-raise 块误伤后续变量定义 | raise 会中断流程，检查 if 块全部缩进边界；开启静态检查 F821/F841 |
+
+---
+
+## 5. S3-G3C-AuditFields：审计字段注入与手测踩坑（2026-11-05）
+
+> **状态**：✅ 已修复
+> **核心难点**：4 个审计字段（`review_result.created_by` / `rule_candidates.reviewed_by` / `feedback_item.created_by` / `review_defect.expert_decision_by`）必须由后端 `get_current_user` 注入，Pydantic Schema 不接受前端传入。`created_by` 涉及 Graph 全链路透传；`reviewed_by` 涉及 Service 层写入。
+> **最终结果**：全量非 integration `597 passed, 2 skipped, 0 failed`。
+
+### 5.1 改动架构
+
+**`created_by` 的 Graph 全链路透传**：
+
+```text
+review_tasks.py: create_review_task(current.id)
+  → task_service.create_task(case_id, created_by=current.id)
+  → review_graph.run_review_graph(case_id, task_id, created_by=current.id)
+  → state.make_initial_state(case_id, task_id, created_by=current.id)
+  → state["created_by"] = current.id
+  → node_feedback_save(state)
+  → _persist_review_report(..., created_by=state.get("created_by"))
+  → ReviewResult(..., created_by=created_by)
+```
+
+> **关键约束**：`_persist_review_report` 无 `state` 参数，`created_by` 作为第 6 个参数透传；`ReviewGraphState` 是 `TypedDict, total=False`，加 `created_by: int | None` 不需要改任何节点初始化代码。
+
+**`reviewed_by` 的 Service 层写入**：
+
+```text
+rule_candidates.py: update_candidate_status(current.id)
+  → rule_evolution_service.update_candidate_status(..., reviewed_by=current.id)
+  → rc.reviewed_by = reviewed_by
+  → db.commit()
+```
+
+### 5.2 坑 1：Graph 全链路透传的 5 处改动
+
+**现象**：
+
+首次给代码时没确认 `_persist_review_report` 的签名（无 `state` 参数），差点给出 `state.get("created_by")` 的错误 diff。
+
+**根因**：
+
+`node_feedback_save(state)` 调 `_persist_review_report(report, case_id, task_id, rule_hits=..., ir_doc=...)`，但 `_persist_review_report` **不接收 `state`**，需要额外加 `created_by` 参数。
+
+**修复**：
+
+`_persist_review_report` 签名加第 6 个参数 `created_by: int | None = None`；`node_feedback_save` 调用时传 `created_by=state.get("created_by")`。
+
+**教训**：
+
+1. 跨函数透传 `state` 字段时，**必须先 `Select-String -Pattern "^def "` 看所有相关函数的完整签名**，不能假设 `state` 全程可见。
+2. `TypedDict, total=False` 是加字段的最佳形态——所有字段隐式 `Optional`，加 `created_by: int | None` 不需要改任何初始化代码。
+
+### 5.3 坑 2：候选 ID 特殊连字符导致手测路径卡住
+
+**现象**：
+
+用 DB 里已有候选 `RC-20261104-B46BB4` 调 `POST /rule-candidates/{id}/status`：
+
+```powershell
+$cid = "RC-20261104-B46BB4"
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status" -Method POST ...
+# 返回 404: rule_candidate candidate_id=RCâ20261104âB46BB4 not found
+```
+
+**根因**：
+
+`RC-20261104-B46BB4` 里的 `-` 是 `U+2011` 非断连字符（Sprint 2 遗留的 `_make_candidate_id()` 生成），不是 ASCII `-`。
+PowerShell 5.1 显示 UTF-8 时把 `U+2011` 渲染成 `â`，`Invoke-RestMethod` 在 URL 编码/解码时与后端 DB 存储不一致，后端收到的 ID 与 DB 里的不匹配。
+
+**规避**：
+
+手测时用纯 ASCII 候选 ID（如 `RC-ASCII-xxx` / `RC-TEST-xxx`）：
+
+```powershell
+$cid = "RC-ASCII-0A52BFB3"   # 纯 ASCII
+Invoke-RestMethod -Uri "http://localhost:8000/api/v1/rule-candidates/$cid/status" -Method POST ...
+# 200 + {candidate_id: "RC-ASCII-0A52BFB3", status: "accepted", reviewed_by: 3232}
+```
+
+**教训**：
+
+1. **手测路径不碰脏数据**：Sprint 2 遗留的 `U+2011` 候选 ID 是已知技术债（Sprint3 附录 D 第 1 项），手测时用 ASCII ID 绕开，不在 G3-C 里修。
+2. **测试文件里也用 ASCII ID**：新增的 `test_update_candidate_status_writes_reviewed_by` 用 `RC-TEST-{uuid}`（纯 ASCII），避免测试环境被 `U+2011` 污染。
+3. **不要把这当 bug 修**：这是测试路径问题，不是代码问题。代码 `update_candidate_status` 的 `reviewed_by` 写入逻辑正确，只是手测时被候选 ID 卡住。
+
+### 5.4 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `created_by` 注入（admin 3232 建任务） | ✅ DB `created_by = 3232` |
+| `reviewed_by` 注入（admin 3232 批准 ASCII 候选） | ✅ DB `status = accepted`, `reviewed_by = 3232` |
+| 全量非 integration | ✅ 597 passed, 2 skipped, 24 deselected, 0 failed |
+
+### 5.5 未纳入 G3-C 的遗留项
+
+| 项 | 归属 |
+|---|---|
+| `_make_candidate_id()` 生成标准 ASCII `-`，解决 `U+2011` 问题 | Sprint3 附录 D 第 1 项，下一阶段 |
+| `update_candidate_status` 的 `raise ValueError` 改 `BusinessValueError`（错误语义统一） | G3-D 收尾时统一梳理 |
+| `ReviewResult.total_defects` 落库语义（与 `report.defects` 一致） | G3-A 已确认无 bug（`len(report.defects)` 正确），不需修 |
+
+---
+
+## 6. S3-G3B-DataScope：对象级数据范围与 IDOR 防护（2026-11-05）
+
+> **状态**：✅ 已完成
+> **核心难点**：engineer 只能看 `created_by = me` 的任务，reviewer / admin 看全部；engineer 越权访问他人任务必须返回 404（防枚举），但日志要区分"真 404"、"越权 404"、"历史数据无权"。`total` 的改造不能把 `case_class` 的 Python 过滤语义复刻到 SQL。
+> **最终结果**：全量非 integration `613 passed, 2 skipped, 0 failed`（+16 IDOR 测试）。
+
+### 6.1 6 项设计决策（D6-D11）
+
+| # | 决策 | 落地 |
+|---|---|---|
+| **D6** | engineer 越权访问返回 404（不返回 403），防枚举 | `get_task` / `get_task_defects` / `export` 越权时返回 None / []，API 层统一 404 |
+| **D7** | `created_by` 过滤仅对 **engineer** 生效 | SQL 层 `if current_user.role == "engineer": query.filter(...)` |
+| **D8** | `total = len(filtered_items)` 保持内存 len；`created_by` 在 SQL 层过滤 | 方案 X（不把 case_class 复刻到 SQL） |
+| **D9** | 日志区分 3 类：`task.not_found` / `audit.idor_hidden` / `audit.historical_unauthorized` | 方案 D（Service 层加日志，返回 None 不变） |
+| **D10** | Service 方法加 `current_user` 参数 | `CurrentUser \| None` 类型（含 id + role） |
+| **D11** | rule_admin 访问 review-tasks → 403 | G3-A `require_roles` 拦截，不进 G3-B 对象权限逻辑 |
+
+### 6.2 坑 1：`current_user` 参数类型避免循环 import
+
+**现象**：
+
+最初想给 `list_tasks_filtered` 加 `current_user: CurrentUser | None` 类型注解，但 `app.core.auth` 已经 import `app.services.user_service`，`task_service` import `CurrentUser` 会形成 `task_service → core.auth → user_service → ...` 的循环链路。
+
+**根因**：
+
+`CurrentUser` 是 `NamedTuple`，但 `task_service` 不应该依赖 `app.core.auth`（auth 是上层，task_service 是业务层）。
+
+**修复**：
+
+`current_user` 参数不加类型注解（`current_user=None`），运行时 duck typing：
+
+```python
+def list_tasks_filtered(
+    *,
+    current_user=None,   # 不加类型注解，避免循环 import
+    ...
+) -> dict[str, Any]:
+    if current_user is not None and getattr(current_user, "role", None) == "engineer":
+        query = query.filter(ReviewResult.created_by == current_user.id)
+```
+
+用 `getattr(current_user, "role", None)` 而非 `current_user.role`，防止 `None` 或非预期类型报错。
+
+**教训**：
+
+1. 业务 Service 不要 import 上层 `app.core.auth`，用 duck typing + `getattr` 更安全。
+2. `current_user=None` 是合法状态（脚本 / CLI 调用不带用户上下文），必须防御性处理。
+
+### 6.3 坑 2：越权返回 None 但日志要区分 3 种情况
+
+**现象**：
+
+`get_task` 内部如果直接 `if rr.created_by != current_user.id: return None`，日志只能打"任务不存在"，无法区分：
+
+- 真不存在（DB 里没这条）
+- 越权（engineer 访问他人任务）
+- 历史数据（`created_by IS NULL`，Sprint 1 遗留）
+
+**根因**：
+
+`return None` 是统一出口，但 3 种情况的审计语义完全不同——越权要告警，历史数据要提醒迁移，真不存在是正常 404。
+
+**修复**：
+
+3 分支日志（方案 D）：
+
+```python
+if rr is None:
+    # 分支 1：真不存在
+    logger.info("task.not_found: task_id=%s ...", task_id, ...)
+    return None
+
+if current_user and current_user.role == "engineer":
+    if rr.created_by is None:
+        # 分支 2：历史数据无权
+        logger.warning("audit.historical_unauthorized: task_id=%s ...", ...)
+        return None
+    if rr.created_by != current_user.id:
+        # 分支 3：真实越权
+        logger.warning("audit.idor_hidden: task_id=%s current_user_id=%s owner_id=%s",
+                       task_id, current_user.id, rr.created_by)
+        return None
+```
+
+**教训**：
+
+1. "统一 404" 和 "区分日志" 不矛盾：对外响应一致，对内日志分层，运维排障能看到是哪类 404。
+2. 日志前缀用 `task.not_found` / `audit.idor_hidden` / `audit.historical_unauthorized` 便于 grep。
+3. 越权日志必须打 `current_user_id` + `owner_id`，方便回溯。
+
+### 6.4 坑 3：`case_class` 的 Python 过滤不能复刻到 SQL
+
+**现象**：
+
+G3-B 改造 total 时，想给 `list_tasks_filtered` 改 SQL 层 count（`query.count()`），但 `case_class` 是 Python 层从 `case_id` 前缀推导的（`_infer_case_class(case_id)`），DB 无 `case_class` 列。
+
+**根因**：
+
+`case_class` 的推导规则（A 类 `^case\d{3}$`、B 类 `^case_b\d{2}_[a-z0-9_]+_B$`）是 Sprint 2 冻结的语义，DB 里没有对应列，只能在 Python 层过滤。
+
+**修复**：
+
+方案 X（保留 `total = len(filtered_items)`）：
+
+```python
+# SQL 层：created_by 过滤（仅 engineer）
+if current_user and current_user.role == "engineer":
+    query = query.filter(ReviewResult.created_by == current_user.id)
+
+rows = query.all()   # SQL 层过滤后拿数据
+
+# Python 层：case_class 过滤（不变）
+filtered_items = []
+for rr, case_id in rows:
+    item_case_class = _infer_case_class(case_id)
+    if case_class is not None and item_case_class != case_class:
+        continue
+    filtered_items.append({...})
+
+total = len(filtered_items)   # 保持内存 len
+paginated = filtered_items[offset:offset+limit]
+```
+
+**教训**：
+
+1. D8 的真正含义是"`created_by` 在 SQL 层过滤"，不是"total 从 len 改 count"。`case_class` 的 Python 过滤存在时，total 必须保持 `len(filtered_items)`。
+2. 不要为了"性能优化"把已冻结的 Python 过滤语义复刻到 SQL——`case_class` 的 A/B 命名规则如果将来变化，SQL 层要同步改，违反"冻结语义不动"。
+3. `created_by` 在 SQL 层过滤是必要的（不是性能优化，是语义）：engineer 的 total 必须是"自己任务的数"，不能先拉全部再 Python 过滤。
+
+### 6.5 坑 4：`export_review_report` 的对象级权限校验
+
+**现象**：
+
+`export_review_report` 当前直接 `report_service.generate_markdown_report(task_id)`，没有对象级权限校验——engineer 可以导出他人任务报告。
+
+**根因**：
+
+`generate_markdown_report` 内部不区分调用者身份（Service 层只负责生成报告）。
+
+**修复**：
+
+在 `try` 之前先 `get_task(current_user=current)` 做权限校验：
+
+```python
+task_info = task_service.get_task(task_id, current_user=current)
+if task_info is None:
+    raise HTTPException(status_code=404, detail=f"task_id={task_id} 不存在")
+
+try:
+    md = report_service.generate_markdown_report(task_id)
+except Exception as exc:
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+```
+
+**教训**：
+
+1. 对象级权限校验优先在调用业务 Service 之前（用 `get_task` 这种"权限感知"的查询），而不是在 Service 内部。
+2. `generate_markdown_report` 无需接收 `current_user`——因为已经 `get_task` 校验过权限了。
+
+### 6.6 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| import 校验（3 个函数） | ✅ OK |
+| 全量非 integration | ✅ 613 passed, 2 skipped, 24 deselected, 0 failed |
+
+> +16 IDOR 测试（从 597 → 613），覆盖 5 接口 × 4 角色矩阵。
+
+### 6.7 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | `current_user` 参数类型 | 业务 Service 不 import `app.core.auth`，用 `current_user=None` + `getattr` 防循环 import |
+| 2 | 越权返回 None 但日志区分 | "统一 404" + "分层日志" 不矛盾；3 分支：`task.not_found` / `audit.idor_hidden` / `audit.historical_unauthorized` |
+| 3 | `case_class` Python 过滤 | D8 不是"total 改 count"，是"`created_by` 在 SQL 层"；`case_class` 的 Python 过滤保持不动 |
+| 4 | export 对象级权限 | 在 `generate_markdown_report` 之前先 `get_task(current_user=current)` 校验 |
+
+---
+
+## 7. S3-G3D-ErrorSemantics：错误语义统一与负面测试补全（2026-11-05）
+
+> **状态**：✅ 已完成
+> **核心难点**：`rule_evolution_service.update_candidate_status` 的 `status` 非法从 404 改 422，需要拆 `except ValueError` 为两层（`BusinessValueError` 优先）；R2 负面用例补全（5 接口组 × 3 类）。
+> **最终结果**：全量非 integration `626 passed, 2 skipped, 0 failed`。
+
+### 7.1 坑 1：`except ValueError` 同时捕获"资源不存在"和"参数非法"
+
+**现象**：
+
+`rule_candidates.py` 的 `update_candidate_status` 端点：
+
+```python
+try:
+    result = _svc.update_candidate_status(...)
+except ValueError as exc:
+    raise HTTPException(status_code=404, detail=str(exc)) from exc
+```
+
+这个 `except ValueError` 同时捕获：
+
+- `status` 非法（应为 422）
+- `candidate_id` 不存在（应为 404）
+
+两个语义完全不同的错误映射到同一个 404，用户传非法 `status` 会看到"candidate not found"的 404，误导。
+
+**根因**：
+
+`rule_evolution_service.update_candidate_status` 内部 2 个 `raise ValueError`：
+
+1. `status` 枚举校验（应为 422）
+2. `candidate_id` 不存在（应为 404）
+
+API 层 `except ValueError → 404` 一刀切。
+
+**修复**：
+
+1. `rule_evolution_service.update_candidate_status` 的 `status` 校验 `raise ValueError` → `raise BusinessValueError`（保留 `candidate_id` 不存在的 `raise ValueError`）
+2. `rule_candidates.py` 拆 2 层：
+
+```python
+except BusinessValueError as exc:   # 必须放前面（子类优先）
+    raise HTTPException(status_code=422, detail=str(exc)) from exc
+except ValueError as exc:
+    raise HTTPException(status_code=404, detail=str(exc)) from exc
+```
+
+**教训**：
+
+1. `except Exception` 的宽泛捕获是错误语义混乱的根源。一个 `except ValueError` 背后往往有多种语义（参数非法 / 资源不存在 / 数据格式错误），需要用自定义异常类型区分。
+2. `BusinessValueError` 必须是 except 链的第一个，否则被父类 `except ValueError` 先捕获。
+3. 这一规则要和 G3-A 的 R4（业务异常用 `BusinessValueError`）一致：参数校验失败 = `BusinessValueError` = 422；资源不存在 = 保留 `ValueError` 但由 API 层针对性转 404。
+
+### 7.2 坑 2：R2 负面用例漏了 5 个接口组
+
+**现象**：
+
+G3-D 开始前，R2 的"每个 API 组 3 个负面用例（无 header / 非法整数 / 角色 403）"覆盖率：
+
+| 接口组 | 覆盖率 |
+|---|---|
+| `auth/users` / `review/tasks` / `cases` | 3/3 ✅ |
+| `rule_candidates` / `knowledge_gaps` / `knowledge_docs` / `feedbacks` / `dashboard` | 0/3 ❌ |
+
+**根因**：
+
+G3-A 挂鉴权时，只在 `test_auth.py` / `test_review_persistence.py` / `test_case_benchmark.py` 里补了负面用例，G3-A 第 3 批（`rule_candidates` / `knowledge_docs` / `knowledge_gaps`）的负面用例没补，G3-B / G3-C 也没补。
+
+**修复**：
+
+在 `test_feedback_rule.py` + `test_api.py` 末尾追加 9 个负面用例，覆盖 5 个接口组 × 2–3 类。
+
+**教训**：
+
+1. R2 是跨阶段的验收标准，不是单个批次的局部要求。G3-A 挂鉴权时漏了，G3-D 必须补全。
+2. 负面用例要按"接口组"组织，同一接口组的 3 个负面用例放一起（如 `test_rule_candidates_no_auth_401` / `test_rule_candidates_invalid_uid_401` / `test_rule_candidates_engineer_403`），便于维护。
+3. `feedbacks` / `dashboard` 的负面用例在 G3-A 已经"逻辑上有"但"测试上没写"，这类"实现了但没测"的漏洞最隐蔽。
+
+### 7.3 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `rule_evolution_service.py` import `BusinessValueError` | ✅ |
+| `rule_candidates.py` 的 `except BusinessValueError → 422` 生效 | ✅ |
+| 新增 9 个负面用例 | ✅ |
+| 全量非 integration | ✅ 626 passed, 2 skipped, 24 deselected, 0 failed（从 613 → 626） |
+
+### 7.4 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | `except ValueError` 混合语义 | 拆成 `except BusinessValueError → 422` + `except ValueError → 404`，子类优先 |
+| 2 | R2 负面用例漏了 5 个接口组 | 跨阶段验收标准，G3-D 补全；"实现了但没测"最隐蔽 |
+
+---
+
+## 8. S3-G4-FrontendAuth：前端登录 + 路由守卫 + 菜单权限（2026-11-06）
+
+> **状态**：✅ 已完成
+> **核心难点**：① 权限唯一可信源 = `GET /auth/me`，`localStorage` 仅存 `user_id`（`role` 不写）；② 401 / 403 / 404 三类错误区分；③ `router.beforeEach` 的 `bootstrap()` 请求锁；④ 菜单按 `role` 动态显示。
+> **最终结果**：`npm run type-check` 0 errors + `npm run build` 成功 + 8 个浏览器验收场景全部通过。
+
+### 8.1 坑 1：`localStorage` 存 `role` 的陷阱
+
+**现象**：
+
+最初想在 `localStorage` 存 `{ user_id, role }` 方便前端判断菜单权限。但这违反 Sprint3 §8 约束"localStorage 不可信，role 以后端为准"——用户手动改 `localStorage.role = "admin"` 就能绕过前端菜单限制（虽然后端 `require_roles` 会拦，但前端体验会错乱：菜单显示了但接口 403）。
+
+**根因**：
+
+`localStorage` 是纯客户端存储，用户可任意修改。**`role` 必须从 `GET /auth/me` 实时拉取**，存内存（Pinia store），不能持久化到 `localStorage`。
+
+**修复**：
+
+- `localStorage` **只存 `user_id`**（用于 `X-User-Id` 请求头注入）
+- `role` / `username` / `is_active` **只存 Pinia store**（内存），每次 `bootstrap()` 从 `GET /auth/me` 刷新
+- 刷新页面后 store 丢失，`router.beforeEach` 触发 `bootstrap()` 重新拉取
+
+**教训**：
+
+1. **"权限唯一可信源 = 后端"是铁律**，前端只能缓存"用户 id"这种非敏感标识，不能缓存"角色"这种权限依据。
+2. `localStorage` 只能当"会话锚点"（记住"我是谁"），不能当"权限凭证"（"我能干什么"）。
+
+### 8.2 坑 2：401 / 403 / 404 混淆导致体验错乱
+
+**现象**：
+
+最初 `http.ts` 对所有 `!response.ok` 统一 `throw new Error(detail)`，导致：
+
+- 401（身份失效）：页面只显示"HTTP 401"错误，不跳登录，用户困惑
+- 403（权限不足）：用户体验和 404 一样，不知道是"没权限"还是"资源不存在"
+- 404（对象越权伪装，G3-B D6）：engineer 越权访问他人任务返回 404，如果前端误判为 403，会显示"权限不足"——但实际后端是"任务不存在"（防枚举）
+
+**根因**：
+
+`http.ts` 未区分 HTTP 状态码，所有错误走同一条 `throw new Error` 路径。
+
+**修复**：
+
+`http.ts` 的 `!response.ok` 分支区分 3 类：
+
+```typescript
+if (response.status === 401) {
+  handleUnauthorized();                     // 清 localStorage.user_id + 跳 /login
+  throw new UnauthorizedError(detail);
+}
+if (response.status === 403) {
+  throw new PermissionDeniedError(detail);  // 页面级 catch，显示"权限不足"
+}
+
+throw new Error(detail);                    // 404 / 422 / 500 保持原样
+```
+
+**教训**：
+
+1. 401 / 403 / 404 语义完全不同：401 = 身份失效（清身份跳登录）；403 = 权限不足（页面提示）；404 = 资源不存在（业务处理，不特殊跳转）。
+2. G3-B D6 决策"engineer 越权返回 404"要求前端不能把 404 误判为 403——否则会把"防枚举"变成"明示权限不足"，反而暴露资源存在性。
+3. `handleUnauthorized` 用 `window.location.href = "/login"` 而非 Vue Router——因为 `http.ts` 在 router 之前加载，避免循环依赖。
+
+### 8.3 坑 3：`router.beforeEach` 并发 bootstrap 导致状态错乱
+
+**现象**：
+
+用户快速点击多个路由链接时，`router.beforeEach` 会并发触发多次 `bootstrap()`（每次都 `GET /auth/me`），导致：
+
+- 多次 API 请求浪费
+- 后续响应覆盖前面响应，状态可能错乱
+- 401 场景下 `handleUnauthorized` 可能被多次触发
+
+**根因**：
+
+`bootstrap()` 没有请求锁，每次调用都发新请求。
+
+**修复**：
+
+`stores/auth.ts` 的 `bootstrap()` 用 `bootstrapPromise` 缓存：
+
+```typescript
+let bootstrapPromise: Promise<AuthUser | null> | null = null;
+
+async function bootstrap(): Promise<AuthUser | null> {
+  if (bootstrapped.value) return user.value;
+  if (bootstrapPromise) return bootstrapPromise;   // ← 请求锁
+  bootstrapPromise = (async () => { ... })();
+  return bootstrapPromise;
+}
+```
+
+**教训**：
+
+1. 任何"启动时拉取"的异步操作都要加请求锁，避免并发导航触发多次请求。
+2. `bootstrapPromise` 必须是模块级变量（不是 store 的 ref），因为它不需要响应式。
+
+### 8.4 坑 4：`http.ts` 的 401 handler 用 `window.location.href` 而非 `router.push`
+
+**现象**：
+
+最初想用 `router.push("/login")` 跳登录，但 `http.ts` 是纯 API 封装，不 import Vue Router（否则循环依赖）。而且如果在 `router.beforeEach` 里触发 401（`bootstrap()` 调 `me()` 返回 401），`router.push` 会和当前导航冲突。
+
+**修复**：
+
+`http.ts` 的 `handleUnauthorized` 用 `window.location.href = "/login"`（整页刷新，不走 SPA 路由），并加 `window.location.pathname !== "/login"` 判断防重复跳转。
+
+**教训**：
+
+1. 底层工具（`http.ts`）不依赖上层（Vue Router），用 `window.location` 是合理的。
+2. 401 是"身份失效"的强信号，整页刷新更干净（清空所有内存状态）。
+
+### 8.5 坑 5：BUG-G3A-001 误判（后端未注册 vs 测试路径笔误）
+
+**现象**：
+
+G3-A 手工测试报告报 `GET /api/knowledge-docs` → 404，初步判断为"后端未挂载 `APIRouter`"，定为 P1 阻塞。
+
+**复测**：
+
+```text
+# 后端路由表（应用内打印 app.routes）
+/app/api/v1/knowledge-docs
+/app/api/v1/knowledge-docs/upload
+/app/api/v1/knowledge-gaps
+/app/api/v1/knowledge-gaps/{gap_id}
+```
+
+后端路由完整注册。以 `admin` 身份（`X-User-Id: 3232`，DB 校验：`3232 | admin | admin | t`）直接请求 `GET /api/v1/knowledge-docs` → **200 + `total: 14`**（`items` 数组在终端输出被截断，`total` 为服务端真实总数）；前端页面内同样请求亦为 200。
+
+**真实根因**：
+
+测试报告请求路径写成 `/api/knowledge-docs`（少了 `/v1` 前缀）。前端页面路由是 `/knowledge-base`（不是 `/knowledge-docs`），直接访问 `/knowledge-docs` 会走前端 `/:pathMatch(.*)*` 的 404 页面（不是后端 404）。
+
+**教训**：
+
+1. 前后端路径要分清：前端路由 `/knowledge-base`，后端接口 `/api/v1/knowledge-docs`，两者不同。
+2. 测试报告 404 时要先看请求路径：是 `/api/v1/xxx` 还是 `/api/xxx`？是前端路由还是后端接口？
+3. P1 缺陷结论前必须复测：本次 404 报告直接判"后端未注册"是过度推断，实际是测试脚本笔误。
+4. 分层验证顺序：前端页面路由 → 后端接口路由 → 鉴权拦截，三层分开确认，再登记缺陷类型。
+
+### 8.6 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `npm run type-check` | ✅ 0 errors |
+| `npm run build` | ✅ 1996 modules transformed，`LoginPage-5SimDYtX.js` / `ForbiddenPage-DgXKw812.js` 正确打包 |
+| 8 个浏览器验收场景 | ✅ 全部通过（详见 `G4_RBAC_手工测试报告.md`） |
+| 对象级越权（详情 / 缺陷 / 导出） | ✅ 统一 404 |
+| BUG-G3A-001 | ✅ 撤销（测试报告笔误），后端路由与鉴权逻辑均正常 |
+
+### 8.7 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | `localStorage` 存 `role` | `role` 不写 `localStorage`，只存 Pinia 内存，每次从 `GET /auth/me` 刷新 |
+| 2 | 401 / 403 / 404 混淆 | 401 清身份跳登录；403 页面提示；404 保持原样（不误判为 403） |
+| 3 | `bootstrap()` 并发请求 | 用 `bootstrapPromise` 模块级缓存（请求锁） |
+| 4 | `http.ts` 用 `window.location.href` | 底层工具不依赖 Vue Router，用 `window.location` 整页刷新 |
+| 5 | BUG-G3A-001 误判 | 测试报告路径笔误（少 `/v1`）；前后端路径要分清；P1 结论前必须复测 |
+
+---
+
+## 9. S3-G5-KnowledgeGap：知识缺口生成链路补实现（2026-11-06）
+
+> **状态**：🟢 基本完成（Commit 1、2、3 已完成，E2E 链路打通，631 passed；仅剩 T-05 状态码全量扫描与 G5 最终文档收尾）
+> **核心发现**：Sprint 1/2 的 `knowledge_gap` / `gap_feedback_link` 表**没有任何生产代码写入路径**，DB 里 26 条 `knowledge_gap` 是 Sprint 2 测试 / demo 手工造的测试数据。G5 必须补实现。
+> **Commit 1 结果**：`create_gap_from_feedback` 函数 + 统一 ID 生成器 `make_prefixed_id` 落地，全量 626 passed 零破坏。
+> **Commit 2 结果**：`_dispatch_evolution` 接线 + `FeedbackOut`/`FeedbackResponse`/路由三层 DTO 透传，API 返回 `GAP-20261106-5708C0`，全量 626 passed。
+> **Commit 3 结果**：E2E 生成链路用例 + G4 遗留 4 个补测落地，全量 **631 passed、0 failed**（跨 Session 污染已在 9.5c 解决）。
+
+### 9.1 坑 1：`_make_candidate_id` 的 U+2011 技术债源头（G5 顺带修复）
+
+**现象**：
+
+G3-C 手测 `POST /rule-candidates/RC‑20261104‑B46BB4/status` 返回 404，PowerShell 显示 `RCâ20261104âB46BB4`（U+2011 渲染成 `â`）；后端 DB 存储的 `candidate_id` 是 `RC‑20261104‑B46BB4`（U+2011），前端用 `encodeURIComponent` 兜底。
+
+**根因**：
+
+`rule_evolution_service._make_candidate_id` 的实现：
+
+```python
+def _make_candidate_id() -> str:
+    ts = datetime.now().strftime("%Y%m%d")
+    suffix = uuid.uuid4().hex[:6].upper()
+    return f"RC‑{ts}‑{suffix}"   # ← `‑` 是 U+2011，不是 ASCII `-` (U+002D)
+```
+
+`f"RC‑{ts}‑{suffix}"` 里的 `‑` 是 U+2011 非断连字符，不是 ASCII `-`。这是 Sprint 2 遗留的 P1 技术债（Sprint3 附录 D 第 1 项），原计划下一阶段修，G5 提前修复。
+
+**修复（G5 Commit 1）**：
+
+改为调 `make_prefixed_id("RC", random_len=6)`（ASCII `-`）：
+
+```python
+def _make_candidate_id() -> str:
+    from app.core.ids import make_prefixed_id
+    return make_prefixed_id("RC", random_len=6)
+```
+
+**修复效果**：
+
+```text
+新生成：RC-20261106-5B167C    （ASCII `-`，URL 安全）
+存量：  RC‑20261027‑F05ED4    （U+2011，不迁移，前端 encodeURIComponent 兜底）
+```
+
+**教训**：
+
+1. **"看起来像 `-`"的字符不一定是 ASCII `-`**：U+2011（非断连字符）、U+2010（连字符）、U+2013（短破折号）、U+2014（长破折号）在视觉上都近似 `-`，但 URL 编码 / 数据库存储完全不同。写 ID 生成器必须显式用 `"-"`（ASCII U+002D）。
+2. **技术债要在"顺带"时修**：G5 本来只加 `create_gap_from_feedback`，但抽公共 `make_prefixed_id` 时顺带把 `_make_candidate_id` 一起改了，成本极低（3 行改动），避免 Sprint 4 专门开一个 commit 修。
+3. **存量数据不迁移**：存量候选 ID（U+2011）不迁移，前端 `encodeURIComponent` 兜底 + 后端 `get_candidate` 的 URL 解码能处理。迁移成本 > 收益。
+
+### 9.2 坑 2：`knowledge_gap` 表 26 条 demo 数据无生产写入路径
+
+**现象**：
+
+G3-A 手测 `GET /api/v1/knowledge-gaps` 返回 `total: 26`，但全项目 grep `KnowledgeGap(` / `GapFeedbackLink(` 只命中 `models.py` 的 ORM 定义，没有 `db.add(...)` 写入。
+
+**根因**：
+
+Sprint 1/2 的 `knowledge_gap` 表只是模型定义 + 读取接口（`list_gaps` / `get_gap` / `update_gap_status`），没有从 `feedback_item` 生成 `knowledge_gap` 的写入路径。`rule_evolution_service.export_knowledge_gap_backlog` 是**导出**（`SELECT feedback_item WHERE feedback_type='knowledge_gap'` 导 JSON），不写 `knowledge_gap` 表。
+
+**修复（G5 Commit 1 + 后续 Commit 2）**：
+
+- Commit 1：加 `knowledge_gap_service.create_gap_from_feedback` 函数
+- Commit 2：`feedback_service._dispatch_evolution` 加 `knowledge_gap` 分支，调 `create_gap_from_feedback`
+
+**教训**：
+
+1. **"表存在 + 有数据"不代表"有写入路径"**：26 条 demo 数据是 Sprint 2 测试 / demo 手工 `db.add(KnowledgeGap(...))` 造的，不是真实业务链路产生。必须 grep 写入点（`db.add(KnowledgeGap(`）才能确认。
+2. **导出 ≠ 生成**：`export_knowledge_gap_backlog` 从 `feedback_item` 表 SELECT 出 `feedback_type='knowledge_gap'` 的记录导 JSON，不写 `knowledge_gap` 表。导出和生成是两条独立链路。
+3. Sprint3 §10 的判定规则："反馈生成链路是知识反馈闭环的关键环节，若判定为第一阶段必要功能则必须补齐最小实现"——G5 判定为"补实现"，不是"补测试"。
+
+### 9.3 坑 3：`FeedbackCreate` 无 `comment` 字段（D13 降级链修正）
+
+**现象**：
+
+D13 原设计降级链 `expert_suggestion → comment → suggestion_diff 摘要 → 兜底`，但 `FeedbackCreate` Pydantic 模型没有 `comment` 字段：
+
+```python
+class FeedbackCreate(BaseModel):
+    review_result_id: int
+    review_defect_id: int
+    feedback_type: FeedbackType
+    expert_suggestion: str | None = None
+    suggestion_adopted: str | None = None
+    suggestion_diff: list[SuggestionDiff] | None = None
+    # ← 没有 comment 字段
+```
+
+**根因**：
+
+`FeedbackItem.comment` 在 DB 里存在（`Mapped[Optional[str]]`），但 `submit_feedback` 的 Pydantic 入参不传 `comment`，所以通过 API 提交的 feedback 的 `comment` 是 NULL。`comment` 只有测试 / demo 里手动 `db.add(FeedbackItem(comment="[SEED] 测试"))` 才有值。
+
+**修复**：
+
+D13 降级链去掉 `comment` 级，只剩 3 级：
+
+```python
+title_raw = (
+    (fb.expert_suggestion or "").strip()
+    or _summarize_suggestion_diff(fb.suggestion_diff_json)
+    or f"知识缺口{(' ' + final_case_id) if final_case_id else ''}"
+)
+```
+
+**教训**：
+
+1. **Pydantic 模型字段 ≠ ORM 模型字段**：`FeedbackItem.comment`（ORM）存在，但 `FeedbackCreate.comment`（Pydantic）不存在。写入路径的字段来源只能是 Pydantic 入参，不能假设"DB 里有就意味着 API 能传"。
+2. **降级链的每一级都要能实际到达**：`comment` 级在 API 路径下永远不可达（`comment` 永远是 NULL），保留它只会误导读者。
+
+### 9.4 坑 4：`feedback_item` 物理删除会导致 gap 失去来源追溯
+
+**现象（D18 补充说明）**：
+
+- `KnowledgeGap.source_feedback_id` 是 `ON DELETE SET NULL`（`feedback_item` 删了 gap 保留、source 清空）
+- `GapFeedbackLink.feedback_id` 是 `ON DELETE CASCADE`（`feedback_item` 删了 link 删、gap 保留）
+
+语义一致（gap 保留），但 `feedback_item` 物理删除会导致 gap 失去来源追溯：
+
+- `source_feedback_id` → NULL
+- `gap_feedback_link` 记录 → 被 CASCADE 删除
+- 结果：gap 成孤儿，不知道从哪条 feedback 生成
+
+**修复（文档约束，非代码改动）**：
+
+业务层禁止物理删除 `feedback_item`，其"删除"语义应为软删除（但目前 `FeedbackItem` 没有 `is_deleted` 列，也没有软删除接口）。G5 不碰这个，D18 文档写明约束，G6 或下一阶段考虑加软删除。
+
+**教训**：
+
+1. **同一个删除事件的不同外键策略要对齐**：`source_feedback_id SET NULL` + `gap_feedback_link CASCADE` 在"gap 是否保留"上语义一致，但**追溯能力不一致**（link 没了）。如果追溯重要，`gap_feedback_link` 也应 `SET NULL`（但主键是 `(gap_id, feedback_id)`，`feedback_id` 不能 NULL，所以只能 CASCADE）。
+2. **审计类表禁止物理删除**：`feedback_item` 是审计 / 追溯表，业务上不应物理删除。G5 记录约束，G6 或下一阶段加软删除。
+
+### 9.5 Commit 1 验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `make_prefixed_id("GAP", 6)` | ✅ `GAP-20261106-E7B45A`（ASCII `-`） |
+| `make_prefixed_id("RC", 6)` | ✅ `RC-20261106-5B167C`（ASCII `-`） |
+| 全量非 integration | ✅ 626 passed, 2 skipped, 24 deselected, 0 failed |
+| Commit 2 后回归 | ✅ 626 passed、0 failed（见 9.5b 结果） |
+| Commit 3 后全量 | ✅ 631 passed, 2 skipped, 24 deselected, 0 failed（见 9.5c 结果） |
+
+### 9.5b 坑 5：API 层 DTO 漏传字段导致 `knowledge_gap_ref` 为空
+
+**现象**：
+
+`POST /api/v1/feedbacks` 提交 `knowledge_gap` 类型反馈后，DB 中 `knowledge_gap` 和 `gap_feedback_link` 均成功写入，但 API 响应中的 `knowledge_gap_ref` 字段始终为空。
+
+**排查思路（逐步缩小范围）**：
+
+1. **查 DB**：确认 `gap_feedback_link` 表有记录（`feedback_id=2528` 对应 `gap_id=188`），数据层无问题。
+2. **查 Service 层**：在 `_build_out` 增加调试日志，确认 `db_feedback.id` 是整数（2528/2529），且独立 Session 手工 SQL 能查出 `GAP-...`，说明查询逻辑正确。
+3. **最终定位**：检查 API 路由 `feedbacks.py` 发现，`FeedbackResponse` 组装时**根本没有传** `knowledge_gap_ref`，且 `FeedbackResponse` schema **也没有定义该字段**。
+
+**根因**：
+
+`FeedbackOut`（Service DTO）有 `knowledge_gap_ref`，但 `FeedbackResponse`（API DTO）未同步新增字段，路由组装时也未传值。三层链路（Service → API Schema → 路由）缺失两层。
+
+**修复**：
+
+1. `schemas.py` 的 `FeedbackResponse` 增加 `knowledge_gap_ref: str | None = None`。
+2. `feedbacks.py` 的 `return FeedbackResponse(...)` 增加 `knowledge_gap_ref=out.knowledge_gap_ref`。
+
+**结果**：
+
+修复后 API 响应正常返回 `GAP-20261106-5708C0`，`knowledge_gap` 总数正确递增（32 → 33）。
+
+**教训**：
+
+1. **"Service 层有值"不等于"API 响应有值"**：手动验证必须看 `Invoke-RestMethod` 的最终响应，而不是 Service 函数的返回对象。
+2. **DTO 字段必须逐层对齐**：新增字段必须同时检查 `Service DTO` → `API Schema` → `路由组装` 三处。
+3. **全链路 grep 是终极大法**：遇到字段静默丢失，直接 `grep` 字段名，缺哪补哪。
+
+### 9.5c 坑 6：E2E 测试中的真实 Graph 触发跨 Session 污染
+
+**现象**：
+
+G5 Commit 3 新增的 `test_engineer_own_task_details_200` 用 `client_as_engineer.post("/review/tasks")` 创建任务，走真实 Graph（Mock LLM 也要走 `task_service.create_task` → `run_review_graph` → `_persist_review_report`）。
+
+全量回归时，`test_db_schema.py::test_trigger_rule_definition_updated_at_refresh` 挂：
+
+```text
+t1 = 2026-11-06 10:52:33.339680+00:00
+t2 = 2026-11-06 10:52:17.510604+00:00
+assert t2 > t1        # ← t2 比 t1 早 16 秒
+```
+
+**排查思路（逐步缩小范围）**：
+
+1. **查 DB**：`SELECT * FROM rule_definition WHERE rule_id LIKE 'TRIG_RULE_%'` → **0 行**（测试数据已回滚）。
+2. **单独跑用例**：`pytest tests/test_db_schema.py::test_trigger_rule_definition_updated_at_refresh -v` → **PASSED**。
+3. **单独跑全文件**：`pytest tests/test_db_schema.py -v` → **69 passed**。
+4. **全量跑**：`pytest -m "not integration"` → **1 failed**（`t2 < t1`）。
+5. **定位污染源**：G5 Commit 3 的 `test_engineer_own_task_details_200` 走 `create_task`（真实 Graph），内部 `get_db_session()` 真实 commit，污染 `rule_definition` 的 `updated_at`。
+
+**根因**：
+
+- `test_db_schema.py` 的 `db_session` fixture 用 `@pytest.fixture()`（function 级），**外层事务回滚隔离**。
+- 但 PostgreSQL 的事务快照隔离会导致：`db_session` 开始时的快照是旧的，而 `test_engineer_own_task_details_200` 在之前的测试里通过 `get_db_session()` **真实提交**了 `rule_definition` 的 `updated_at`，两相对比就出现 `t2 < t1`。
+- **根本问题**：`create_task` 走真实 Graph 会写 DB（`review_result` / `review_defect` / 规则命中相关表），跨 Session 不可见，污染后续测试。
+
+**修复**：
+
+`test_engineer_own_task_details_200` 改为**直接构造 `ReviewResult`（`created_by=engineer.id`）+ `commit`**，不走 Graph：
+
+```python
+with get_db_session() as db:
+    db.add(ReviewResult(
+        task_id=fake_task_id,
+        task_status="done",
+        created_by=eng_id,
+        review_output_json={"defects": [{"defect_id": "D1", ...}], "errors": []},
+        evidence_coverage=0.8,
+    ))
+    db.commit()
+```
+
+测试后 delete 清理。
+
+**结果**：
+
+- G4 遗留补测：4 passed
+- `test_db_schema.py`：69 passed
+- 全量非 integration：**631 passed, 2 skipped, 24 deselected, 0 failed**
+
+**教训**：
+
+1. **测试中的 `create_task` 不要走真实 Graph**：Graph 内部 `get_db_session()` 真实 commit，会跨 Session 污染其它用事务回滚隔离的测试。
+2. **测试数据「最小构造」**：直接 `db.add(ORMModel(...)) + commit`，比真实业务流程更可控。
+3. **跨文件测试污染排查法**：① 查 DB 确认无残留 → ② 单独跑 PASS → ③ 全文件跑 PASS → ④ 全量跑 FAIL → 定位到「哪个测试真实提交了数据」。
+4. **`db_session` 用事务回滚的局限**：PostgreSQL 事务快照隔离下，跨 Session 的数据变更可能导致同事务内的 `updated_at` 对比失败。
+
+**同类问题预警**：
+
+`test_engineer_own_task_details_200` 的修复模式（直接构造 DB 数据 + 清理）应推广到所有「需要真实任务 / 真实缺陷」的测试。`test_feedback_e2e.py` 的 `_run_task_and_get_defect_id` 走真实 Graph 是已知污染源，但它的测试在 `test_feedback_e2e.py` 内部有 `prepare_out_dir` 清理，暂未引发问题。
+
+### 9.6 G5 后续 Commit（待做）
+
+| # | Commit | 内容 | 状态 |
+|---|---|---|---|
+| 1 | `feat(s3-g5): add create_gap_from_feedback + unify ID generator` | 生成函数 + 统一 ID 生成器 | ✅ |
+| 2 | `feat(s3-g5): wire knowledge_gap generation in feedback_service` | `_dispatch_evolution` 加 `knowledge_gap` 分支 + 三层 DTO 对齐（见 9.5b） | ✅ |
+| 3 | `test(s3-g5): E2E test` | `test_feedback_e2e.py` 加场景（D20：`total_before + 1`）+ G4 遗留 4 个补测（见 9.5c） | ✅ |
+| 4 | `test(s3-g5): G4 遗留 T-01~T-05` | 5 个负面用例 | ⏳ |
+| 5 | `docs(s3-g5): G5 章节 + 完整回归` | 本文件补全 | ⏳ |
+
+---
+
+## 10. S3-G6-Concurrency：B 类并发测试与重试恢复（2026-11-06）
+
+> **状态**：✅ 已完成（G6 Commit 1–3）
+> **核心难点**：Sprint3 §2.4 把 B 类（唯一约束冲突恢复）留到 G6 补齐。但 `bootstrap_admin.py` 原本没有"回滚 → 重试 → 重读 → 按场景判断"逻辑，`except IntegrityError` 直接返回 2，所以既要**补代码**，也要**补测试**。
+> **最终结果**：全量非 integration **645 passed, 2 skipped, 0 failed**（B 类落地时 635 → G6 封板 645，+4 B 类测试 + T-05 扫描用例）；冒烟 6/6 全过。
+
+### 10.1 坑 1：`bootstrap_admin.py` 缺少 B 类重试逻辑
+
+**现象**：
+
+`bootstrap_admin.py` 的 `except IntegrityError` 只有一行：
+
+```python
+except IntegrityError as exc:
+    _print(f"ERROR: integrity error: {exc}")
+    return 2
+```
+
+唯一约束冲突（典型场景：两个进程同时初始化 admin）直接被判为失败，不会回滚后重读 DB、也不会重新判定场景。这与 §2.4 要求的"冲突后能恢复"不符。
+
+**修复**：
+
+拆出 `_bootstrap_once(args)` 承担"单次尝试"（独立 session + 独立事务 + 重新 `acquire_admin_lock`），`main()` 外层加重试循环：
+
+```python
+for attempt in range(_MAX_INTEGRITY_RETRIES):
+    try:
+        return _bootstrap_once(args)
+    except IntegrityError as exc:
+        if attempt < _MAX_INTEGRITY_RETRIES - 1:
+            _print(f"RETRY: integrity error on attempt {attempt + 1}/{_MAX_INTEGRITY_RETRIES}...")
+            time.sleep(0.1 * (attempt + 1))
+            continue
+        _print(f"ERROR: integrity error after {_MAX_INTEGRITY_RETRIES} attempts: {exc}")
+        return 2
+    except AdminLockTimeoutError:
+        _print("ERROR: admin lock timeout, please retry")
+        return 2
+    except Exception as exc:
+        _print(f"ERROR: {type(exc).__name__}: {exc}")
+        return 2
+```
+
+**关键点**：
+
+1. `with get_db_session() as db:` 退出时抛异常会**自动 `rollback()`**，所以 `except IntegrityError` 里不需要手动 rollback。
+2. 每次重试都是**新 session + 新事务 + 重新加锁 + 重新读 DB**，这样"另一个进程已先建成 admin"能在重试里被正确识别为场景 4，而不是把冲突当失败。
+3. 重试耗尽时仍返回 2，**不伪装成功**——这是 B 类的底线。
+4. `AdminLockTimeoutError` / 通用 `Exception` 放在循环外，不参与重试，避免"锁超时被当成唯一约束冲突反复重试"。
+
+### 10.2 坑 2：B4 测试的 `get_db_session` 未 import
+
+**现象**：
+
+`test_B4` 报 `NameError: name 'get_db_session' is not defined`。
+
+**根因**：
+
+B 类测试函数体内直接用了 `get_db_session()`，但只在文件其它位置 import 过，函数作用域内没引入（该文件风格是函数内局部 import）。
+
+**修复**：
+
+B1–B4 函数内补 `from app.persistence.db import get_db_session`。
+
+### 10.3 坑 3：`monkeypatch Session.commit` 拦截了所有 `db.commit()`
+
+**现象**：
+
+B4 跑起来 stdout 是：
+
+```text
+OK: system already has 9 active admin(s), no need to create      ← 场景 4 命中
+RETRY: integrity error on attempt 1/3, retrying after rollback...
+OK: system already has 9 active admin(s), no need to create      ← 又一次场景 4
+...
+```
+
+即：每次 attempt 都先返回 0（"已有 admin，无需创建"），然后 `get_db_session()` 退出时的自动 commit 被 mock 抛 `IntegrityError`，于是"重试"了，但**重试走的还是场景 4**。测到的根本不是"重试耗尽"，而是"场景 4 + 退出时 commit 被拦"。
+
+**根因**：
+
+`monkeypatch Session.commit` 是**类级别全局拦截**，所有 `db.commit()` 都会被命中——包括显式业务 commit，也包括 `get_db_session()` 上下文退出时的自动 commit。只要 DB 里还有活跃 admin，`_bootstrap_once` 就会在场景 4 提前返回 0，压根走不到创建分支（场景 5）。
+
+**修复**：
+
+B4 先**临时禁用所有活跃 admin**（`finally` 恢复），强制 `_bootstrap_once` 走到场景 5（创建分支），再让每次 commit 冲突，从而真实验证"重试耗尽 → 返回 2 → 不创建用户"：
+
+```python
+def test_B4_all_retries_exhausted_returns_2(monkeypatch):
+    from app.persistence.db import get_db_session
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.orm import Session as ORMSession
+
+    # 1. 临时禁用所有活跃 admin（finally 恢复）
+    with get_db_session() as db:
+        active_admin_ids = [
+            u.id for u in db.query(User)
+            .filter(User.role == "admin", User.is_active.is_(True)).all()
+        ]
+        if active_admin_ids:
+            db.query(User).filter(User.id.in_(active_admin_ids)).update(
+                {User.is_active: False}, synchronize_session=False,
+            )
+            db.commit()
+
+    orig_commit = ORMSession.commit
+
+    def _always_fail_commit(self, *args, **kwargs):
+        raise IntegrityError("simulated unique violation", None, Exception("conflict"))
+
+    monkeypatch.setattr(ORMSession, "commit", _always_fail_commit)
+
+    new_uname = f"b4_{uuid.uuid4().hex[:8]}"
+    try:
+        exit_code = _run_bootstrap_cli(new_uname)
+        assert exit_code == 2
+    finally:
+        # 先恢复 commit 方法，再恢复 admin 状态（否则恢复的 commit 也会被拦截）
+        monkeypatch.setattr(ORMSession, "commit", orig_commit)
+        with get_db_session() as db:
+            if active_admin_ids:
+                db.query(User).filter(User.id.in_(active_admin_ids)).update(
+                    {User.is_active: True}, synchronize_session=False,
+                )
+                db.commit()
+
+    # 确认没创建用户
+    with get_db_session() as db:
+        assert db.query(User).filter(User.username == new_uname).first() is None
+```
+
+**教训**：
+
+1. **`monkeypatch Session.commit` 是全局拦截**：显式 commit 和 `get_db_session` 退出时的自动 commit 都会被命中。测试重试逻辑前，必须想清楚"这次 attempt 会命中哪个场景分支"。
+2. **B 类"唯一约束冲突"的正确姿势**：先把 DB 调到"会走创建分支"的状态（此处是临时禁用活跃 admin），再让每次 commit 冲突，才能测到"重试耗尽"。
+3. **`finally` 恢复顺序**：先 `monkeypatch.setattr(...)` 还原 `commit` 方法，**再**操作 DB 恢复数据；顺序反了，恢复用的 commit 也会被 mock 拦住，数据恢复不了。
+
+### 10.4 坑 4：`vite-env.d.ts` 缺 `*.vue` 类型声明
+
+**现象**：
+
+`import CaseListPage from "@/pages/CaseListPage.vue"` 在编辑器里报 `TS(2307)：找不到模块"@/pages/CaseListPage.vue"或其相应的类型声明`，但 `npm run dev` / `npm run build` 都正常。
+
+**根因**：
+
+Vite 侧能解析 `.vue`（`@vitejs/plugin-vue` + `resolve.alias`），但 TypeScript 语言服务既不认识 `@` 别名（需 `paths`），也不认识 `.vue` 后缀（需模块声明）。所以是"编辑器静态检查告警"，不是运行时错误。
+
+**修复**：
+
+`frontend/src/vite-env.d.ts` 追加：
+
+```typescript
+declare module "*.vue" {
+  import type { DefineComponent } from "vue";
+  const component: DefineComponent<{}, {}, any>;
+  export default component;
+}
+```
+
+**配套确认**：
+
+| 位置 | 职责 | 缺了会怎样 |
+|---|---|---|
+| `tsconfig.app.json` 的 `baseUrl` + `paths`（`@/*` → `./src/*`） | 让 TS 认识 `@` 别名 | 报 TS2307（别名未解析） |
+| `vite-env.d.ts` 的 `declare module "*.vue"` | 让 TS 认识 `.vue` 文件 | 报 TS2307（模块无声明） |
+| `vite.config.ts` 的 `resolve.alias` | 运行时/打包时解析 `@` | `npm run dev` 直接失败 |
+
+**教训**：
+
+1. "能跑但报红"通常是 Vite 认识、TS 不认识——两套解析体系要分别配齐，不能只看运行结果。
+2. `paths` 要写在**业务代码实际使用的那个 tsconfig**（本项目是 `tsconfig.app.json`，根 `tsconfig.json` 只做 `references`），写错位置依旧报红。
+3. 改完执行 `Ctrl+Shift+P → Restart TypeScript Server`，否则缓存会让改动看起来不生效。
+
+### 10.5 坑 5：T-05 状态码全量扫描——"看起来是缺陷"的四类口径问题
+
+> **背景**：T-05（状态码全量扫描）原属 G5 Commit 4，G6 承接。扫描要求是"逐个端点核对非 2xx 的语义是否符合权限矩阵"，实际做下来发现**大部分告警不是代码问题，而是扫描口径问题**。这一节记录的是"如何不被自己的扫描器骗"。
+
+**现象（四类"假缺陷"）**：
+
+| # | 扫描报出 | 真实情况 |
+|---|---|---|
+| 1 | `GET /api/knowledge-docs` 全量 404 | 扫描脚本照抄了 changelog 里的简写路径（少了 `/v1`），后端真实路径是 `/api/v1/knowledge-docs`。这是 BUG-G3A-001 被误判为"P1 后端未注册"的同一根因 |
+| 2 | engineer 访问他人任务，期望 403 却拿到 404 | **这是设计如此**（D6 防枚举），不是缺陷。按"角色级 403 / 对象级 404"两条线分别核对即可收敛 |
+| 3 | `POST /rule-candidates/{id}/status` 传非法 `status`，期望 422 却先被判为"未覆盖" | Pydantic `Literal["accepted","rejected"]` 在入参校验阶段就拦成 422，service 层的 `BusinessValueError` 分支**正常路径不可达**。这不算漏测，但要显式记录"该分支为将来放开 `Literal` 预留" |
+| 4 | 部分端点返回 307 / 405 | 扫描器请求了尾斜杠变体（`/cases/` vs `/cases`）或用错 HTTP 方法。307 是 FastAPI 的尾斜杠重定向，405 是方法不匹配，均属扫描器构造错误 |
+
+**根因**：
+
+1. **扫描源不是代码，而是文档表格**：`changelog` / 计划文档为了可读性省略了 `/api/v1` 前缀、把 `/status` 简写成 `/approve`，扫描器照抄就必然 404。
+2. **状态码语义有两条正交维度**：角色级拒绝（403）与对象级拒绝（404 伪装）是两套规则（D6 / D11），用单一"越权应 403"的断言去套全部端点必然误报。
+3. **422 有两个来源**：Pydantic 入参校验（先拦）与 service 层 `BusinessValueError`。前者生效时后者不执行，扫描器只看"是否 422"会漏掉"由哪一层返回"的区分。
+4. **重定向与方法不匹配被当成业务错误**：307 / 405 是 HTTP 层语义，和权限矩阵无关。
+
+**修正**：
+
+1. **扫描源改为应用内路由表**：启动时 dump `app.routes`（`method` + `path` + 依赖），以真实路径为准；文档表格只用于交叉核对，不作为请求来源。
+2. **断言按端点分类写**：每个端点先标注"角色级"还是"对象级"，再套对应期望码；对象级统一按 D6 断言 404。
+3. **422 用例注明拦截层**：`Literal` 类 422 断言"由 Pydantic 返回"，`BusinessValueError` 类断言"由 service 返回"，两者分开登记。
+4. **扫描器固定请求形态**：统一不带尾斜杠、按路由声明的方法请求；307 / 405 视为扫描器错误并直接修正请求，不登记为缺陷。
+
+**结果**：
+
+- 全量扫描无 5xx、无未处理异常直出；
+- 401（缺 header / 非法身份）、403（角色不匹配）、404（对象越权）、422（参数非法）四类语义与权限矩阵一致；
+- 扫描用例纳入回归后基线 635 → **645 passed**，6 条冒烟路径全过。
+
+**教训**：
+
+1. **扫描器的输入必须来自代码，不来自文档**：文档是给人读的，允许简写；机器核对必须用 `app.routes` 这类真实来源。
+2. **"越权"不是单一状态码**：角色级 403、对象级 404，两条规则并存是设计（D6 防枚举），不能统一成一条断言。
+3. **同一个状态码可能有多个产生层**：422 既可能来自 Pydantic，也可能来自 service，登记缺陷前先确认"谁返回的"。
+4. **HTTP 层语义（307 / 405）先排除，再谈业务语义**，否则容易把构造错误的请求算成业务缺陷。
+
+### 10.6 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `bootstrap_admin.py` import 校验 | ✅ `OK` |
+| B 类测试（4 个） | ✅ 4 passed |
+| 全量非 integration（Commit 1） | ✅ **635 passed, 2 skipped, 24 deselected, 0 failed**（631 → 635） |
+| 全量非 integration（Commit 2） | ✅ **645 passed, 2 skipped, 24 deselected, 0 failed** |
+| 冒烟测试（6 条） | ✅ 6/6 全过 |
+| T-05 状态码扫描 | ✅ 四类语义一致，无 5xx |
+| `frontend`：`npm run type-check` | ✅ 0 errors（`*.vue` 声明生效） |
+
+### 10.7 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | `bootstrap_admin.py` 无 B 类重试逻辑 | 拆 `_bootstrap_once` + `for attempt in range(N)`，每次新 session、新事务、重新加锁、重新读场景 |
+| 2 | B4 的 `get_db_session` 未 import | B 类测试函数内补 `from app.persistence.db import get_db_session` |
+| 3 | `monkeypatch Session.commit` 全局拦截 | 测重试前先确认命中场景 5（创建分支），别被场景 4 抢先；`finally` 先还原方法再恢复 DB |
+| 4 | `vite-env.d.ts` 缺 `*.vue` 声明 | `paths` + `declare module "*.vue"` + `resolve.alias` 三处齐备，改完重启 TS Server |
+| 5 | T-05 扫描照抄文档路径 | 扫描源用 `app.routes`，不用文档简写；403/404 分两条线；307/405 属扫描器构造错误 |
+
+---
+
+## 11. S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱（G3 阶段验证）
+
+> **状态**：⏳ 待验证（G3 阶段执行，G2 不触发）
+> **规划依据**：[Sprint3_详细执行计划_V1.0.md §3.3](./Sprint3_详细执行计划_V1.0.md)
+
+### 11.1 为什么 G2 未触发
+
+G2 的 `get_current_user` 和 `update_user` / `soft_delete_user` 各自使用独立的 `with get_db_session() as db:`，不共享 Session。因此 admin_lock 和业务 Service 不冲突。
+
+### 11.2 G3 阶段可能触发
+
+G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_user` 和业务 Service。此时：
+
+- `get_current_user` 用 `with get_db_session() as db:` 查用户（autobegin 触发）
+- 业务 Service 也 `with get_db_session() as db:` 查数据（另一个 Session）
+
+如果 G3 把两者合并为同一个 Session，就会触发 autobegin 冲突。G3 编码时必须按 Sprint3 §3.3 的约束：
+
+- **方案 A（推荐）**：Service 层不 `db.begin()`，直接复用 `get_db_session` 的事务。
+- **方案 B**：最后管理员保护需要 READ COMMITTED，用独立 Session + `SET TRANSACTION ISOLATION LEVEL READ COMMITTED`。
+
+### 11.3 验收测试用例（G3 阶段）
+
+1. **正常路径**：GET /auth/me 鉴权 → PATCH /auth/users/{id} 降级非最后 admin，不抛 `InvalidRequestError`。
+2. **受保护路径**：唯一 admin 降级 → 抛 `LastAdminProtectionError`，不抛 `InvalidRequestError`。
+3. **session 复用**：先 `get_current_user`，再进业务 Service，断言 Service 能正确判断 Session 事务状态。
+
+---
+
+## 12. S3-LEGACY-B1：返回值契约升级的技术总结（2026-11-08）
+
+> **状态**：✅ 一次通过，无返工
+> **范围**：`create_task` 从返回 `str` 改为返回 `dict`（D24），`submit_task_feedback` 标注薄转发层（D25）。受影响三组 82 passed，全量 645 passed、0 failed。
+
+### 12.1 改动前的准备方法
+
+返回值契约变更属于跨层改动，本次在动手前先 `grep "create_task("` 全量列出调用点，按生产 / 测试 / 脚本三类清点：生产 3 处（`review_tasks.py` 两处、`benchmark_service.py` 一处），测试 11 处（`test_demo.py` 1 + `test_feedback_e2e.py` 3 + `test_review_persistence.py` 6）。清单齐了之后一次改完、一次回归通过，没有出现"改一处跑一次"的反复。
+
+### 12.2 三个可复用的做法
+
+1. **契约变更先列全调用点，再动手**：调用点分布通常测试多于生产（本次 11/14 是测试）。漏改生产会在功能路径暴露，漏改测试则可能表现为"单文件过、全量挂"，或更隐蔽的"断言查的是空数据但恰好通过"。
+2. **兜底查询放 service 内**：D24 的 `defects_count` 兜底在 `create_task` 内部单次查 `ReviewResult`，API 层保持薄。这样避免了 G3-A 时期"API 层回查 `get_task`"的写法回潮。
+3. **收敛类改动分两步**（D25）：本批只加标注、不动调用链，把逻辑迁移留到后续批次，避免"契约变更"与"逻辑迁移"两个风险叠加在同一批。
+
+### 12.3 结果
+
+| 验证项 | 结果 |
+|---|---|
+| 受影响三组 | 82 passed |
+| 全量非 integration | 645 passed, 2 skipped, 24 deselected, 0 failed |
+| 基线变化 | 645 → 645（只改契约，不新增用例） |
+
+---
+
+## 13. S3-LEGACY-B2：软删除迁移与提出人反查（2026-11-08）
+
+> **状态**：✅ 已完成（过程中出现 3 个真实问题，均已修复）
+> **范围**：`feedback_item.is_deleted` 加列 + 索引、`knowledge_gap` 的 `proposed_by` 运行时反查、2 个补测用例。最终全量 647 passed、0 failed。
+
+### 13.1 坑 1：revision ID 超过 `alembic_version.version_num` 长度
+
+**现象**：
+
+临时库 `alembic upgrade head` 执行到新迁移的最后一步报错：
+
+```text
+psycopg.errors.StringDataRightTruncation: value too long for type character varying(32)
+[SQL: UPDATE alembic_version SET version_num='s3_legacy_b2_feedback_soft_delete'
+ WHERE alembic_version.version_num = 's2j_g2_roles']
+```
+
+随后 `alembic current` 为空、`\d feedback_item` 找不到表。
+
+**根因**：
+
+`alembic_version.version_num` 是 `VARCHAR(32)`，而 revision ID `s3_legacy_b2_feedback_soft_delete` 有 35 个字符。写版本号失败导致整条迁移事务回滚，DDL 未生效——所以表现为「表不存在」，不是 DDL 写错。
+
+**修复**：
+
+文件名保持 `s3_legacy_b2_feedback_soft_delete.py`（文件名不限长），revision ID 改为 `s3_b2_feedback_soft_delete`（27 字符）。`down_revision` 不变。
+
+**教训**：
+
+1. **revision ID 必须 ≤32 字符，文件名可以长，两者不是一回事。**
+2. 迁移失败先看报错 SQL 打在哪一步：若是 `UPDATE alembic_version ...`，说明 DDL 已执行、失败在版本号写入，改 ID 即可，不要误改迁移内容。
+3. 迁移失败后整条事务回滚，库是干净的；重跑前先确认 `alembic current` 为空，不要盲目 `upgrade`。
+
+### 13.2 坑 2：`ReviewDefect` 字段名笔误 `location_json`
+
+**现象**：
+
+新用例首次运行报：
+
+```text
+TypeError: 'location_json' is an invalid keyword argument for ReviewDefect
+```
+
+**根因**：
+
+按记忆写了 `location_json`，`ReviewDefect` 的真实列名是 `location`（JSONB NOT NULL）。这与 G3-A 坑 5「Pydantic 字段 ≠ ORM 列」同源。
+
+**修复**：
+
+`location={}`。
+
+**教训**：
+
+构造 ORM 对象前先 `Select-String -Pattern "class ReviewDefect" -Context 0,25` 核对列名，不要凭记忆。`ReviewDefect` 的 10 字段规范里是 `location` 不是 `location_json`，`evidence` 是 JSONB 列表。
+
+### 13.3 坑 3：`finally` 清理访问 detached ORM 对象 + `defect_id` 唯一约束冲突
+
+**现象（连续两次失败）**：
+
+第一次：
+
+```text
+sqlalchemy.orm.exc.DetachedInstanceError: Instance <ReviewResult ...> is not bound to a Session;
+attribute refresh operation cannot proceed
+```
+
+第二次（修了 detached 之后）：
+
+```text
+sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
+"review_defect_defect_id_key" DETAIL: Key (defect_id)=(D1) already exists.
+```
+
+**根因**：
+
+- `finally` 里用 `rr.id`，但 `rr` 是 `with get_db_session()` 块内对象，块退出后 Session 关闭、对象 detached，访问属性触发刷新失败。这是 D1（`get_current_user` 返回 NamedTuple）的同源问题。
+- 第一次失败导致 `finally` 也挂，测试数据残留；而 `review_defect.defect_id` 有 UNIQUE 约束，用例里写死 `"D1"`，第二轮必然撞。
+
+**修复**：
+
+- `with` 块内先取标量 `rr_id = rr.id`、`did = f"D-{uuid...}"`，块外只用标量。
+- `defect_id` 用 uuid 生成唯一值，不写死。
+- 手工清理一次历史残留（`task_id LIKE 'TEST-B2-%'` 的 `feedback_item` / `review_defect` / `review_result`）。
+
+**教训**：
+
+1. **ORM 对象不能跨 `with get_db_session()` 边界使用，测试清理逻辑也一样；块内取标量。**
+2. **有 UNIQUE 约束的列（`defect_id` / `task_id` / `gap_id` / `candidate_id`）一律用 uuid 生成，不写死字面量。**
+3. **`finally` 清理要设计成「不依赖被断言对象的存活状态」**，否则断言失败会连累清理，残留数据污染下一轮。
+
+### 13.4 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| 临时库 `upgrade` / `current` / `downgrade` / `upgrade` 往返 | ✅ `s3_b2_feedback_soft_delete (head)`；downgrade 后列与索引消失 |
+| 开发库 `is_deleted` 列 + 索引 | ✅ `boolean / NO / false`；664 行存量全 `false`；索引存在 |
+| 两个新用例 | ✅ 2 passed |
+| 全量非 integration | ✅ 647 passed, 2 skipped, 24 deselected, 0 failed |
+| `proposed_by` 手工确认 | ✅ 新 gap 带出 `3232`，历史 demo gap 为 `None` |
+
+### 13.5 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | revision ID 超 32 字符 | revision ID ≤32，文件名不限；迁移失败先看报错 SQL 是不是写版本号 |
+| 2 | `location_json` 笔误 | 构造 ORM 前 `Select-String "^class <Model>"` 核对列名 |
+| 3 | `finally` 访问 detached 对象 + `defect_id` 撞唯一约束 | 块内取标量；唯一列用 uuid；`finally` 不依赖被断言对象 |
+
+---
+
+## 14. S3-LEGACY-B3：用户名模式 JWT 的技术总结与风险备忘（2026-11-08）
+
+> **状态**：✅ 完成（Commit 1 后端 / Commit 2 前端 / Commit 3 测试全部通过，全量 656 passed）
+> **范围**：`AUTH_MODE` 三态分派、JWT 签发/校验、prod 强制 `jwt`。后端全量 647 passed、0 failed，零回归。
+
+### 14.1 一次通过的做法
+
+1. **`get_current_user` 函数名与签名不变，只改内部实现**：`deps.py` 与全部业务路由零改动，存量 647 个测试继续走 `X-User-Id`，回归无破坏。
+2. **查库段抽成 `_resolve_user_by_id`**：header 路径与 JWT 路径共用「用户不存在 / 已禁用 → 401」的校验，避免两条路径行为漂移。
+3. **`both` 模式作为默认值**：前端与测试可分批切换；prod 由 `config.py` 的 `model_validator` 强制覆盖为 `jwt`，不依赖部署方记得改环境变量。
+4. **`payload.role` 只进日志**：业务鉴权一律用 `_resolve_user_by_id` 返回的 DB 角色（D32），避免 token 内角色与 DB 不一致时越权。
+
+### 14.2 风险备忘（用户确认，写入文档）
+
+1. **迁移期 `both` 模式下两套鉴权同时生效**：自动化测试存量用例继续使用 `X-User-Id`；上线前冒烟必须同时测 Bearer JWT 与 `X-User-Id` 两条路径。
+2. **prod 强制覆盖逻辑必须单元测试覆盖**：`APP_ENV=prod` 时无论 `AUTH_MODE` 配什么，都必须拒绝 `X-User-Id`。✅ 已由 Commit 3 的 `test_prod_force_jwt_overrides_auth_mode` / `test_prod_force_jwt_rejects_header`（8a/8b）满足。
+3. **禁止业务代码读取 JWT payload 中的 `role` 做权限判断**：静态检查 / 代码评审卡点；`payload.role` 仅日志打印。
+4. **refresh-token 不在 Sprint 3 范围**：列为产品迭代下一阶段工作。
+
+### 14.3 后端验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `pyjwt>=2.8.0` 安装 | ✅ |
+| import 校验 | ✅ `OK both` |
+| 登录返回 token | ✅ `token_type=bearer, expires_in=28800` |
+| Bearer 路径 | ✅ 200 |
+| `X-User-Id` 路径（both） | ✅ 200 |
+| 全量非 integration | ✅ 647 passed, 2 skipped, 24 deselected, 0 failed |
+
+---
+
+### 14.4 前端 token 接入（Commit 2）
+
+**做法**：
+
+1. **token 与 `user_id` 并列存 `localStorage`**：`access_token` 只用于注入请求头，`role` 仍只存 Pinia 内存（R8 不变）。
+2. **请求头注入顺序：Bearer 优先、回退 `X-User-Id`**：与后端 `AUTH_MODE=both` 的分派一致，前后端迁移期行为对称。
+3. **`handleUnauthorized` 一次清两个 key**：`user_id` + `access_token` 同时清，避免「token 清了 user_id 没清」导致 `bootstrap()` 仍发请求。
+
+**初次改错的地方（已修正）**：
+
+- 注入段误写在 `request()` 函数外，`headers` 在该作用域不存在；
+- `ACCESS_TOKEN_STORAGE_KEY` 定义在文件末尾，`handleUnauthorized` 在前部使用，触发 `const` 暂时性死区；
+- `handleUnauthorized` 里清理逻辑写了两遍（原有 + 新增），且新增块在 `window.location.href` 之后，跳转后不保证执行。
+
+**修正方式**：常量上移与 `USER_ID_STORAGE_KEY` 并列；注入段放回 `request()` 内替换原 `[S3-G4]` 块；`handleUnauthorized` 合并为一次清理再跳转。
+
+**教训**：
+
+1. `const` 常量必须在首次引用前定义，文件末尾定义 + 前部使用 = 运行时 `ReferenceError`，TS 不一定报错。
+2. 改函数内逻辑时，先确认落点在函数体内，不要贴到文件末尾。
+3. 清理逻辑「跳转前 vs 跳转后」语义不同：`window.location.href` 之后不保证继续执行，清理必须放跳转前。
+
+**验证结果**：
+
+| 项 | 结果 |
+|---|---|
+| `type-check` / `build` | ✅ 0 errors / 成功 |
+| 登录后请求头 | ✅ Bearer |
+| 刷新后 token 恢复 | ✅ |
+| 全量非 integration | ✅ 647 passed |
+
+### 14.5 JWT 测试（Commit 3）
+
+**做法**：
+
+1. **三态分派用 `monkeypatch.setattr(settings, "auth_mode", ...)` 验证**，`finally` 还原为 `both`，不影响其它用例。
+2. **prod 强制覆盖分两层验证**：① 直接构造 `Settings(app_env="prod", auth_mode="header")` 断言 `auth_mode == "jwt"`（验证 `model_validator` 本身）；② 在现有 `settings` 上 `monkeypatch` 置 `app_env=prod` + `auth_mode=jwt`，断言 `X-User-Id` 401（验证接口层行为）。
+3. **禁用用户用例**在签发 token 之后改 `is_active=False`，再调 `/auth/me` 断言 401，验证 D32「每次查 DB」而非「token 自包含」。
+
+**结果**：
+
+| 项 | 结果 |
+|---|---|
+| `test_auth.py` | ✅ 26 passed |
+| 全量非 integration | ✅ 656 passed, 2 skipped, 24 deselected, 0 failed（647 → 656，+9） |
+
+**教训**：
+
+1. **测试数对不上先数函数**：本次计划 8 项、实际 9 个测试函数（第 8 项拆成 8a/8b），647 + 9 = 656 正常。写文档时把「用例数」和「测试函数数」分开表述，避免读者按「8 项」对不上数。
+2. **`monkeypatch.setattr(settings, ...)` 必须 `finally` 还原**，`settings` 是模块级单例，污染会影响后续测试。
+3. **prod 强制覆盖要分两层测**：只测接口层会漏掉 `Settings` 构造时的覆盖逻辑，只测 `Settings` 会漏掉接口层实际拒绝行为。
+
+**风险备忘复核**：用户列的 4 条风险中，第 2 条（prod 强制覆盖必须单元测试覆盖）已由 8a/8b 满足；第 1、3、4 条为流程约束，已记录在 §14.2。
+
+---
+
+## 15. S3-LEGACY-B4：Nginx 前端镜像化与规则回滚（2026-11-08）
+
+> **状态**：✅ 已完成（#10 Nginx COPY dist、#8 规则回滚、CI 环境适配）
+> **范围**：`frontend/Dockerfile` 多阶段构建、三份 compose 改造；`rule_definition_history` 版本表、`rollback_rule()`、`rollback_rule.py` CLI、`verify_migration.py` 迁移验证工具。
+
+### 15.1 坑：Docker Hub `node:20-alpine` 拉取超时（IPv6 不通）
+
+**现象**：
+
+`docker compose build frontend` 报：
+
+```text
+failed to fetch anonymous token: Get "https://auth.docker.io/token?...":
+dial tcp [2a03:2880:f134:183:face:b00c:0:25de]:443: connectex: A connection attempt failed...
+```
+
+**根因**：
+
+Docker Hub 返回 IPv6 地址（`2a03:2880:...`），本机网络 IPv6 不通，BuildKit 又优先走 IPv6，导致拉取 `node:20-alpine` 基础镜像超时。与 Dockerfile / compose 改动无关。
+
+**修复**：
+
+用国内反代拉取后 tag 成官方名，让构建命中本地缓存：
+
+```powershell
+docker pull docker.1ms.run/library/node:20-alpine
+docker tag docker.1ms.run/library/node:20-alpine node:20-alpine
+docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/docker-compose.dev.yml" build frontend
+```
+
+**教训**：
+
+1. **Dockerfile 不写镜像域名**：反代域名只用于 `docker pull` + `docker tag` 的本地准备，写进 `FROM` 会让生产 / CI 在无法访问该域名时构建失败。
+2. **BuildKit 优先 IPv6 是 Windows 上的常见坑**：报错里出现 `2a03:2880:` 这类地址基本可判定为 IPv6 超时，优先用反代 + tag 绕过，或给 Docker Desktop 配代理 / registry mirror（治本）。
+3. **验证前端镜像产物要用容器内 `cat` 或 `curl.exe`**：PowerShell 5.1 的 `Invoke-WebRequest` + `Select-String` 对 UTF-8 中文会显示乱码导致匹配不到，不代表页面内容错。本次 `exec frontend cat /usr/share/nginx/html/index.html` 确认标题正确，`/cases` 返回 200 确认 SPA fallback 生效。
+
+### 15.2 #10 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `build frontend` | ✅ |
+| 容器内 `index.html` 标题 | ✅ `电子设计EDA原理图评审与演进系统 · Sprint 1` |
+| `assets/` | ✅ 20 个 G4 打包产物 |
+| `/cases` 深链 | ✅ 200 |
+
+### 15.3 #8 规则回滚：设计要点（6 条风险备忘）
+
+1. **快照时机**：`publish_rule_candidate` 在更新主表**之前**把旧行写入 history。若更新后再读主表做快照，并发下可能读到已被改的数据。
+2. **同事务**：主表更新 + history 写入放在同一事务，`db.commit()` 一次提交，要么全成功要么全回滚。
+3. **唯一约束兜底**：`(rule_id, version)` 唯一约束防重复；版本号单调递增由业务代码保证，DB 只做兜底。
+4. **`change_source` 三值**：`publish` / `rollback` / `manual`。`manual` 仅留给运维手工改 DB，service 内部禁止生成。
+5. **`dry-run` 不写**：只做目标版本存在性与当前版本比对，不写 history、不改主表。
+6. **退出码约定**：0 成功 / 1 业务拒绝 / 2 系统故障，对齐 `bootstrap_admin.py`。
+
+### 15.4 幂等前置（D33 补充）
+
+当前版本已等于目标版本时返回 `noop=True`，不写 history。否则第二次回滚会把当前行再写一条 `(rule_id, 同版本)` 到 history，撞唯一约束。
+
+三条返回路径（正常回滚 / `dry_run` / `noop`）统一带 `noop` 字段，CLI 与调用方判断一致；`noop` 命中返回退出码 0（幂等命中是正常结果，不是业务拒绝，对齐 `bootstrap_admin.py` 的「已存在则 OK」）。
+
+### 15.5 坑 1：`backend` 容器内没有 `psql` 客户端
+
+**现象**：
+
+`verify_migration.py` 最初用 `subprocess` 调 `psql` 执行 `DROP/CREATE DATABASE` 和 `\d <table>`，报：
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'psql'
+```
+
+**根因**：`psql` 在 `postgres` 容器里，`backend` 容器只装了 Python 依赖，没有 PostgreSQL 客户端。
+
+**修复**：改用 `psycopg` 直连（项目 `DATABASE_URL` 本来就是 `postgresql+psycopg`，驱动已在容器内）；表存在性检查从 `\d` 元命令改为查 `information_schema.tables`。
+
+**教训**：
+
+1. **跨容器工具不要假设对方容器的 CLI 存在**：`backend` 调 DB 用驱动，不调 `psql`。
+2. **`psql` 元命令（`\d`、`\dt`）不是 SQL**，驱动不支持，必须换 `information_schema` / `pg_catalog` 查询。
+3. **迁移往返验证工具用 Python 写比 PowerShell 稳**：无编码问题、无引号转义、退出码可控。
+
+### 15.6 坑 2：`rollback_rule` 正常分支漏 `noop` 字段
+
+**现象**：`test_rollback_rule_idempotent` 失败：
+
+```text
+AssertionError: assert None is False
+  where None = {'dry_run': False, 'from_version': 'v2.0', 'rule_id': '...', 'to_version': 'v1.0'}.get('noop')
+```
+
+**根因**：`rollback_rule()` 正常回滚分支的 `return` 漏了 `"noop": False`，只有幂等前置分支返回 `noop=True`。契约不完整。
+
+**修复**：正常回滚分支 `return` 补 `"noop": False`，三条路径统一。
+
+**教训**：
+
+1. **返回值契约要「所有分支都带同一组字段」**，否则调用方必须用 `.get(..., default)` 兜底，等于契约失效。
+2. **测试断言 `is False` 比 `not ...` 更严格**，能暴露「字段缺失」这种隐性契约不完整。
+
+### 15.7 #8 验证结果
+
+| 项 | 结果 |
+|---|---|
+| 临时库 upgrade / downgrade / 再 upgrade | ✅ 往返成功，表与索引建删干净 |
+| 开发库 `alembic current` | ✅ `s3_b4_rule_history (head)` |
+| `scripts/verify_migration.py` | ✅ `[OK] migration round-trip verified` |
+| 回滚用例单跑 | ✅ 5 passed |
+| 全量非 integration | ✅ **661 passed, 2 skipped, 24 deselected, 0 failed**（656 → 661，+5） |
+
+### 15.8 工具：`scripts/verify_migration.py`
+
+**用途**：在临时库上验证 Alembic upgrade/downgrade 往返，不动开发库。每次新增迁移后跑一次，确认 downgrade 可回滚。
+
+**流程（7 步）**：
+
+1. `DROP DATABASE IF EXISTS <tmp>`（允许不存在）
+2. `CREATE DATABASE <tmp>`
+3. `alembic upgrade head`（指向临时库的 `DATABASE_URL`）
+4. `alembic current`，断言含 `(head)`
+5. 可选 `--check-table <表名>`：查 `information_schema.tables` 断言表存在
+6. `alembic downgrade -1`
+7. 可选 `--check-table`：断言表已不存在；再 `upgrade head` 验证可重复；最后 `DROP DATABASE <tmp>`
+
+**实现要点**：
+
+| 点 | 做法 | 原因 |
+|---|---|---|
+| 临时库 URL | `urlparse` 替换 `path` 为 `/<tmp_db>` | 不硬编码密码、host，沿用 `DATABASE_URL` |
+| 建/删库 | `psycopg.connect(dsn, autocommit=True)` | `CREATE/DROP DATABASE` 不能在事务里跑 |
+| 表存在性 | `information_schema.tables` 查询 | 驱动不支持 psql 元命令 `\d` |
+| 子进程 | `subprocess.run(["alembic", ...], env={**os.environ, "DATABASE_URL": tmp_url})` | 用参数数组，无引号转义 |
+| 退出码 | `proc.returncode` 判断 | 不受 stderr 内容影响（对比 PowerShell 版 `$LASTEXITCODE` 被 NOTICE 带偏） |
+| 失败保留 | 异常时不自动 DROP 临时库 | 便于排查 |
+
+**用法**：
+
+```powershell
+docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/docker-compose.dev.yml" exec backend python /scripts/verify_migration.py --check-table rule_definition_history
+# 预期：[OK] migration round-trip verified
+```
+
+与命令行手动验证的关系：脚本是手动 9 条命令的封装，结果等价；日常回归用脚本，排查问题用命令行逐步看。
+
+### 15.9 CI 环境适配（封板后修复）
+
+**现象**：推送到远端后，GitHub Actions 的 backend job 报 10 个测试失败。
+
+**归类与根因**：
+
+1. **`scripts` 模块导入失败（6 个用例）**：`test_admin_lock.py` B1–B4、`test_rollback_rule_cli_refuse_exit_1`。本地在容器里通过 `PYTHONPATH=/app:/` 能 `import scripts`，CI 的 pytest 环境没带这个路径。
+2. **子进程脚本路径硬编码（4 个用例）**：`test_bootstrap_admin.py` 写死了 `/scripts/bootstrap_admin.py`（容器内路径），CI 宿主机没有 `/scripts`。
+3. **硬编码 admin ID（1 个用例）**：`test_feedback_e2e_mock_knowledge_gap_generates_gap` 硬编码 `X-User-Id: 3232`，CI 的库是新的，没这个用户，触发 401。
+
+**修复**：
+
+- **`ci.yml` 加 `PYTHONPATH`**：`env: PYTHONPATH: ${{ github.workspace }}` 让仓库根进 `sys.path`，解决 `import scripts`。
+- **`test_bootstrap_admin.py` 双分支路径**：`_bootstrap_script_path()` 先判容器内 `/scripts` 存在，否则用 `Path(__file__).parents[2]/scripts`，解决宿主机执行路径找不到。
+- **`test_feedback_e2e.py` 动态 ID**：弃用硬编码 `3232`，改用 `test_admin_user` fixture，消除对本地固定数据的依赖。
+
+**教训**：
+
+1. **本地全绿 ≠ CI 全绿**：依赖容器挂载路径（`/scripts`）、固定主键（`id=3232`）、特定环境变量（`PYTHONPATH`）的测试，在独立 CI runner 上必然失败。开发环境与 CI 环境的差异，必须在推代码前主动核对。
+2. **子进程调用的路径用 `Path(__file__)` 推导**：不能硬编码宿主机/容器内的绝对路径，应基于测试文件相对位置定位仓库根。
+3. **测试数据不硬编码 ID**：使用 fixture 动态创建用户并获取 ID，或从环境变量读取。在接入 JWT（D30）后，ID 更不可能是固定值。
+
+**验收结果**：
+
+| 项 | 结果 |
+|---|---|
+| 容器内受影响三组测试 | ✅ 19 passed, 1 skipped |
+| GitHub Actions backend job | ✅ 661 passed, 2 skipped, 24 deselected |
+| GitHub Actions frontend job | ✅ `type-check` 0 errors + `build` 成功 |
+
+### 15.10 批次④剩余
+
+#10、#8 已完成；#9 vLLM 按用户决定继续占位（只写文档，不改代码）。批次④在本节收尾后即可封板，随后执行 `git push -u origin feature/sprint3-rbac` 触发 CI。
+
+---
+
+## 16. Sprint 3 复盘：10 大类踩坑总览
+
+> **用途**：Sprint 3（G1–G6）共沉淀 10 篇阶段记录、约 40 个具体坑点。本节按"类别"重新归并，供 Sprint 4 开发、联调和运维按类检索，不必逐节翻。
+> **读法**：先看"一句话规则"，命中同一类现象再回原节看完整代码。
+
+### 16.1 十类总览
+
+#### ① Migration 与版本链
+
+- **一句话规则**：新增 Migration 前先跑 `alembic heads`，`down_revision` 必须指向当前唯一 head；`--sql` 离线模式必须显式指定起点 revision。
+- **典型现象**：`Multiple head revisions are present`；`upgrade head --sql` 输出整条历史建表语句。
+- **防复发**：提交 Migration 前跑一次 `alembic heads`（应为 1 行）+ `alembic current`；增量 SQL 用 `upgrade <current>:head --sql`。
+- **原节**：§1
+
+#### ② 容器路径与挂载
+
+- **一句话规则**：容器内路径按挂载点算，不按宿主机目录算；写文件只写已挂载目录。
+- **典型现象**：核查脚本报告"文件不存在"（实际是 `/app/backend/app/...` 与 `/app/app/...` 混用）；脚本跑完宿主机 `docs/` 看不到产物。
+- **防复发**：先 `docker compose exec backend ls <路径>` 确认挂载视图；输出统一走 `/scripts` `/data` `/out`；`docs` 已在 G6 Commit 2 补挂载。
+- **原节**：§2
+
+#### ③ 测试隔离与数据污染
+
+- **一句话规则**：跨 Session 的场景不能用事务回滚隔离；session 级 fixture 前缀必须唯一命名空间；测试不要为"真实"去走真实 Graph。
+- **典型现象**：单跑通过、全量失败；`ForeignKeyViolation`；`t2 < t1` 的 `updated_at` 比较失败；HTTP 请求看不到 fixture 写入的数据。
+- **防复发**：真实 commit + 前缀清理（`test_auth_%` / `test_xxx_global_%`）；"全库状态"断言用"临时修改 + `finally` 恢复"，不 delete；需要任务/缺陷时直接 `db.add(ORMModel(...)) + commit`。
+- **原节**：§3、§4.6、§9.5c
+
+#### ④ 并发与重试测试的断言假设
+
+- **一句话规则**：不要假设线程调度顺序与场景分支；只断言"互斥语义"和"目标分支命中"。
+- **典型现象**：并发用例时而 PASS 时而 FAIL；B4 一直打印"已有 admin，无需创建"（走的是场景 4，不是重试路径）。
+- **防复发**：两种合法顺序都覆盖；测重试前先把 DB 调到"会走创建分支"的状态，再让 commit 冲突。
+- **原节**：§3.2、§10.1–§10.3
+
+#### ⑤ 错误语义与异常层次
+
+- **一句话规则**：参数非法用自定义 `BusinessValueError`（422），资源不存在保留 `ValueError` 由 API 层转 404；子类 `except` 必须写在父类之前；`raise` 之后的同块语句永远不会执行。
+- **典型现象**：全局 `except ValueError → 422` 把代码 bug 伪装成用户输入错误；非法 `status` 返回"candidate not found"；`UnboundLocalError: q`。
+- **防复发**：异常注册只挂自定义类型；`except BusinessValueError` 放第一；改 `raise` 时检查整个 if 块缩进边界，并开 ruff F821/F841。
+- **原节**：§4.1、§4.8、§7.1
+
+#### ⑥ DTO / ORM / 路由的三层对齐
+
+- **一句话规则**：Pydantic 字段 ≠ ORM 列；Service DTO 有值 ≠ API 响应有值；路由签名里没声明的 Query 参数会被静默丢弃。
+- **典型现象**：`suggestion_diff is an invalid keyword argument`；DB 有数据但响应字段为 `null`；`?status=pending` 被忽略返回全量。
+- **防复发**：新增字段全链路 grep（`Service DTO → API Schema → 路由组装`）；写 DB 优先复用 service 业务入口，不手拼 ORM；路由每个 Query 显式声明并透传。
+- **原节**：§4.3–§4.5、§9.5b
+
+#### ⑦ 非 ASCII 字符与 ID 生成
+
+- **一句话规则**：ID 里只允许 ASCII `-`（U+002D）；"看起来像短横"的 U+2010 / U+2011 / U+2013 / U+2014 会毁掉 URL 与查询。
+- **典型现象**：`POST /rule-candidates/{id}/status` 404，日志里 ID 显示成 `RCâ20261104âB46BB4`。
+- **防复发**：统一走 `make_prefixed_id()`；手测用纯 ASCII ID 复测；存量数据不迁移，前端 `encodeURIComponent` 兜底。
+- **原节**：§5.3、§9.1
+
+#### ⑧ 跨层调用与接口契约
+
+- **一句话规则**：调用前核对函数名与签名，不凭记忆；service 返回类型变化要同步改所有调用方。
+- **典型现象**：`has no attribute 'get_summary'`；`CreateTaskResponse() argument after ** must be a mapping, not str`；`string indices must be integers`；`state.get(...)` 传给不接收 `state` 的函数。
+- **防复发**：改调用前先 `Select-String -Pattern "^def "` 看签名；返回值契约变更时全局 grep 调用点；`TypedDict, total=False` 加字段最省事。
+- **原节**：§4.2、§4.7、§5.2
+
+#### ⑨ 前端权限与错误分流
+
+- **一句话规则**：`role` 只存内存、每次从 `GET /auth/me` 刷新；401 清身份跳登录、403 提示权限不足、404 保持原样；启动拉取要加请求锁；`@` 别名与 `*.vue` 声明三处齐备。
+- **典型现象**：改 `localStorage.role` 就能看到管理员菜单；把对象越权 404 当 403 显示"权限不足"（等于暴露资源存在性）；快速点导航触发多次 `/auth/me`；`TS(2307)` 报红但项目能跑。
+- **防复发**：`localStorage` 只存 `user_id`；`http.ts` 按状态码分流；`bootstrapPromise` 模块级缓存；`paths` + `declare module "*.vue"` + `resolve.alias` 三处同配。
+- **原节**：§8、§10.4
+
+#### ⑩ 测试替身与工具口径
+
+- **一句话规则**：`monkeypatch` 全局对象是全局拦截；扫描/核查工具的数据源必须是代码，不是文档。
+- **典型现象**：`monkeypatch Session.commit` 连上下文退出时的自动 commit 一起拦；扫描器照抄省掉 `/v1` 的文档路径，全量 404；307/405 被登记成业务缺陷。
+- **防复发**：`finally` 先还原 mock 再恢复数据；扫描源用 `app.routes`；307/405 先当构造错误排除。
+- **原节**：§10.3、§10.5
+
+### 16.2 按现象快速定位
+
+| 你看到的现象 | 先看哪类 | 具体节 |
+|---|---|---|
+| `Multiple head revisions` | ① Migration | §1.1 |
+| 脚本说文件不存在 / 产物丢失 | ② 挂载 | §2.1 |
+| 单跑过、全量挂 | ③ 隔离 / ④ 并发 | §3、§9.5c |
+| 时间戳 `t2 < t1` | ③ 隔离 | §9.5c |
+| 参数非法却返回 404 / 500 掩盖 bug | ⑤ 异常语义 | §4.1、§7.1 |
+| 响应字段莫名 `null` | ⑥ DTO 三层 | §9.5b |
+| 按 ID 查 404、日志乱码 | ⑦ 非 ASCII | §5.3、§9.1 |
+| `AttributeError: no attribute` | ⑧ 接口契约 | §4.7 |
+| 前端菜单/权限错乱、跳转不对 | ⑨ 前端权限 | §8 |
+| 编辑器报 TS2307 但能跑 | ⑨ 前端权限 | §10.4 |
+| 测试"重试了但没测到重试" | ④ 并发 / ⑩ 替身 | §10.3 |
+| 扫描报告一堆 404 / 403 | ⑩ 工具口径 | §10.5 |
+
+### 16.3 新增坑点的登记模板
+
+后续遇到新坑，按同一结构追加，保证可检索、可复算：
+
+```markdown
+### N.x 坑：<一句话现象>
+
+> **状态**：✅ 已修复 / ⚠️ 技术债（注明归属阶段）
+> **核心难点**：<为什么难，难在哪一步判断>
+
+**现象**：<可复现的最小现象，含报错原文/日志片段>
+
+**根因**：<机制层面解释，不写"可能是"这种模糊表述>
+
+**修复**：<改了什么、为什么这样改>
+
+**验证**：<命令 + 数字结果，例如 645 passed / 0 failed>
+
+**教训**：
+1. <可迁移到其它模块的规则>
+2. <下次如何更早发现>
+```
+
+### 16.4 Sprint 3 交付回顾
+
+| 维度 | 结果 |
+|---|---|
+| 阶段 | G1–G6 全部完成，Sprint 3 封板（2026-11-07） |
+| 测试基线 | 568（Sprint 2）→ **645 passed**（封板），2 skipped / 24 deselected / 0 failed |
+| 冒烟 | 6/6 全过 |
+| 大类坑 | 10 类，约 40 个具体坑点，均有"现象—根因—修复—教训"四段记录 |
+| 反复出现的两个母题 | ① **"看起来对"的假象**（能跑但报红、DB 有值但响应空、重试了但没测到重试）；② **跨边界的信息丢失**（跨 Session、跨层 DTO、文档与代码不一致） |
+> 注：上表 645 是 G6 封板时点；封板后「遗留项收尾」批次①–④ 将基线推进到 **661 passed**（+1 契约回归 0 新增、+2 批次②、+9 批次③、+5 批次④ #8），详见 `changelog_03.md` 末尾测试基线演进表。
+
+---
+
+## 17. 附：版本与适用范围
+
+- 前端：Vue 3 + Vite 5 + TypeScript
+- 后端：FastAPI + Pydantic + uv
+- 基础设施：Docker Compose + PostgreSQL 15
+- 适用范围：Sprint 3 G2–G6 开发联调阶段（G6 于 2026-11-07 封板，基线 645 passed）
+- 配套文档：`changelog_03.md`（变更与决策）、`Sprint3_详细执行计划_V1.0.md`（计划依据）
+- 使用建议：Sprint 4 开工前先读 §16 的 10 类总览与"按现象快速定位"表；遇到新坑按 §16.3 模板登记，保持四段结构
