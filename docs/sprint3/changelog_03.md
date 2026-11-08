@@ -984,6 +984,44 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 
 ---
 
+## 遗留项收尾·批次①：代码契约（2026-11-08）
+
+> 状态：✅ 完成
+> 背景：Sprint 3 封板时遗留 10 项，按用户指令不再移交 Sprint 4，全部在 Sprint 3 范围内收尾。批次①处理 #1（`create_task` 返回值契约）与 #2（反馈逻辑收敛，本批仅标注薄转发层）。
+
+### B1.1 新增技术决策 D24 / D25
+
+| # | 决策 | 内容 |
+|---|---|---|
+| **D24** | `create_task` 的 `defects_count` 取值顺序 | **优先取 Graph `final_state["parsed_defects"]` 的 `len`**；为空且 `status != failed` 时，在 **service 内部单次查 `ReviewResult.review_output_json["defects"]`** 兜底；`status == failed` 时不查库，直接取已解析缺陷数。**不在 API 层回查** |
+| **D25** | 反馈逻辑收敛分两步 | 本批仅在 `task_service.submit_task_feedback` 加 docstring 标注"薄兼容层"，不动调用链；task/defect → 外键的翻译逻辑迁入 `feedback_service` 延后到后续批次 |
+
+### B1.2 交付清单
+
+| 文件 | 改动 |
+|---|---|
+| `backend/app/services/task_service.py` | `create_task` 返回 `dict[str, Any]`（`task_id` / `status` / `defects_count`），D24 兜底逻辑；`submit_task_feedback` 加薄转发层 docstring（D25） |
+| `backend/app/api/review_tasks.py` | `create_review_task` 去掉 `get_task` 回查，改 `CreateTaskResponse(**resp)`；`create_review_tasks_batch` 改 `resp["task_id"]` |
+| `backend/app/services/benchmark_service.py` | `task_id = create_task(case_id)["task_id"]` |
+| `backend/tests/test_demo.py` | 1 处 |
+| `backend/tests/test_feedback_e2e.py` | 3 处 |
+| `backend/tests/test_review_persistence.py` | 6 处 |
+
+### B1.3 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 受影响三组（`test_api` / `test_feedback_e2e` / `test_review_persistence`） | ✅ 82 passed |
+| 全量非 integration | ✅ **645 passed, 2 skipped, 24 deselected, 0 failed** |
+| 基线变化 | 645 → 645（本批只改返回值契约，不新增用例） |
+
+### B1.4 范围边界
+
+- `submit_task_feedback` **未删除、未改调用链**，`feedbacks.py` 仍经它转发；真正的逻辑迁移在后续批次完成。
+- `get_task` / `list_tasks_filtered` / `get_task_defects` 的签名与返回值不变，G3-B 的对象级过滤逻辑零改动。
+
+---
+
 ## Sprint 3 封板声明（2026-11-07）
 
 > **结论**：G1–G6 六个阶段全部完成，Sprint 3（角色权限与端到端闭环）达到封板标准。
