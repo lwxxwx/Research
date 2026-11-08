@@ -3,7 +3,7 @@
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
 > 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 完成（Commit 1–3；T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）✅ 完成（Commit 1–3，**Sprint 3 封板**）
-> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（Commit 1/2/3 全部完成）、批次④ 工程与运维（#10 完成）；全量基线 645 → 656）
+> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（Commit 1/2/3 全部完成）、批次④ 工程与运维（#10 Nginx D23、#8 规则回滚 D33/D34 完成，#9 vLLM 待做）；全量基线 645 → 661）
 
 ---
 
@@ -1177,7 +1177,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 
 ## 遗留项收尾·批次④：工程与运维（2026-11-08）
 
-> 状态：🟡 进行中（#10 Nginx COPY dist 完成；#8 `rollback_rule.py` 与 #9 vLLM 待做）
+> 状态：🟡 进行中（#10 Nginx、#8 规则回滚已完成；#9 vLLM 待做）
 
 ### B4.1 #10 Nginx 前端镜像（D23 落地）
 
@@ -1202,10 +1202,49 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 
 **构建环境说明**：本机 Docker Hub 的 `node:20-alpine` 拉取超时，改用 `docker.1ms.run` 反代 `docker pull` + `docker tag` 成官方名后构建成功；Dockerfile 不写镜像域名，避免生产/CI 环境不可达（详见 debug §15）。
 
-### B4.2 #8 `rollback_rule.py` 与 #9 vLLM（待做）
+### B4.2 #8 规则回滚（D33 / D34）
 
-- **#8**：用户确认方案 1（`rule_definition_history` 版本表）+ 甲（逻辑进 `rule_evolution_service.rollback_rule()`，CLI 薄壳，测试进 `test_feedback_rule.py`）。待做。
-- **#9**：用户确认继续占位、本期不解决；本批只写文档记录占位状态与启用四步骤，不改代码。待做。
+**决策**
+
+| # | 决策 | 内容 |
+|---|---|---|
+| **D33** | `rule_definition_history` 版本表 + 回滚 | 方案 1：新增历史表存每次发布前旧快照；`rollback_rule()` 读历史目标版本恢复主表；`change_source` 枚举 `publish` / `rollback` / `manual`；目标版本不存在时 service 返回 `None`，CLI 打印 `REFUSE` 退出 1 |
+| **D34** | 回滚实现形态 | 方案甲：逻辑进 `rule_evolution_service.rollback_rule()`，`scripts/rollback_rule.py` 仅做参数解析 + 调用；测试进 `test_feedback_rule.py` 测 service，CLI 一条冒烟 |
+
+**交付清单**
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/alembic/versions/s3_b4_rule_history.py`（新建） | `rule_definition_history` 表（`id Identity` / `rule_id` / `version` / `rule_name` / `rule_category` / `rule_yaml` / `description` / `severity` / `enabled` / `change_source` / `created_at`）+ `uq_rule_definition_history_rule_version` + `idx_rule_definition_history_rule`；downgrade 完整删索引 + 删表 |
+| 2 | `backend/app/persistence/models.py` | 新增 `RuleDefinitionHistory` ORM；顶部 import 补 `Identity` |
+| 3 | `backend/app/services/rule_evolution_service.py` | `publish_rule_candidate` 在更新主表**之前**把旧行快照写入 history（`change_source="publish"`）；新增 `rollback_rule()`（`noop` 幂等前置、`dry_run` 不写、同事务 commit、三条返回路径均带 `noop`）；顶部 import 补 `RuleDefinitionHistory` |
+| 4 | `scripts/rollback_rule.py`（新建） | `--rule-id` / `--to-version` / `--dry-run`；退出码 0 成功（含 `noop`）/ 1 业务拒绝 / 2 系统故障 |
+| 5 | `backend/tests/test_feedback_rule.py` | 新增 5 个回滚测试：`success` / `target_not_found` / `dry_run_no_write` / `idempotent` / `cli_refuse_exit_1` |
+| 6 | `scripts/verify_migration.py`（新建） | 临时库 upgrade/downgrade 往返验证：`urlparse` 改库名、`psycopg` 直连建删库、`information_schema.tables` 查表存在性、`subprocess` 参数数组调 `alembic`、失败保留临时库；`--check-table` 可选。psycopg 直连，不依赖 `psql` 客户端 |
+
+**验收证据**
+
+| 项 | 结果 |
+|---|---|
+| 临时库 upgrade → current | ✅ `s3_b4_rule_history (head)` |
+| 临时库表结构 | ✅ `id` identity、`uq_rule_definition_history_rule_version`、`idx_rule_definition_history_rule` 齐全 |
+| downgrade -1 → 表已删 | ✅ `Did not find any relation` |
+| 再次 upgrade | ✅ 成功 |
+| 开发库 `alembic current` | ✅ `s3_b4_rule_history (head)` |
+| `scripts/verify_migration.py` | ✅ 7 步全过，`[OK] migration round-trip verified` |
+| 回滚用例单跑 | ✅ 5 passed |
+| 全量非 integration | ✅ **661 passed, 2 skipped, 24 deselected, 0 failed**（656 → 661，+5 回滚测试） |
+
+**范围边界**
+
+- 回滚只恢复 `rule_definition` 主表内容，不触碰规则 YAML 文件；如需同步文件，走 `export_candidate_yaml` 或手工。
+- `manual` 来源仅留给运维手工改 DB，业务链路禁止生成。
+- 重复回滚同一目标返回 `noop=True`，不写 history（避免 `(rule_id, version)` 唯一约束冲突）。
+- `scripts/verify_migration.py` 是手动 9 条命令的封装，结果等价；日常回归用脚本，排查问题用命令行逐步看。**禁止在开发库直接 `downgrade`**，往返验证只在临时库做。
+
+### B4.3 #9 vLLM（继续占位）
+
+用户确认继续占位、本期不解决。现状：`VLLMProvider` 是占位类，`_do_complete` 直接 `raise NotImplementedError`，类内已写明实装四步骤（部署 vLLM 服务 → 配置 `llm_base_url` → 改为 OpenAI 兼容客户端 → 设 `LLM_PROVIDER=vllm` 跑集成测试）。本批不改代码，仅记录占位状态；实装列入后续迭代，与性能验收同批做。
 
 ---
 
@@ -1266,7 +1305,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
 | G5 | 反馈闭环 E2E | ✅ 完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测；T-05 状态码扫描并入 G6 Commit 2） |
 | G6 | 完整回归 + B 类并发 + 部署检查清单 | ✅ 完成（Commit 1–3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts` + 部署检查清单 + T-05 状态码扫描 + 封板） |
-| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② ③ 完成；批次④ 进行中（#10 完成，#8/#9 待做） |
+| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② ③ 完成；批次④ 进行中（#8/#10 完成，#9 待做，D33/D34 已落地） |
 
 > **G1–G6 全部 ✅（6/6）**，Sprint 3 封板，详见前节「Sprint 3 封板声明」。
 
@@ -1291,4 +1330,6 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | 遗留收尾 批次③ Commit 1 完成 | 647 passed, 2 skipped, 24 deselected, 0 failed（JWT 签发/校验接入，`both` 模式双路径并存，零回归） |
 | 遗留收尾 批次③ Commit 2 完成 | 647 passed, 0 failed（前端接入 token：`type-check` 0 errors、`build` 成功、浏览器手测 Bearer 注入与刷新恢复通过） |
 | 遗留收尾 批次③ Commit 3 完成 | **656 passed, 2 skipped, 24 deselected, 0 failed**（647 → 656，+9 JWT 测试；`test_auth.py` 单文件 26 passed） |
+| 遗留收尾 批次④ #8 规则回滚完成 | **661 passed, 2 skipped, 24 deselected, 0 failed**（656 → 661，+5 回滚测试；`rule_definition_history` 临时库往返验证通过） |
 | **Sprint 3 封板（G6 Commit 3）** | **645 passed, 2 skipped, 24 deselected, 0 failed** + 冒烟 6/6 + `type-check` 0 errors / `build` 成功 |
+> 注：下表按「阶段完成时间」排列；`Sprint 3 封板` 是 G6 封板节点（645 passed），之后的「遗留收尾」批次是封板后的追加工作，不是封板前置条件。

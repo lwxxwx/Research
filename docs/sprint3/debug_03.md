@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈后端 + 前端 + 测试〉、§15 S3-LEGACY-B4 Nginx 前端镜像化；原复盘顺延为 §16）
+> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈后端 + 前端 + 测试〉、§15 S3-LEGACY-B4 Nginx 前端镜像化与规则回滚；原复盘顺延为 §16）
 
 ---
 
@@ -22,7 +22,7 @@
 12. [S3-LEGACY-B1：返回值契约升级的技术总结](#12-s3-legacy-b1返回值契约升级的技术总结2026-11-08)
 13. [S3-LEGACY-B2：软删除迁移与提出人反查](#13-s3-legacy-b2软删除迁移与提出人反查2026-11-08)
 14. [S3-LEGACY-B3：用户名模式 JWT 的技术总结与风险备忘](#14-s3-legacy-b3用户名模式-jwt-的技术总结与风险备忘2026-11-08)
-15. [S3-LEGACY-B4：Nginx 前端镜像化的构建环境坑](#15-s3-legacy-b4nginx-前端镜像化的构建环境坑2026-11-08)
+15. [S3-LEGACY-B4：Nginx 前端镜像化与规则回滚](#15-s3-legacy-b4nginx-前端镜像化与规则回滚2026-11-08)
 16. [Sprint 3 复盘：10 大类踩坑总览](#16-sprint-3-复盘10-大类踩坑总览)
 17. [附：版本与适用范围](#17-附版本与适用范围)
 
@@ -1897,10 +1897,10 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 
 ---
 
-## 15. S3-LEGACY-B4：Nginx 前端镜像化的构建环境坑（2026-11-08）
+## 15. S3-LEGACY-B4：Nginx 前端镜像化与规则回滚（2026-11-08）
 
-> **状态**：✅ 已完成（#10 Nginx COPY dist）
-> **范围**：`frontend/Dockerfile` 多阶段构建、三份 compose 改造。
+> **状态**：✅ 已完成（#10 Nginx COPY dist、#8 规则回滚）
+> **范围**：`frontend/Dockerfile` 多阶段构建、三份 compose 改造；`rule_definition_history` 版本表、`rollback_rule()`、`rollback_rule.py` CLI、`verify_migration.py` 迁移验证工具。
 
 ### 15.1 坑：Docker Hub `node:20-alpine` 拉取超时（IPv6 不通）
 
@@ -1933,7 +1933,7 @@ docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/d
 2. **BuildKit 优先 IPv6 是 Windows 上的常见坑**：报错里出现 `2a03:2880:` 这类地址基本可判定为 IPv6 超时，优先用反代 + tag 绕过，或给 Docker Desktop 配代理 / registry mirror（治本）。
 3. **验证前端镜像产物要用容器内 `cat` 或 `curl.exe`**：PowerShell 5.1 的 `Invoke-WebRequest` + `Select-String` 对 UTF-8 中文会显示乱码导致匹配不到，不代表页面内容错。本次 `exec frontend cat /usr/share/nginx/html/index.html` 确认标题正确，`/cases` 返回 200 确认 SPA fallback 生效。
 
-### 15.2 验证结果
+### 15.2 #10 验证结果
 
 | 项 | 结果 |
 |---|---|
@@ -1941,6 +1941,107 @@ docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/d
 | 容器内 `index.html` 标题 | ✅ `电子设计EDA原理图评审与演进系统 · Sprint 1` |
 | `assets/` | ✅ 20 个 G4 打包产物 |
 | `/cases` 深链 | ✅ 200 |
+
+### 15.3 #8 规则回滚：设计要点（6 条风险备忘）
+
+1. **快照时机**：`publish_rule_candidate` 在更新主表**之前**把旧行写入 history。若更新后再读主表做快照，并发下可能读到已被改的数据。
+2. **同事务**：主表更新 + history 写入放在同一事务，`db.commit()` 一次提交，要么全成功要么全回滚。
+3. **唯一约束兜底**：`(rule_id, version)` 唯一约束防重复；版本号单调递增由业务代码保证，DB 只做兜底。
+4. **`change_source` 三值**：`publish` / `rollback` / `manual`。`manual` 仅留给运维手工改 DB，service 内部禁止生成。
+5. **`dry-run` 不写**：只做目标版本存在性与当前版本比对，不写 history、不改主表。
+6. **退出码约定**：0 成功 / 1 业务拒绝 / 2 系统故障，对齐 `bootstrap_admin.py`。
+
+### 15.4 幂等前置（D33 补充）
+
+当前版本已等于目标版本时返回 `noop=True`，不写 history。否则第二次回滚会把当前行再写一条 `(rule_id, 同版本)` 到 history，撞唯一约束。
+
+三条返回路径（正常回滚 / `dry_run` / `noop`）统一带 `noop` 字段，CLI 与调用方判断一致；`noop` 命中返回退出码 0（幂等命中是正常结果，不是业务拒绝，对齐 `bootstrap_admin.py` 的「已存在则 OK」）。
+
+### 15.5 坑 1：`backend` 容器内没有 `psql` 客户端
+
+**现象**：
+
+`verify_migration.py` 最初用 `subprocess` 调 `psql` 执行 `DROP/CREATE DATABASE` 和 `\d <table>`，报：
+
+```text
+FileNotFoundError: [Errno 2] No such file or directory: 'psql'
+```
+
+**根因**：`psql` 在 `postgres` 容器里，`backend` 容器只装了 Python 依赖，没有 PostgreSQL 客户端。
+
+**修复**：改用 `psycopg` 直连（项目 `DATABASE_URL` 本来就是 `postgresql+psycopg`，驱动已在容器内）；表存在性检查从 `\d` 元命令改为查 `information_schema.tables`。
+
+**教训**：
+
+1. **跨容器工具不要假设对方容器的 CLI 存在**：`backend` 调 DB 用驱动，不调 `psql`。
+2. **`psql` 元命令（`\d`、`\dt`）不是 SQL**，驱动不支持，必须换 `information_schema` / `pg_catalog` 查询。
+3. **迁移往返验证工具用 Python 写比 PowerShell 稳**：无编码问题、无引号转义、退出码可控。
+
+### 15.6 坑 2：`rollback_rule` 正常分支漏 `noop` 字段
+
+**现象**：`test_rollback_rule_idempotent` 失败：
+
+```text
+AssertionError: assert None is False
+  where None = {'dry_run': False, 'from_version': 'v2.0', 'rule_id': '...', 'to_version': 'v1.0'}.get('noop')
+```
+
+**根因**：`rollback_rule()` 正常回滚分支的 `return` 漏了 `"noop": False`，只有幂等前置分支返回 `noop=True`。契约不完整。
+
+**修复**：正常回滚分支 `return` 补 `"noop": False`，三条路径统一。
+
+**教训**：
+
+1. **返回值契约要「所有分支都带同一组字段」**，否则调用方必须用 `.get(..., default)` 兜底，等于契约失效。
+2. **测试断言 `is False` 比 `not ...` 更严格**，能暴露「字段缺失」这种隐性契约不完整。
+
+### 15.7 #8 验证结果
+
+| 项 | 结果 |
+|---|---|
+| 临时库 upgrade / downgrade / 再 upgrade | ✅ 往返成功，表与索引建删干净 |
+| 开发库 `alembic current` | ✅ `s3_b4_rule_history (head)` |
+| `scripts/verify_migration.py` | ✅ `[OK] migration round-trip verified` |
+| 回滚用例单跑 | ✅ 5 passed |
+| 全量非 integration | ✅ **661 passed, 2 skipped, 24 deselected, 0 failed**（656 → 661，+5） |
+
+### 15.8 工具：`scripts/verify_migration.py`
+
+**用途**：在临时库上验证 Alembic upgrade/downgrade 往返，不动开发库。每次新增迁移后跑一次，确认 downgrade 可回滚。
+
+**流程（7 步）**：
+
+1. `DROP DATABASE IF EXISTS <tmp>`（允许不存在）
+2. `CREATE DATABASE <tmp>`
+3. `alembic upgrade head`（指向临时库的 `DATABASE_URL`）
+4. `alembic current`，断言含 `(head)`
+5. 可选 `--check-table <表名>`：查 `information_schema.tables` 断言表存在
+6. `alembic downgrade -1`
+7. 可选 `--check-table`：断言表已不存在；再 `upgrade head` 验证可重复；最后 `DROP DATABASE <tmp>`
+
+**实现要点**：
+
+| 点 | 做法 | 原因 |
+|---|---|---|
+| 临时库 URL | `urlparse` 替换 `path` 为 `/<tmp_db>` | 不硬编码密码、host，沿用 `DATABASE_URL` |
+| 建/删库 | `psycopg.connect(dsn, autocommit=True)` | `CREATE/DROP DATABASE` 不能在事务里跑 |
+| 表存在性 | `information_schema.tables` 查询 | 驱动不支持 psql 元命令 `\d` |
+| 子进程 | `subprocess.run(["alembic", ...], env={**os.environ, "DATABASE_URL": tmp_url})` | 用参数数组，无引号转义 |
+| 退出码 | `proc.returncode` 判断 | 不受 stderr 内容影响（对比 PowerShell 版 `$LASTEXITCODE` 被 NOTICE 带偏） |
+| 失败保留 | 异常时不自动 DROP 临时库 | 便于排查 |
+
+**用法**：
+
+```powershell
+docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/docker-compose.dev.yml" exec backend python /scripts/verify_migration.py --check-table rule_definition_history
+# 预期：[OK] migration round-trip verified
+```
+
+与命令行手动验证的关系：脚本是手动 9 条命令的封装，结果等价；日常回归用脚本，排查问题用命令行逐步看。
+
+### 15.9 批次④剩余
+
+#10、#8 已完成；#9 vLLM 按用户决定继续占位（只写文档，不改代码）。批次④在本节收尾后即可封板，随后执行 `git push -u origin feature/sprint3-rbac` 触发 CI。
 
 ---
 
@@ -2070,6 +2171,7 @@ docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/d
 | 冒烟 | 6/6 全过 |
 | 大类坑 | 10 类，约 40 个具体坑点，均有"现象—根因—修复—教训"四段记录 |
 | 反复出现的两个母题 | ① **"看起来对"的假象**（能跑但报红、DB 有值但响应空、重试了但没测到重试）；② **跨边界的信息丢失**（跨 Session、跨层 DTO、文档与代码不一致） |
+> 注：上表 645 是 G6 封板时点；封板后「遗留项收尾」批次①–④ 将基线推进到 **661 passed**（+1 契约回归 0 新增、+2 批次②、+9 批次③、+5 批次④ #8），详见 `changelog_03.md` 末尾测试基线演进表。
 
 ---
 
@@ -2080,5 +2182,4 @@ docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/d
 - 基础设施：Docker Compose + PostgreSQL 15
 - 适用范围：Sprint 3 G2–G6 开发联调阶段（G6 于 2026-11-07 封板，基线 645 passed）
 - 配套文档：`changelog_03.md`（变更与决策）、`Sprint3_详细执行计划_V1.0.md`（计划依据）
-- 使用建议：Sprint 4 开工前先读 §16 的 10 类总览与"按现象快速定位"表；遇到新坑按 §16.3 模板登记，保持四段结构；
-  若需调试，参考 §16.2 按现象快速定位。
+- 使用建议：Sprint 4 开工前先读 §16 的 10 类总览与"按现象快速定位"表；遇到新坑按 §16.3 模板登记，保持四段结构

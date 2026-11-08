@@ -1,3 +1,20 @@
+## 三、数据库 Migration
+
+```powershell
+# 1. 升级到最新
+docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/docker-compose.dev.yml" exec backend alembic upgrade head
+# 预期：无报错；alembic current 显示 s3_b4_rule_history (head)
+
+# 2. 查看当前版本
+docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/docker-compose.dev.yml" exec backend alembic current
+
+# 3. 迁移往返验证（临时库，不动开发库）
+docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/docker-compose.dev.yml" exec backend python /scripts/verify_migration.py --check-table rule_definition_history
+# 预期：[OK] migration round-trip verified
+```
+
+> 说明：该脚本用 `psycopg` 直连（`backend` 容器无 `psql` 客户端），流程为 建临时库 → `upgrade` → `current` → 查表 → `downgrade` → 查表删除 → 再 `upgrade` → 删临时库。**禁止在开发库直接跑 `downgrade`。**
+
 ## 四、bootstrap admin（首次部署）
 
 ```powershell
@@ -47,11 +64,7 @@ Invoke-WebRequest -Uri "http://localhost:3000/" -UseBasicParsing
 
 ## 六、冒烟测试（端到端）
 
-冒烟测试需覆盖两条前端路径：
-- **开发模式 5173**（vite dev server，热更）：日常开发验证
-- **生产镜像 3000**（Dockerfile 构建产物）：上线前验证
-
-先按 5173 完成下表 6 步；上线前用 3000 再跑一次 1、2、6 步（登录 / 菜单 / 登出），确认打包制品行为一致。
+在 5173 前端开发模式下，完成以下业务闭环：
 
 | # | 步骤 | 预期 |
 |---|---|---|
@@ -71,7 +84,7 @@ Invoke-WebRequest -Uri "http://localhost:3000/" -UseBasicParsing
 git push
 
 # 观察 GitHub Actions
-# - backend job：656 passed（-m "not integration"）；若批次④ #8 合入后基线变化，以当次实际为准
+# - backend job：661 passed（-m "not integration"）；#9 vLLM 若后续实装并新增测试，以当次实际为准
 # - frontend job：npm run build 成功
 ```
 
@@ -98,6 +111,23 @@ CI 环境变量（`.github/workflows/ci.yml`）：
 | 前端 403 跳 `/403` 页 | `router/index.ts` 的 `beforeEach` 已处理；检查 `meta.roles` 配置 |
 | `docker compose build frontend` 报 `dial tcp [2a03:2880:...]` | Docker Hub IPv6 不通；用 `docker.1ms.run` 反代 pull + tag 后重试，或配 Docker Desktop 代理 / registry mirror |
 
+## 八点五、规则回滚操作
+
+规则发布后发现问题，用 CLI 回滚到历史版本：
+
+```powershell
+# 1. 先 dry-run 确认目标版本存在
+docker compose exec backend python /scripts/rollback_rule.py --rule-id POWER_DECOUP_001 --to-version v1.0 --dry-run
+# 预期：DRY-RUN OK: rule_id=... from=v2.0 to=v1.0
+
+# 2. 执行回滚
+docker compose exec backend python /scripts/rollback_rule.py --rule-id POWER_DECOUP_001 --to-version v1.0
+# 预期：OK: rule_id=... v2.0 -> v1.0
+```
+
+- **退出码**：`0` 成功（含 `noop` 已是目标版本）/ `1` 业务拒绝（目标版本不存在）/ `2` 系统故障。
+- **注意**：回滚只恢复 `rule_definition` 主表内容，不改规则 YAML 文件；如需同步文件，走 `export_candidate_yaml` 或手工。
+
 ## 九、Sprint 3 回滚预案
 
 如果部署后发现严重问题，按以下顺序回滚：
@@ -109,11 +139,11 @@ CI 环境变量（`.github/workflows/ci.yml`）：
 
 ## 十、部署后验证清单（打勾）
 
-- [ ] `alembic current` 显示 `s3_b2_feedback_soft_delete (head)`
+- [ ] `alembic current` 显示 `s3_b4_rule_history (head)`
 - [ ] `users` 表至少有 1 个 admin 用户
 - [ ] `healthz` 返回 `status=ok`
 - [ ] admin 登录成功，`/auth/me` 返回 `role=admin`
 - [ ] 前端 `/cases` 页面正常渲染 5 个菜单
 - [ ] 冒烟测试 6 步全过
-- [ ] GitHub Actions 全绿
-- [ ] 生产镜像 3000 端口：`http://localhost:3000/` 返回真实前端（含 `电子设计EDA原理图评审与演进系统`），`http://localhost:3000/cases` 深链返回 200
+- [ ] 规则回滚 CLI 可用：`python /scripts/rollback_rule.py --rule-id <id> --to-version <v> --dry-run` 返回 `DRY-RUN OK`
+- [ ] GitHub Actions 全绿：backend job `-m "not integration"` 全通过（当前基线 661 passed，以当次实际为准）、frontend job `npm run build` 成功
