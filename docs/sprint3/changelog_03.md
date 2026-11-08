@@ -3,7 +3,7 @@
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
 > 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 完成（Commit 1–3；T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）✅ 完成（Commit 1–3，**Sprint 3 封板**）
-> 最后更新：2026-11-07（G6 收尾：Commit 2 部署检查清单 + T-05 状态码扫描、Commit 3 Sprint 3 封板；新增封板声明）
+> 最后更新：2026-11-08（新增「遗留项收尾·批次① 代码契约」D24/D25、批次② 数据与审计 D26–D29；全量基线 645 → 647）
 
 ---
 
@@ -1022,6 +1022,58 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 
 ---
 
+## 遗留项收尾·批次②：数据与审计（2026-11-08）
+
+> 状态：✅ 完成
+> 范围：#3 `feedback_item` 软删除、#4 `knowledge_gap` 提出人展示、#5 幂等与非 gap 类型测试、#7 U+2011 声明。
+> 编号说明：本批沿用用户给定的 D26–D29（D21–D23 未被占用）。
+
+### B2.1 新增技术决策 D26–D29
+
+| # | 决策 | 内容 |
+|---|---|---|
+| **D26** | `feedback_item.is_deleted` | `BOOLEAN NOT NULL server_default=sa.text("false")` + 普通索引 `idx_feedback_item_is_deleted`；migration 仅 DDL；downgrade 删列 + 索引 |
+| **D27** | `proposed_by` **不加 DB 冗余列** | 查询实时 `outerjoin` `source_feedback_id → feedback_item.created_by`；`FeedbackOut` 不改；`KnowledgeGapItem` / `KnowledgeGapDetail` 加 `proposed_by`；本批 migration **不涉及 `knowledge_gap` 表** |
+| **D28** | 迁移文件命名与 revision | 文件名 `s3_legacy_b2_feedback_soft_delete.py`；**revision ID = `s3_b2_feedback_soft_delete`（≤32 字符）**，`down_revision = "s2j_g2_roles"`（实时 `alembic heads` 确认唯一） |
+| **D29** | U+2011 仅文档记录 | 新生成 ID 已 ASCII（G5 D12）；存量不迁移；不改代码、不动数据；前端 `encodeURIComponent` 兜底 |
+
+### B2.2 D27 三条业务约束
+
+1. `proposed_by` 仅用于 UI 展示，**不是审计权威源**；审计溯源强制走 `source_feedback_id` JOIN `feedback_item.created_by`。
+2. `source_feedback_id` 为 NULL、或关联 `feedback_item.is_deleted = true` 时，`proposed_by` 返回 `None`。
+3. DB 层 `knowledge_gap` 无 `proposed_by` 物理列，完全运行时 JOIN 计算；后续报表 QPS 压力大时再评估新增冗余列（届时必须单开 revision，并写清写入同步复制、存量回填、数据漂移风险、审计禁用四项）。
+
+### B2.3 交付清单
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/alembic/versions/s3_legacy_b2_feedback_soft_delete.py` | 新建：`add_column(is_deleted, Boolean, nullable=False, server_default=text("false"))` + `create_index`；downgrade 反向 |
+| 2 | `backend/app/persistence/models.py` | `FeedbackItem.is_deleted: Mapped[bool]`，`default=False` + `server_default=text("false")` |
+| 3 | `backend/app/api/schemas.py` | `KnowledgeGapItem` 加 `proposed_by: int \| None = None`（`KnowledgeGapDetail` 继承自动带出）；`FeedbackOut` 不改 |
+| 4 | `backend/app/services/knowledge_gap_service.py` | `list_gaps` 用 `outerjoin + add_columns(created_by, is_deleted)`；`get_gap` 在查 `source_feedback` 时顺带取 `is_deleted`；两处按 D27 约束 2 赋 `proposed_by` |
+| 5 | `backend/app/api/knowledge_gaps.py` | **未改**（`**result` / `**full` 展开自动透出） |
+| 6 | `backend/tests/test_feedback_rule.py` | 新增 2 个用例：`test_create_gap_from_feedback_idempotent`（同一 `feedback_id` 幂等）、`test_submit_feedback_non_gap_type_ref_none`（非 gap 类型 `knowledge_gap_ref is None`） |
+
+### B2.4 验收证据
+
+| 项 | 结果 |
+|---|---|
+| 临时库 upgrade → current → downgrade -1 → upgrade 往返 | ✅ `s3_b2_feedback_soft_delete (head)`；downgrade 后列与索引消失；再次 upgrade 成功 |
+| 开发库 `is_deleted` 列 | ✅ `boolean / NO / false`；存量 664 行全部 `false` |
+| 索引 | ✅ `idx_feedback_item_is_deleted` |
+| 两个新用例 | ✅ 2 passed |
+| 全量非 integration | ✅ **647 passed, 2 skipped, 24 deselected, 0 failed**（645 → 647） |
+| `proposed_by` 手工确认 | ✅ `GAP-20261108-B446AE` → `3232`；历史 demo gap → `None` |
+
+### B2.5 范围边界
+
+- 软删除**本批只落列与索引**，`feedback_item` 的删除接口、其它读路径的 `is_deleted` 过滤**不在本批**（仅 `proposed_by` 这一处按 D27 约束 2 排除软删除）。
+- 数据回填外置：本批无回填需求；未来若有，走独立离线脚本并在 `deployment_checklist.md` 登记。
+- `server_default` 是 DB 层行为，ORM 侧已同步 `default=False` 兜底（D26 风险备忘第 2 条）。
+- **迁移双向验证在独立临时库里做**，不在开发库执行 `downgrade`（避免删列后存量 `NOT NULL` 数据被破坏）。
+
+---
+
 ## Sprint 3 封板声明（2026-11-07）
 
 > **结论**：G1–G6 六个阶段全部完成，Sprint 3（角色权限与端到端闭环）达到封板标准。
@@ -1079,6 +1131,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
 | G5 | 反馈闭环 E2E | ✅ 完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测；T-05 状态码扫描并入 G6 Commit 2） |
 | G6 | 完整回归 + B 类并发 + 部署检查清单 | ✅ 完成（Commit 1–3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts` + 部署检查清单 + T-05 状态码扫描 + 封板） |
+| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② 完成，③ ④ 待做 |
 
 > **G1–G6 全部 ✅（6/6）**，Sprint 3 封板，详见前节「Sprint 3 封板声明」。
 
@@ -1098,4 +1151,6 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G5 Commit 3 完成 | **631 passed, 2 skipped, 24 deselected, 0 failed**（626 → 631，+5 测试：E2E 1 + G4 遗留补测 4） |
 | G6 Commit 1 完成 | **635 passed, 2 skipped, 24 deselected, 0 failed**（631 → 635，+4 B 类并发测试） |
 | G6 Commit 2 完成 | **645 passed, 2 skipped, 24 deselected, 0 failed**（+ T-05 状态码扫描用例；6 条冒烟路径全过） |
+| 遗留收尾 批次① 完成 | 645 passed, 2 skipped, 24 deselected, 0 failed（只改返回值契约，不新增用例） |
+| 遗留收尾 批次② 完成 | **647 passed, 2 skipped, 24 deselected, 0 failed**（+2 用例：gap 幂等、非 gap 类型 `knowledge_gap_ref is None`） |
 | **Sprint 3 封板（G6 Commit 3）** | **645 passed, 2 skipped, 24 deselected, 0 failed** + 冒烟 6/6 + `type-check` 0 errors / `build` 成功 |

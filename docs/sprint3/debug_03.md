@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级；原复盘顺延为 §13）
+> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查；原复盘顺延为 §14）
 
 ---
 
@@ -20,8 +20,9 @@
 10. [S3-G6-Concurrency：B 类并发测试与重试恢复](#10-s3-g6-concurrencyb-类并发测试与重试恢复2026-11-06)
 11. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#11-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
 12. [S3-LEGACY-B1：返回值契约升级的技术总结](#12-s3-legacy-b1返回值契约升级的技术总结2026-11-08)
-13. [Sprint 3 复盘：10 大类踩坑总览](#13-sprint-3-复盘10-大类踩坑总览)
-14. [附：版本与适用范围](#14-附版本与适用范围)
+13. [S3-LEGACY-B2：软删除迁移与提出人反查](#13-s3-legacy-b2软删除迁移与提出人反查2026-11-08)
+14. [Sprint 3 复盘：10 大类踩坑总览](#14-sprint-3-复盘10-大类踩坑总览)
+15. [附：版本与适用范围](#15-附版本与适用范围)
 
 ---
 
@@ -1696,12 +1697,122 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 
 ---
 
-## 13. Sprint 3 复盘：10 大类踩坑总览
+## 13. S3-LEGACY-B2：软删除迁移与提出人反查（2026-11-08）
+
+> **状态**：✅ 已完成（过程中出现 3 个真实问题，均已修复）
+> **范围**：`feedback_item.is_deleted` 加列 + 索引、`knowledge_gap` 的 `proposed_by` 运行时反查、2 个补测用例。最终全量 647 passed、0 failed。
+
+### 13.1 坑 1：revision ID 超过 `alembic_version.version_num` 长度
+
+**现象**：
+
+临时库 `alembic upgrade head` 执行到新迁移的最后一步报错：
+
+```text
+psycopg.errors.StringDataRightTruncation: value too long for type character varying(32)
+[SQL: UPDATE alembic_version SET version_num='s3_legacy_b2_feedback_soft_delete'
+ WHERE alembic_version.version_num = 's2j_g2_roles']
+```
+
+随后 `alembic current` 为空、`\d feedback_item` 找不到表。
+
+**根因**：
+
+`alembic_version.version_num` 是 `VARCHAR(32)`，而 revision ID `s3_legacy_b2_feedback_soft_delete` 有 35 个字符。写版本号失败导致整条迁移事务回滚，DDL 未生效——所以表现为「表不存在」，不是 DDL 写错。
+
+**修复**：
+
+文件名保持 `s3_legacy_b2_feedback_soft_delete.py`（文件名不限长），revision ID 改为 `s3_b2_feedback_soft_delete`（27 字符）。`down_revision` 不变。
+
+**教训**：
+
+1. **revision ID 必须 ≤32 字符，文件名可以长，两者不是一回事。**
+2. 迁移失败先看报错 SQL 打在哪一步：若是 `UPDATE alembic_version ...`，说明 DDL 已执行、失败在版本号写入，改 ID 即可，不要误改迁移内容。
+3. 迁移失败后整条事务回滚，库是干净的；重跑前先确认 `alembic current` 为空，不要盲目 `upgrade`。
+
+### 13.2 坑 2：`ReviewDefect` 字段名笔误 `location_json`
+
+**现象**：
+
+新用例首次运行报：
+
+```text
+TypeError: 'location_json' is an invalid keyword argument for ReviewDefect
+```
+
+**根因**：
+
+按记忆写了 `location_json`，`ReviewDefect` 的真实列名是 `location`（JSONB NOT NULL）。这与 G3-A 坑 5「Pydantic 字段 ≠ ORM 列」同源。
+
+**修复**：
+
+`location={}`。
+
+**教训**：
+
+构造 ORM 对象前先 `Select-String -Pattern "class ReviewDefect" -Context 0,25` 核对列名，不要凭记忆。`ReviewDefect` 的 10 字段规范里是 `location` 不是 `location_json`，`evidence` 是 JSONB 列表。
+
+### 13.3 坑 3：`finally` 清理访问 detached ORM 对象 + `defect_id` 唯一约束冲突
+
+**现象（连续两次失败）**：
+
+第一次：
+
+```text
+sqlalchemy.orm.exc.DetachedInstanceError: Instance <ReviewResult ...> is not bound to a Session;
+attribute refresh operation cannot proceed
+```
+
+第二次（修了 detached 之后）：
+
+```text
+sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
+"review_defect_defect_id_key" DETAIL: Key (defect_id)=(D1) already exists.
+```
+
+**根因**：
+
+- `finally` 里用 `rr.id`，但 `rr` 是 `with get_db_session()` 块内对象，块退出后 Session 关闭、对象 detached，访问属性触发刷新失败。这是 D1（`get_current_user` 返回 NamedTuple）的同源问题。
+- 第一次失败导致 `finally` 也挂，测试数据残留；而 `review_defect.defect_id` 有 UNIQUE 约束，用例里写死 `"D1"`，第二轮必然撞。
+
+**修复**：
+
+- `with` 块内先取标量 `rr_id = rr.id`、`did = f"D-{uuid...}"`，块外只用标量。
+- `defect_id` 用 uuid 生成唯一值，不写死。
+- 手工清理一次历史残留（`task_id LIKE 'TEST-B2-%'` 的 `feedback_item` / `review_defect` / `review_result`）。
+
+**教训**：
+
+1. **ORM 对象不能跨 `with get_db_session()` 边界使用，测试清理逻辑也一样；块内取标量。**
+2. **有 UNIQUE 约束的列（`defect_id` / `task_id` / `gap_id` / `candidate_id`）一律用 uuid 生成，不写死字面量。**
+3. **`finally` 清理要设计成「不依赖被断言对象的存活状态」**，否则断言失败会连累清理，残留数据污染下一轮。
+
+### 13.4 修复后验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| 临时库 `upgrade` / `current` / `downgrade` / `upgrade` 往返 | ✅ `s3_b2_feedback_soft_delete (head)`；downgrade 后列与索引消失 |
+| 开发库 `is_deleted` 列 + 索引 | ✅ `boolean / NO / false`；664 行存量全 `false`；索引存在 |
+| 两个新用例 | ✅ 2 passed |
+| 全量非 integration | ✅ 647 passed, 2 skipped, 24 deselected, 0 failed |
+| `proposed_by` 手工确认 | ✅ 新 gap 带出 `3232`，历史 demo gap 为 `None` |
+
+### 13.5 经验沉淀速查
+
+| # | 坑 | 一句话结论 |
+|---|---|---|
+| 1 | revision ID 超 32 字符 | revision ID ≤32，文件名不限；迁移失败先看报错 SQL 是不是写版本号 |
+| 2 | `location_json` 笔误 | 构造 ORM 前 `Select-String "^class <Model>"` 核对列名 |
+| 3 | `finally` 访问 detached 对象 + `defect_id` 撞唯一约束 | 块内取标量；唯一列用 uuid；`finally` 不依赖被断言对象 |
+
+---
+
+## 14. Sprint 3 复盘：10 大类踩坑总览
 
 > **用途**：Sprint 3（G1–G6）共沉淀 10 篇阶段记录、约 40 个具体坑点。本节按"类别"重新归并，供 Sprint 4 开发、联调和运维按类检索，不必逐节翻。
 > **读法**：先看"一句话规则"，命中同一类现象再回原节看完整代码。
 
-### 13.1 十类总览
+### 14.1 十类总览
 
 #### ① Migration 与版本链
 
@@ -1773,7 +1884,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 - **防复发**：`finally` 先还原 mock 再恢复数据；扫描源用 `app.routes`；307/405 先当构造错误排除。
 - **原节**：§10.3、§10.5
 
-### 13.2 按现象快速定位
+### 14.2 按现象快速定位
 
 | 你看到的现象 | 先看哪类 | 具体节 |
 |---|---|---|
@@ -1790,7 +1901,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 | 测试"重试了但没测到重试" | ④ 并发 / ⑩ 替身 | §10.3 |
 | 扫描报告一堆 404 / 403 | ⑩ 工具口径 | §10.5 |
 
-### 13.3 新增坑点的登记模板
+### 14.3 新增坑点的登记模板
 
 后续遇到新坑，按同一结构追加，保证可检索、可复算：
 
@@ -1813,7 +1924,7 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 2. <下次如何更早发现>
 ```
 
-### 13.4 Sprint 3 交付回顾
+### 14.4 Sprint 3 交付回顾
 
 | 维度 | 结果 |
 |---|---|
@@ -1825,11 +1936,11 @@ G3 给业务路由挂鉴权时，同一请求内会同时触发 `get_current_use
 
 ---
 
-## 14. 附：版本与适用范围
+## 15. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
 - 基础设施：Docker Compose + PostgreSQL 15
 - 适用范围：Sprint 3 G2–G6 开发联调阶段（G6 于 2026-11-07 封板，基线 645 passed）
 - 配套文档：`changelog_03.md`（变更与决策）、`Sprint3_详细执行计划_V1.0.md`（计划依据）
-- 使用建议：Sprint 4 开工前先读 §13 的 10 类总览与"按现象快速定位"表；遇到新坑按 §13.3 模板登记，保持四段结构
+- 使用建议：Sprint 4 开工前先读 §14 的 10 类总览与"按现象快速定位"表；遇到新坑按 §14.3 模板登记，保持四段结构
