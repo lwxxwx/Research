@@ -3,7 +3,7 @@
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
 > 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 完成（Commit 1–3；T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）✅ 完成（Commit 1–3，**Sprint 3 封板**）
-> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（Commit 1 后端 + Commit 2 前端已完成，浏览器手测通过）；全量基线 645 → 647）
+> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（Commit 1/2/3 全部完成）；全量基线 645 → 656）
 
 ---
 
@@ -1076,7 +1076,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 
 ## 遗留项收尾·批次③：安全身份（JWT）（2026-11-08）
 
-> 状态：🟡 进行中（Commit 1 后端 JWT、Commit 2 前端接入已完成，JWT 测试待做）
+> 状态：✅ 完成（Commit 1 后端 JWT、Commit 2 前端接入、Commit 3 JWT 测试全部完成）
 > 范围：#6 用户名模式 JWT。**不加 `password_hash`、不实现密码登录**，账号密码登录记为后续需求。
 
 ### B3.1 新增技术决策 D30–D32
@@ -1121,7 +1121,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 |---|---|---|
 | 1 | 后端 JWT 签发 / 校验 / `AUTH_MODE` 分派 / prod 强制覆盖 | ✅ 完成 |
 | 2 | 前端 `stores/auth.ts` / `api/auth.ts` / `api/http.ts` 接入 token | ✅ 完成 |
-| 3 | JWT 测试：签发、校验、过期、prod 强制覆盖、三态分派 | ⏳ 待做 |
+| 3 | JWT 测试：签发、校验、过期、prod 强制覆盖、三态分派 | ✅ 完成 |
 
 ### B3.6 前端交付清单（Commit 2）
 
@@ -1145,6 +1145,33 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 > 1. admin 登录 → Network 中 `GET /api/v1/auth/me` 的 **Request Headers** 携带 `Authorization: Bearer <jwt>`（`POST /auth/login` 的响应体在 Preview 中看，含 `access_token` / `token_type: bearer` / `expires_in: 28800`）。
 > 2. F5 刷新 → localStorage 中 `user_id` 与 `access_token` 仍在，`/auth/me` 继续携带 Bearer，会话保持。
 > 3. 退出 → localStorage 的 `user_id` 与 `access_token` 同时清空，跳回 `/login?redirect=...`。
+
+---
+
+### B3.7 测试交付清单（Commit 3）
+
+新增 9 个用例（`backend/tests/test_auth.py` 末尾）：
+
+| # | 用例 | 覆盖决策 |
+|---|---|---|
+| 1 | `test_jwt_login_returns_token` | D31（`expires_in=28800`） |
+| 2 | `test_jwt_me_with_bearer_200` | D30（Bearer 路径） |
+| 3 | `test_jwt_me_with_invalid_token_401` | 签名 / 格式非法 → 401 |
+| 4 | `test_jwt_me_with_expired_token_401` | D31（过期 → 401） |
+| 5 | `test_jwt_disabled_user_401` | D32（每次查 DB 校验 `is_active`） |
+| 6 | `test_auth_mode_header_only_rejects_bearer` | D30（`header` 模式拒绝 Bearer） |
+| 7 | `test_auth_mode_jwt_only_rejects_header` | D30（`jwt` 模式拒绝 `X-User-Id`） |
+| 8a | `test_prod_force_jwt_overrides_auth_mode` | D30（prod 强制覆盖，忽略外部配置） |
+| 8b | `test_prod_force_jwt_rejects_header` | D30（prod 下 `X-User-Id` 一律 401） |
+
+**验收证据**：
+
+| 项 | 结果 |
+|---|---|
+| `test_auth.py` 单文件 | ✅ 26 passed |
+| 全量非 integration | ✅ **656 passed, 2 skipped, 24 deselected, 0 failed**（647 → 656，+9） |
+
+**批次③完成**：D30–D32 全部落地，后端 6 文件 + 前端 3 文件 + 9 个测试，全量 656 passed 零回归。
 
 ---
 
@@ -1205,7 +1232,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
 | G5 | 反馈闭环 E2E | ✅ 完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测；T-05 状态码扫描并入 G6 Commit 2） |
 | G6 | 完整回归 + B 类并发 + 部署检查清单 | ✅ 完成（Commit 1–3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts` + 部署检查清单 + T-05 状态码扫描 + 封板） |
-| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② 完成；批次③ Commit 1、2 完成（JWT 测试待做）；批次④ 待做 |
+| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② ③ 完成；批次④ 待做 |
 
 > **G1–G6 全部 ✅（6/6）**，Sprint 3 封板，详见前节「Sprint 3 封板声明」。
 
@@ -1229,4 +1256,5 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | 遗留收尾 批次② 完成 | **647 passed, 2 skipped, 24 deselected, 0 failed**（+2 用例：gap 幂等、非 gap 类型 `knowledge_gap_ref is None`） |
 | 遗留收尾 批次③ Commit 1 完成 | 647 passed, 2 skipped, 24 deselected, 0 failed（JWT 签发/校验接入，`both` 模式双路径并存，零回归） |
 | 遗留收尾 批次③ Commit 2 完成 | 647 passed, 0 failed（前端接入 token：`type-check` 0 errors、`build` 成功、浏览器手测 Bearer 注入与刷新恢复通过） |
+| 遗留收尾 批次③ Commit 3 完成 | **656 passed, 2 skipped, 24 deselected, 0 failed**（647 → 656，+9 JWT 测试；`test_auth.py` 单文件 26 passed） |
 | **Sprint 3 封板（G6 Commit 3）** | **645 passed, 2 skipped, 24 deselected, 0 failed** + 冒烟 6/6 + `type-check` 0 errors / `build` 成功 |

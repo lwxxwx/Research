@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈含前端 token 接入〉；原复盘顺延为 §15）
+> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈后端 + 前端 + 测试〉；原复盘顺延为 §15）
 
 ---
 
@@ -1810,7 +1810,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 
 ## 14. S3-LEGACY-B3：用户名模式 JWT 的技术总结与风险备忘（2026-11-08）
 
-> **状态**：🟡 进行中（后端一次通过；前端接入已完成，JWT 测试待做）
+> **状态**：✅ 完成（Commit 1 后端 / Commit 2 前端 / Commit 3 测试全部通过，全量 656 passed）
 > **范围**：`AUTH_MODE` 三态分派、JWT 签发/校验、prod 强制 `jwt`。后端全量 647 passed、0 failed，零回归。
 
 ### 14.1 一次通过的做法
@@ -1823,7 +1823,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 ### 14.2 风险备忘（用户确认，写入文档）
 
 1. **迁移期 `both` 模式下两套鉴权同时生效**：自动化测试存量用例继续使用 `X-User-Id`；上线前冒烟必须同时测 Bearer JWT 与 `X-User-Id` 两条路径。
-2. **prod 强制覆盖逻辑必须单元测试覆盖**：`APP_ENV=prod` 时无论 `AUTH_MODE` 配什么，都必须拒绝 `X-User-Id`。此用例列入批次③ Commit 3。
+2. **prod 强制覆盖逻辑必须单元测试覆盖**：`APP_ENV=prod` 时无论 `AUTH_MODE` 配什么，都必须拒绝 `X-User-Id`。✅ 已由 Commit 3 的 `test_prod_force_jwt_overrides_auth_mode` / `test_prod_force_jwt_rejects_header`（8a/8b）满足。
 3. **禁止业务代码读取 JWT payload 中的 `role` 做权限判断**：静态检查 / 代码评审卡点；`payload.role` 仅日志打印。
 4. **refresh-token 不在 Sprint 3 范围**：列为产品迭代下一阶段工作。
 
@@ -1870,6 +1870,29 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 | 登录后请求头 | ✅ Bearer |
 | 刷新后 token 恢复 | ✅ |
 | 全量非 integration | ✅ 647 passed |
+
+### 14.5 JWT 测试（Commit 3）
+
+**做法**：
+
+1. **三态分派用 `monkeypatch.setattr(settings, "auth_mode", ...)` 验证**，`finally` 还原为 `both`，不影响其它用例。
+2. **prod 强制覆盖分两层验证**：① 直接构造 `Settings(app_env="prod", auth_mode="header")` 断言 `auth_mode == "jwt"`（验证 `model_validator` 本身）；② 在现有 `settings` 上 `monkeypatch` 置 `app_env=prod` + `auth_mode=jwt`，断言 `X-User-Id` 401（验证接口层行为）。
+3. **禁用用户用例**在签发 token 之后改 `is_active=False`，再调 `/auth/me` 断言 401，验证 D32「每次查 DB」而非「token 自包含」。
+
+**结果**：
+
+| 项 | 结果 |
+|---|---|
+| `test_auth.py` | ✅ 26 passed |
+| 全量非 integration | ✅ 656 passed, 2 skipped, 24 deselected, 0 failed（647 → 656，+9） |
+
+**教训**：
+
+1. **测试数对不上先数函数**：本次计划 8 项、实际 9 个测试函数（第 8 项拆成 8a/8b），647 + 9 = 656 正常。写文档时把「用例数」和「测试函数数」分开表述，避免读者按「8 项」对不上数。
+2. **`monkeypatch.setattr(settings, ...)` 必须 `finally` 还原**，`settings` 是模块级单例，污染会影响后续测试。
+3. **prod 强制覆盖要分两层测**：只测接口层会漏掉 `Settings` 构造时的覆盖逻辑，只测 `Settings` 会漏掉接口层实际拒绝行为。
+
+**风险备忘复核**：用户列的 4 条风险中，第 2 条（prod 强制覆盖必须单元测试覆盖）已由 8a/8b 满足；第 1、3、4 条为流程约束，已记录在 §14.2。
 
 ---
 
