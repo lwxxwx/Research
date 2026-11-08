@@ -252,3 +252,148 @@ def test_last_admin_protection(client, admin_user, pg_session):
                 {User.role: original_role}, synchronize_session=False
             )
         pg_session.commit()
+
+# ============================================================
+# [S3-LEGACY-B3] JWT 测试（D30–D32）
+# ============================================================
+
+import pytest
+from datetime import datetime, timedelta, timezone
+import jwt as _pyjwt
+
+from app.core.config import settings
+
+
+def _login_get_token(client, username: str) -> str:
+    resp = client.post("/api/v1/auth/login", json={"username": username})
+    assert resp.status_code == 200, resp.text
+    token = resp.json()["access_token"]
+    assert token, "access_token 不应为空"
+    return token
+
+
+def test_jwt_login_returns_token(client, engineer_user):
+    """1. 登录返回 token：access_token / token_type / expires_in。"""
+    _, uname = engineer_user
+    resp = client.post("/api/v1/auth/login", json={"username": uname})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["access_token"]
+    assert body["token_type"] == "bearer"
+    assert body["expires_in"] == 28800
+
+
+def test_jwt_me_with_bearer_200(client, engineer_user):
+    """2. Bearer token 调 /auth/me → 200。"""
+    uid, uname = engineer_user
+    token = _login_get_token(client, uname)
+    resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["user_id"] == uid
+
+
+def test_jwt_me_with_invalid_token_401(client):
+    """3. 伪造 token → 401。"""
+    resp = client.get(
+        "/api/v1/auth/me", headers={"Authorization": "Bearer not-a-real-token"}
+    )
+    assert resp.status_code == 401
+
+
+def test_jwt_me_with_expired_token_401(client, engineer_user):
+    """4. 过期 token → 401。"""
+    uid, uname = engineer_user
+    now = datetime.now(timezone.utc)
+    expired = _pyjwt.encode(
+        {
+            "sub": str(uid),
+            "username": uname,
+            "role": "engineer",
+            "iat": now - timedelta(hours=9),
+            "exp": now - timedelta(hours=1),
+        },
+        settings.secret_key,
+        algorithm="HS256",
+    )
+    resp = client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {expired}"}
+    )
+    assert resp.status_code == 401
+
+
+def test_jwt_disabled_user_401(client, pg_session):
+    """5. 签发 token 后禁用用户 → 再调 /auth/me → 401（D32：每次查 DB 校验 is_active）。"""
+    import uuid
+    from app.persistence.models import User
+
+    uname = f"test_auth_jwt_dis_{uuid.uuid4().hex[:6]}"
+    user = User(username=uname, role="engineer", is_active=True)
+    pg_session.add(user)
+    pg_session.flush()
+    uid = user.id
+    pg_session.commit()
+
+    token = _login_get_token(client, uname)
+
+    # 禁用
+    pg_session.query(User).filter(User.id == uid).update(
+        {User.is_active: False}, synchronize_session=False
+    )
+    pg_session.commit()
+
+    resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401, resp.text
+
+
+def test_auth_mode_header_only_rejects_bearer(client, engineer_user, monkeypatch):
+    """6. AUTH_MODE=header 时 Bearer → 401。"""
+    _, uname = engineer_user
+    token = _login_get_token(client, uname)
+    monkeypatch.setattr(settings, "auth_mode", "header")
+    try:
+        resp = client.get(
+            "/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert resp.status_code == 401
+    finally:
+        monkeypatch.setattr(settings, "auth_mode", "both")
+
+
+def test_auth_mode_jwt_only_rejects_header(client, engineer_user, monkeypatch):
+    """7. AUTH_MODE=jwt 时 X-User-Id → 401。"""
+    uid, _ = engineer_user
+    monkeypatch.setattr(settings, "auth_mode", "jwt")
+    try:
+        resp = client.get("/api/v1/auth/me", headers={"X-User-Id": str(uid)})
+        assert resp.status_code == 401
+    finally:
+        monkeypatch.setattr(settings, "auth_mode", "both")
+
+
+def test_prod_force_jwt_overrides_auth_mode(monkeypatch):
+    """8a. D30：APP_ENV=prod 时无论 AUTH_MODE 配什么，强制 auth_mode='jwt'。"""
+    from app.core.config import Settings
+
+    s = Settings(
+        app_env="prod",
+        secret_key="prod-test-secret-key-0123456789abcdef",
+        database_url="postgresql+psycopg://postgres:postgres@postgres:5432/schematic_review",
+        data_dir="/data",
+        llm_provider="mock",
+        llm_api_key="x",
+        auth_mode="header",   # 故意配 header
+    )
+    assert s.auth_mode == "jwt"
+
+
+def test_prod_force_jwt_rejects_header(client, engineer_user, monkeypatch):
+    """8b. prod 强制 jwt 后，X-User-Id 请求 401。"""
+    uid, _ = engineer_user
+    monkeypatch.setattr(settings, "app_env", "prod")
+    monkeypatch.setattr(settings, "auth_mode", "jwt")
+    try:
+        resp = client.get("/api/v1/auth/me", headers={"X-User-Id": str(uid)})
+        assert resp.status_code == 401
+    finally:
+        monkeypatch.setattr(settings, "app_env", "dev")
+        monkeypatch.setattr(settings, "auth_mode", "both")
