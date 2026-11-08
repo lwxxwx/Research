@@ -3,7 +3,7 @@
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
 > 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 完成（Commit 1–3；T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）✅ 完成（Commit 1–3，**Sprint 3 封板**）
-> 最后更新：2026-11-08（新增「遗留项收尾·批次① 代码契约」D24/D25、批次② 数据与审计 D26–D29；全量基线 645 → 647）
+> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（后端已完成）；全量基线 645 → 647）
 
 ---
 
@@ -1074,6 +1074,57 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 
 ---
 
+## 遗留项收尾·批次③：安全身份（JWT）（2026-11-08）
+
+> 状态：🟡 进行中（后端 JWT 签发/校验完成，前端改造与测试待做）
+> 范围：#6 用户名模式 JWT。**不加 `password_hash`、不实现密码登录**，账号密码登录记为后续需求。
+
+### B3.1 新增技术决策 D30–D32
+
+| # | 决策 | 内容 |
+|---|---|---|
+| **D30** | `AUTH_MODE` 三态 | dev / test 默认 `both`；`APP_ENV=prod` **强制 `jwt`，忽略外部 `AUTH_MODE` 配置** |
+| **D31** | token 有效期 8 小时 | 不实现 refresh token；过期 401 复用现有登出跳转；refresh 列为产品迭代下一阶段 |
+| **D32** | payload `{sub, username, role, iat, exp}` | 每次鉴权查 DB 校验 `is_active`；**业务鉴权以 DB 角色为准**；`payload.role` 仅日志调试用 |
+
+### B3.2 范围边界
+
+- 本次仅满足安全基线：JWT 签发 + 校验 + 前端登录改造 + prod fail-closed 恢复 + `X-User-Id` 兼容开关。
+- **不含**：`password_hash` 列、密码登录、refresh token、token 吊销列表。均记为后续需求。
+- `both` 模式为迁移期开关；prod 强制 `jwt` 后 `X-User-Id` 一律 401。
+
+### B3.3 交付清单（后端，已完成）
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `backend/pyproject.toml` / `backend/uv.lock` | `uv add pyjwt`，`pyjwt>=2.8.0` |
+| 2 | `backend/app/core/config.py` | 新增 `auth_mode: str = "both"`；`model_validator(mode="after")` 在 `APP_ENV=prod` 时强制 `auth_mode="jwt"` |
+| 3 | `backend/app/core/jwt.py`（新建） | `create_access_token` / `decode_token`，HS256，`exp = iat + 8h` |
+| 4 | `backend/app/core/auth.py` | 抽 `_resolve_user_by_id`（header / JWT 共用查库校验）；`_resolve_user` 改调它；新增 `_resolve_user_from_jwt`；`get_current_user` / `get_optional_user` 按 `auth_mode` 分派 |
+| 5 | `backend/app/api/schemas.py` | `LoginResponse` 追加 `access_token` / `token_type` / `expires_in` |
+| 6 | `backend/app/api/auth.py` | `login` 返回值生成并携带 token |
+
+### B3.4 后端验收证据
+
+| 项 | 结果 |
+|---|---|
+| `pyproject.toml` 含 `pyjwt>=2.8.0` | ✅ |
+| import 校验 | ✅ `OK both` |
+| 登录返回 | ✅ `user_id=3232, token_type=bearer, expires_in=28800` |
+| Bearer 路径 `/auth/me` | ✅ `3232 / admin / admin` |
+| `X-User-Id` 路径 `/auth/me` | ✅ `3232 / admin / admin`（both 模式双路径并存） |
+| 全量非 integration | ✅ **647 passed, 2 skipped, 24 deselected, 0 failed**（零回归） |
+
+### B3.5 待做（本批后续 commit）
+
+| Commit | 内容 | 状态 |
+|---|---|---|
+| 1 | 后端 JWT 签发 / 校验 / `AUTH_MODE` 分派 / prod 强制覆盖 | ✅ 完成（文档即本节） |
+| 2 | 前端 `stores/auth.ts` / `api/auth.ts` / `api/http.ts` 接入 token | ⏳ 待做 |
+| 3 | JWT 测试：签发、校验、过期、prod 强制覆盖、三态分派 | ⏳ 待做 |
+
+---
+
 ## Sprint 3 封板声明（2026-11-07）
 
 > **结论**：G1–G6 六个阶段全部完成，Sprint 3（角色权限与端到端闭环）达到封板标准。
@@ -1131,7 +1182,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
 | G5 | 反馈闭环 E2E | ✅ 完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测；T-05 状态码扫描并入 G6 Commit 2） |
 | G6 | 完整回归 + B 类并发 + 部署检查清单 | ✅ 完成（Commit 1–3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts` + 部署检查清单 + T-05 状态码扫描 + 封板） |
-| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② 完成，③ ④ 待做 |
+| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② 完成；批次③ 后端完成（前端/测试待做）；批次④ 待做 |
 
 > **G1–G6 全部 ✅（6/6）**，Sprint 3 封板，详见前节「Sprint 3 封板声明」。
 
@@ -1153,4 +1204,5 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G6 Commit 2 完成 | **645 passed, 2 skipped, 24 deselected, 0 failed**（+ T-05 状态码扫描用例；6 条冒烟路径全过） |
 | 遗留收尾 批次① 完成 | 645 passed, 2 skipped, 24 deselected, 0 failed（只改返回值契约，不新增用例） |
 | 遗留收尾 批次② 完成 | **647 passed, 2 skipped, 24 deselected, 0 failed**（+2 用例：gap 幂等、非 gap 类型 `knowledge_gap_ref is None`） |
+| 遗留收尾 批次③ 后端完成 | 647 passed, 2 skipped, 24 deselected, 0 failed（JWT 签发/校验接入，`both` 模式双路径并存，零回归；前端与 JWT 测试待做） |
 | **Sprint 3 封板（G6 Commit 3）** | **645 passed, 2 skipped, 24 deselected, 0 failed** + 冒烟 6/6 + `type-check` 0 errors / `build` 成功 |

@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查；原复盘顺延为 §14）
+> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT；原复盘顺延为 §15）
 
 ---
 
@@ -21,8 +21,9 @@
 11. [S3-G2-AuthBase：SQLAlchemy Session Autobegin 陷阱](#11-s3-g2-authbasesqlalchemy-session-autobegin-陷阱g3-阶段验证)
 12. [S3-LEGACY-B1：返回值契约升级的技术总结](#12-s3-legacy-b1返回值契约升级的技术总结2026-11-08)
 13. [S3-LEGACY-B2：软删除迁移与提出人反查](#13-s3-legacy-b2软删除迁移与提出人反查2026-11-08)
-14. [Sprint 3 复盘：10 大类踩坑总览](#14-sprint-3-复盘10-大类踩坑总览)
-15. [附：版本与适用范围](#15-附版本与适用范围)
+14. [S3-LEGACY-B3：用户名模式 JWT 的技术总结与风险备忘](#14-s3-legacy-b3用户名模式-jwt-的技术总结与风险备忘2026-11-08)
+15. [Sprint 3 复盘：10 大类踩坑总览](#15-sprint-3-复盘10-大类踩坑总览)
+16. [附：版本与适用范围](#16-附版本与适用范围)
 
 ---
 
@@ -1807,12 +1808,44 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 
 ---
 
-## 14. Sprint 3 复盘：10 大类踩坑总览
+## 14. S3-LEGACY-B3：用户名模式 JWT 的技术总结与风险备忘（2026-11-08）
+
+> **状态**：🟡 进行中（后端一次通过，前端与测试待做）
+> **范围**：`AUTH_MODE` 三态分派、JWT 签发/校验、prod 强制 `jwt`。后端全量 647 passed、0 failed，零回归。
+
+### 14.1 一次通过的做法
+
+1. **`get_current_user` 函数名与签名不变，只改内部实现**：`deps.py` 与全部业务路由零改动，存量 647 个测试继续走 `X-User-Id`，回归无破坏。
+2. **查库段抽成 `_resolve_user_by_id`**：header 路径与 JWT 路径共用「用户不存在 / 已禁用 → 401」的校验，避免两条路径行为漂移。
+3. **`both` 模式作为默认值**：前端与测试可分批切换；prod 由 `config.py` 的 `model_validator` 强制覆盖为 `jwt`，不依赖部署方记得改环境变量。
+4. **`payload.role` 只进日志**：业务鉴权一律用 `_resolve_user_by_id` 返回的 DB 角色（D32），避免 token 内角色与 DB 不一致时越权。
+
+### 14.2 风险备忘（用户确认，写入文档）
+
+1. **迁移期 `both` 模式下两套鉴权同时生效**：自动化测试存量用例继续使用 `X-User-Id`；上线前冒烟必须同时测 Bearer JWT 与 `X-User-Id` 两条路径。
+2. **prod 强制覆盖逻辑必须单元测试覆盖**：`APP_ENV=prod` 时无论 `AUTH_MODE` 配什么，都必须拒绝 `X-User-Id`。此用例列入批次③ Commit 3。
+3. **禁止业务代码读取 JWT payload 中的 `role` 做权限判断**：静态检查 / 代码评审卡点；`payload.role` 仅日志打印。
+4. **refresh-token 不在 Sprint 3 范围**：列为产品迭代下一阶段工作。
+
+### 14.3 后端验证结果
+
+| 验证项 | 结果 |
+|---|---|
+| `pyjwt>=2.8.0` 安装 | ✅ |
+| import 校验 | ✅ `OK both` |
+| 登录返回 token | ✅ `token_type=bearer, expires_in=28800` |
+| Bearer 路径 | ✅ 200 |
+| `X-User-Id` 路径（both） | ✅ 200 |
+| 全量非 integration | ✅ 647 passed, 2 skipped, 24 deselected, 0 failed |
+
+---
+
+## 15. Sprint 3 复盘：10 大类踩坑总览
 
 > **用途**：Sprint 3（G1–G6）共沉淀 10 篇阶段记录、约 40 个具体坑点。本节按"类别"重新归并，供 Sprint 4 开发、联调和运维按类检索，不必逐节翻。
 > **读法**：先看"一句话规则"，命中同一类现象再回原节看完整代码。
 
-### 14.1 十类总览
+### 15.1 十类总览
 
 #### ① Migration 与版本链
 
@@ -1884,7 +1917,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 - **防复发**：`finally` 先还原 mock 再恢复数据；扫描源用 `app.routes`；307/405 先当构造错误排除。
 - **原节**：§10.3、§10.5
 
-### 14.2 按现象快速定位
+### 15.2 按现象快速定位
 
 | 你看到的现象 | 先看哪类 | 具体节 |
 |---|---|---|
@@ -1901,7 +1934,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 | 测试"重试了但没测到重试" | ④ 并发 / ⑩ 替身 | §10.3 |
 | 扫描报告一堆 404 / 403 | ⑩ 工具口径 | §10.5 |
 
-### 14.3 新增坑点的登记模板
+### 15.3 新增坑点的登记模板
 
 后续遇到新坑，按同一结构追加，保证可检索、可复算：
 
@@ -1924,7 +1957,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 2. <下次如何更早发现>
 ```
 
-### 14.4 Sprint 3 交付回顾
+### 15.4 Sprint 3 交付回顾
 
 | 维度 | 结果 |
 |---|---|
@@ -1936,11 +1969,11 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 
 ---
 
-## 15. 附：版本与适用范围
+## 16. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
 - 基础设施：Docker Compose + PostgreSQL 15
 - 适用范围：Sprint 3 G2–G6 开发联调阶段（G6 于 2026-11-07 封板，基线 645 passed）
 - 配套文档：`changelog_03.md`（变更与决策）、`Sprint3_详细执行计划_V1.0.md`（计划依据）
-- 使用建议：Sprint 4 开工前先读 §14 的 10 类总览与"按现象快速定位"表；遇到新坑按 §14.3 模板登记，保持四段结构
+- 使用建议：Sprint 4 开工前先读 §15 的 10 类总览与"按现象快速定位"表；遇到新坑按 §15.3 模板登记，保持四段结构
