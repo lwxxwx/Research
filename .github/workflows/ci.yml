@@ -12,7 +12,7 @@ jobs:
 
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg15
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -70,6 +70,12 @@ jobs:
         run: |
           sleep 5
           uv run alembic upgrade head
+
+      - name: Verify migration head
+        working-directory: backend
+        run: |
+          uv run alembic current
+          uv run alembic current | grep -q "s3_b4_rule_history (head)"
 
       - name: Run backend tests (non-integration)
         working-directory: backend
