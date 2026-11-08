@@ -47,7 +47,11 @@ Invoke-WebRequest -Uri "http://localhost:3000/" -UseBasicParsing
 
 ## 六、冒烟测试（端到端）
 
-在 5173 前端开发模式下，完成以下业务闭环：
+冒烟测试需覆盖两条前端路径：
+- **开发模式 5173**（vite dev server，热更）：日常开发验证
+- **生产镜像 3000**（Dockerfile 构建产物）：上线前验证
+
+先按 5173 完成下表 6 步；上线前用 3000 再跑一次 1、2、6 步（登录 / 菜单 / 登出），确认打包制品行为一致。
 
 | # | 步骤 | 预期 |
 |---|---|---|
@@ -67,7 +71,7 @@ Invoke-WebRequest -Uri "http://localhost:3000/" -UseBasicParsing
 git push
 
 # 观察 GitHub Actions
-# - backend job：656 passed（-m "not integration"）
+# - backend job：656 passed（-m "not integration"）；若批次④ #8 合入后基线变化，以当次实际为准
 # - frontend job：npm run build 成功
 ```
 
@@ -112,3 +116,4 @@ CI 环境变量（`.github/workflows/ci.yml`）：
 - [ ] 前端 `/cases` 页面正常渲染 5 个菜单
 - [ ] 冒烟测试 6 步全过
 - [ ] GitHub Actions 全绿
+- [ ] 生产镜像 3000 端口：`http://localhost:3000/` 返回真实前端（含 `电子设计EDA原理图评审与演进系统`），`http://localhost:3000/cases` 深链返回 200
