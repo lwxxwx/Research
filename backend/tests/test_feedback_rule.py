@@ -599,3 +599,121 @@ def test_rule_candidates_invalid_status_422(client, test_admin_user):
         with get_db_session() as db:
             db.query(RuleCandidate).filter(RuleCandidate.candidate_id == cid).delete()
             db.commit()
+
+# ============================================================
+# [S3-LEGACY-B2] #5：幂等 + 非 gap 类型 ref=None
+# ============================================================
+
+def test_create_gap_from_feedback_idempotent():
+    """#5：同一 feedback_id 重复调 create_gap_from_feedback → 只生成 1 条 gap（D16 幂等）。
+
+    注意：不能走 API 连点两次（会生成两个不同 feedback_id），
+    必须直接用同一 feedback_id 调 service 两次。
+    """
+    from app.persistence.db import get_db_session
+    from app.persistence.models import FeedbackItem, GapFeedbackLink, KnowledgeGap
+    from app.services import knowledge_gap_service
+
+    with get_db_session() as db:
+        fb = FeedbackItem(
+            feedback_type="knowledge_gap",
+            expert_suggestion="[B2-IDEMPOTENT] 幂等测试",
+            suggestion_diff_json=[],
+            attached_refs=[],
+        )
+        db.add(fb)
+        db.commit()
+        feedback_id = fb.id
+
+    try:
+        with get_db_session() as db:
+            gap_id_1 = knowledge_gap_service.create_gap_from_feedback(db, feedback_id)
+            db.commit()
+        with get_db_session() as db:
+            gap_id_2 = knowledge_gap_service.create_gap_from_feedback(db, feedback_id)
+            db.commit()
+
+        assert gap_id_1 is not None
+        assert gap_id_2 == gap_id_1, f"幂等失败：第一次 {gap_id_1}，第二次 {gap_id_2}"
+
+        with get_db_session() as db:
+            link_count = (
+                db.query(GapFeedbackLink)
+                .filter(GapFeedbackLink.feedback_id == feedback_id)
+                .count()
+            )
+            gap_count = (
+                db.query(KnowledgeGap)
+                .filter(KnowledgeGap.source_feedback_id == feedback_id)
+                .count()
+            )
+        assert link_count == 1, f"gap_feedback_link 应只有 1 条，实际 {link_count}"
+        assert gap_count == 1, f"knowledge_gap 应只有 1 条，实际 {gap_count}"
+    finally:
+        with get_db_session() as db:
+            db.query(GapFeedbackLink).filter(
+                GapFeedbackLink.feedback_id == feedback_id
+            ).delete(synchronize_session=False)
+            db.query(KnowledgeGap).filter(
+                KnowledgeGap.source_feedback_id == feedback_id
+            ).delete(synchronize_session=False)
+            db.query(FeedbackItem).filter(FeedbackItem.id == feedback_id).delete(
+                synchronize_session=False
+            )
+            db.commit()
+
+
+def test_submit_feedback_non_gap_type_ref_none(client, test_admin_user):
+    """#5：非 knowledge_gap 类型（correct_defect）→ 响应 knowledge_gap_ref 为 None。"""
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import ReviewDefect, ReviewResult
+
+    tid = f"TEST-B2-{uuid.uuid4().hex[:8].upper()}"
+    did = f"D-{uuid.uuid4().hex[:8].upper()}"     # ← defect_id 全局唯一，避免撞存量
+    rr_id = None
+    with get_db_session() as db:
+        rr = ReviewResult(
+            task_id=tid,
+            task_status="done",
+            created_by=test_admin_user["id"],
+            review_output_json={"defects": [], "errors": []},
+            evidence_coverage=0.8,
+        )
+        db.add(rr)
+        db.flush()
+        rr_id = rr.id
+        rd = ReviewDefect(
+            review_result_id=rr_id,
+            defect_id=did,
+            category="other",
+            location={},
+            risk="medium",
+            confidence=0.9,
+            root_cause="r",
+            suggestion="s",
+        )
+        db.add(rd)
+        db.commit()
+
+    try:
+        resp = client.post(
+            "/api/v1/feedbacks",
+            json={
+                "task_id": tid,
+                "defect_id": did,
+                "feedback_type": "correct_defect",
+                "expert_suggestion": "[B2] 非 gap 类型",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["knowledge_gap_ref"] is None
+    finally:
+        with get_db_session() as db:
+            db.query(ReviewDefect).filter(
+                ReviewDefect.review_result_id == rr_id
+            ).delete(synchronize_session=False)
+            db.query(ReviewResult).filter(ReviewResult.task_id == tid).delete(
+                synchronize_session=False
+            )
+            db.commit()
