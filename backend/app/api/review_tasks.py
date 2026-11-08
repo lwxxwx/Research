@@ -54,19 +54,8 @@ def create_review_task(
     current: CurrentUser = Depends(require_roles(ROLE_ENGINEER, ROLE_ADMIN)),
 ) -> CreateTaskResponse:
     """创建评审任务。engineer / admin 可用。"""
-    task_id = task_service.create_task(body.case_id, created_by=current.id)
-    # TODO(G3-C): 升级 task_service.create_task 返回完整 dict 后改回 **resp
-    # 现在回查一次 get_task 拿真实状态，避免硬编码污染 G3-B IDOR 测试
-    detail = task_service.get_task(task_id)
-    if detail is None:
-        # Graph 在 feedback_save 前失败 → review_result 未落库
-        return CreateTaskResponse(task_id=task_id, status="failed", defects_count=0)
-    return CreateTaskResponse(
-        task_id=detail["task_id"],
-        status=detail["status"],
-        defects_count=detail["defects_count"],
-    )
-
+    resp = task_service.create_task(body.case_id, created_by=current.id)
+    return CreateTaskResponse(**resp)
 
 
 # ============================================================
@@ -81,10 +70,10 @@ def create_review_tasks_batch(
     items = []
     for cid in body.case_ids:
         try:
-            task_id = task_service.create_task(cid, created_by=current.id)
+            resp = task_service.create_task(cid, created_by=current.id)
             items.append({
                 "case_id": cid,
-                "task_id": task_id,                   # ← 直接用 str
+                "task_id": resp["task_id"],                # ← 直接用 str
                 "status": "success",
                 "error": None,
             })

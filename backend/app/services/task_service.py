@@ -109,7 +109,13 @@ def create_task(case_id: str, created_by: int | None = None) -> str:
         get_task 返回 None，调用方需处理
 
     :param case_id: 业务 Case 标识（如 "case001"）
-    :return: task_id（即使失败也返回，供查询错误详情）
+    :param created_by: 创建人 ID（可选）
+    :return: {
+        "task_id": str,
+        "status": str,              # done / failed / pending
+        "defects_count": int,       # 优先取 Graph parsed_defects；为空时单次查 ReviewResult 兜底
+    }
+    失败时仍返回 dict（status=failed，defects_count 取已解析缺陷数，不查库）。
     """
     task_id = _make_task_id()
     logger.info("create_task start: case_id=%s task_id=%s", case_id, task_id)
@@ -120,21 +126,36 @@ def create_task(case_id: str, created_by: int | None = None) -> str:
 
     status = final_state.get("task_status", TASK_STATUS_FAILED)
     errors = final_state.get("errors", [])
+    parsed_defects = final_state.get("parsed_defects", []) or []
+    defects_count = len(parsed_defects)
 
     if status == TASK_STATUS_FAILED:
-        logger.error(
-            "create_task failed: case_id=%s task_id=%s errors=%s",
-            case_id, task_id, errors,
-        )
+        logger.error(...)
     else:
         logger.info(
-            "create_task done: case_id=%s task_id=%s defects=%d errors=%d",
-            case_id, task_id,
-            len(final_state.get("parsed_defects", [])),
-            len(errors),
+            "create_task done: case_id=%s task_id=%s defects=%s errors=%s",
+            case_id, task_id, defects_count, len(errors),
         )
 
-    return task_id
+    # ===== [S3-LEGACY-B1] D24：parsed_defects 为空时单次查 ReviewResult 兜底 =====
+    if status != TASK_STATUS_FAILED and defects_count == 0:
+        with get_db_session() as db:
+            rr = (
+                db.query(ReviewResult)
+                .filter(ReviewResult.task_id == task_id)
+                .order_by(ReviewResult.id.desc())
+                .first()
+            )
+            if rr is not None:
+                report_json = rr.review_output_json or {}
+                defects_count = len(report_json.get("defects", []) or [])
+    # ===== [S3-LEGACY-B1 END] =====
+
+    return {
+        "task_id": task_id,
+        "status": status,
+        "defects_count": defects_count,
+    }
 
 
 # ============================================================
@@ -545,6 +566,9 @@ def get_task_defects(task_id: str, current_user=None) -> list[dict[str, Any]]:
                 #      导致 API 层无法展示"谁在什么时候做了什么判定"。
                 # 修法：只补 2 个字段，expert_decision 已有。
                 #      不改查询、不改签名，保持向后兼容。
+                #[S3-LEGACY-B1] 薄兼容层：task/defect → 外键的翻译逻辑暂留此处，
+                #实际反馈落库与规则演进由 FeedbackService 负责。逻辑迁入 feedback_service
+                #安排在后续批次（D25），本层届时改为直接转发或删除。
                 # --- 原代码（保留，已注释） ---
                 # "expert_decision": d.expert_decision,
                 # --- 原代码（保留，已注释） ---

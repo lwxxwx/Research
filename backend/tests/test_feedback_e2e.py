@@ -170,7 +170,7 @@ def _run_task_and_get_defect_id() -> tuple[str, str]:
       - create_task 内部走 6 节点 Graph，feedback_save 落库 review_result + review_defect
       - 从 get_task_defects 取第一条缺陷的 defect_id
     """
-    task_id = create_task(CASE_ID)
+    task_id = create_task(CASE_ID)["task_id"]
     task_info = get_task(task_id)
     assert task_info is not None, f"create_task 后 get_task 返回 None，task_id={task_id}"
     assert task_info["status"] == "done", (
@@ -315,7 +315,7 @@ def test_feedback_e2e_mock_not_found(mock_llm_with_one_defect):
         )
 
     # 存在的 task_id，但不存在的 defect_id
-    task_id = create_task(CASE_ID)
+    task_id = create_task(CASE_ID)["task_id"]
     with pytest.raises(FeedbackNotFoundError, match="review_defect"):
         submit_task_feedback(
             task_id=task_id,
@@ -421,7 +421,7 @@ def test_feedback_e2e_zhipu():
       2. 至少 1 条缺陷
       3. 提交 false_negative 成功，生成候选
     """
-    task_id = create_task(CASE_ID)
+    task_id = create_task(CASE_ID)["task_id"]
     task_info = get_task(task_id)
     assert task_info is not None
     assert task_info["status"] == "done", (

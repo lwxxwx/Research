@@ -48,7 +48,7 @@ def mock_llm_custom_payload(monkeypatch):
 def _run_and_get_defects(payload: dict) -> list[dict]:
     """跑一次 case001 的 Full Review，返回落库的 review_defect 列表。"""
     from app.services.task_service import create_task, get_task_defects
-    tid = create_task("case001")
+    tid = create_task("case001")["task_id"]
     return get_task_defects(tid)
 
 
@@ -383,7 +383,7 @@ def test_list_tasks_filtered_by_review_status():
     from app.services.task_service import create_task, list_tasks_filtered
 
     # 确保有数据
-    create_task("case001")
+    create_task("case001")["task_id"]
 
     # 过滤 AI_CONFIRMED
     result = list_tasks_filtered(review_status="AI_CONFIRMED", limit=100)
@@ -409,8 +409,8 @@ def test_list_tasks_filtered_by_case_class():
     from app.services.task_service import create_task, list_tasks_filtered
 
     # 确保 A/B 都有数据
-    create_task("case001")                                # A 类
-    create_task("case_b01_buck_thermal_derating_B")       # B 类
+    create_task("case001")["task_id"]                                # A 类
+    create_task("case_b01_buck_thermal_derating_B")["task_id"]        # B 类
 
     # A 类过滤
     result_a = list_tasks_filtered(case_class="A", limit=100)
@@ -438,8 +438,8 @@ def test_list_tasks_filtered_pagination():
     from app.services.task_service import create_task, list_tasks_filtered
 
     # 确保至少 2 条任务
-    create_task("case001")
-    create_task("case001")
+    create_task("case001")["task_id"]
+    create_task("case001")["task_id"]
 
     # 全量
     full = list_tasks_filtered(limit=100, offset=0)

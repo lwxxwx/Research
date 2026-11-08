@@ -218,7 +218,7 @@ def _run_demo_flow(out_dir: Path) -> dict:
     :return: {"task_id": str, "defect_id": str, "candidate_ref": str}
     """
     # ========== Step 1: 创建任务，跑真实 Graph ==========
-    task_id = create_task(CASE_ID)
+    task_id = create_task(CASE_ID)["task_id"]
     task_info = get_task(task_id)
     assert task_info is not None, f"create_task 后 get_task 返回 None，task_id={task_id}"
     assert task_info["status"] == "done", (
