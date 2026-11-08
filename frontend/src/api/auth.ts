@@ -1,11 +1,13 @@
 // frontend/src/api/auth.ts
-// Sprint 3 G4：登录 / 当前用户 / 登出
 import { request } from "./http";
 
 export interface LoginResponse {
   user_id: number;
   username: string;
   role: string;
+  access_token: string | null;      // ← 新增
+  token_type: string;               // ← 新增
+  expires_in: number;               // ← 新增
 }
 
 export interface AuthMeResponse {

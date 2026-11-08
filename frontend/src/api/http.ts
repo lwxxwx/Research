@@ -2,6 +2,7 @@
 // ============================================================
 // HTTP 请求封装（带超时、错误处理、开发环境日志）
 // Sprint 3 G4：注入 X-User-Id；401 清身份跳登录；403 抛专用异常
+// Sprint 3 legacy B3：Bearer JWT 优先，回退 X-User-Id
 // ============================================================
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
@@ -9,6 +10,7 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 
 export const TIMEOUT_ERROR = "TIMEOUT";
 export const USER_ID_STORAGE_KEY = "user_id";
+export const ACCESS_TOKEN_STORAGE_KEY = "access_token";
 
 /** 403：已认证但权限不足（页面级提示，不跳登录） */
 export class PermissionDeniedError extends Error {
@@ -34,10 +36,19 @@ function getStoredUserId(): string | null {
   }
 }
 
+function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 function handleUnauthorized(): void {
-  // 清身份：只清 user_id（role 本来就不在 localStorage）
+  // 清身份：user_id + access_token 同时清
   try {
     localStorage.removeItem(USER_ID_STORAGE_KEY);
+    localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
   } catch {
     /* ignore */
   }
@@ -71,7 +82,6 @@ export async function request<T>(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  // ===== 动态处理 Content-Type =====
   const headers: Record<string, string> = {
     ...((options.headers as Record<string, string>) || {}),
   };
@@ -79,12 +89,17 @@ export async function request<T>(
     headers["Content-Type"] = "application/json";
   }
 
-  // ===== [S3-G4] 注入 X-User-Id（登录后 localStorage 有值才注入）=====
-  const storedUserId = getStoredUserId();
-  if (storedUserId && !headers["X-User-Id"]) {
-    headers["X-User-Id"] = storedUserId;
+  // ===== [S3-LEGACY-B3] 鉴权头注入：Bearer 优先，回退 X-User-Id =====
+  const token = getStoredToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  } else {
+    const storedUserId = getStoredUserId();
+    if (storedUserId && !headers["X-User-Id"]) {
+      headers["X-User-Id"] = storedUserId;
+    }
   }
-  // ===== [S3-G4 END] =====
+  // ===== [S3-LEGACY-B3 END] =====
 
   try {
     const response = await fetch(url, {
@@ -109,7 +124,6 @@ export async function request<T>(
 
       console.error(`[API 失败] ${method} ${url} - 耗时: ${duration}ms - 错误:`, detail);
 
-      // ===== [S3-G4] 401 / 403 区分 =====
       if (response.status === 401) {
         handleUnauthorized();
         throw new UnauthorizedError(detail);
@@ -117,9 +131,7 @@ export async function request<T>(
       if (response.status === 403) {
         throw new PermissionDeniedError(detail);
       }
-      // 404 / 422 / 500 保持原样
       throw new Error(detail);
-      // ===== [S3-G4 END] =====
     }
 
     if (response.status === 204) return undefined as T;
