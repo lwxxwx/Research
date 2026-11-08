@@ -110,6 +110,7 @@ CI 环境变量（`.github/workflows/ci.yml`）：
 | 前端 401 跳登录死循环 | `http.ts` 的 `handleUnauthorized` 已加 `window.location.pathname !== "/login"` 防重复 |
 | 前端 403 跳 `/403` 页 | `router/index.ts` 的 `beforeEach` 已处理；检查 `meta.roles` 配置 |
 | `docker compose build frontend` 报 `dial tcp [2a03:2880:...]` | Docker Hub IPv6 不通；用 `docker.1ms.run` 反代 pull + tag 后重试，或配 Docker Desktop 代理 / registry mirror |
+| GitHub Actions 报 `scripts 模块导入失败` 或 401 | 检查 `ci.yml` 的 `PYTHONPATH` 是否包含 `${{ github.workspace }}`；检查测试里是否有硬编码 admin id（改为 `test_admin_user` fixture） |
 
 ## 八点五、规则回滚操作
 

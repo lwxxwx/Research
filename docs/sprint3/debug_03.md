@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈后端 + 前端 + 测试〉、§15 S3-LEGACY-B4 Nginx 前端镜像化与规则回滚；原复盘顺延为 §16）
+> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈后端 + 前端 + 测试〉、§15 S3-LEGACY-B4 Nginx 前端镜像化与规则回滚（含 15.9 CI 环境适配）；原复盘顺延为 §16）
 
 ---
 
@@ -1899,7 +1899,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 
 ## 15. S3-LEGACY-B4：Nginx 前端镜像化与规则回滚（2026-11-08）
 
-> **状态**：✅ 已完成（#10 Nginx COPY dist、#8 规则回滚）
+> **状态**：✅ 已完成（#10 Nginx COPY dist、#8 规则回滚、CI 环境适配）
 > **范围**：`frontend/Dockerfile` 多阶段构建、三份 compose 改造；`rule_definition_history` 版本表、`rollback_rule()`、`rollback_rule.py` CLI、`verify_migration.py` 迁移验证工具。
 
 ### 15.1 坑：Docker Hub `node:20-alpine` 拉取超时（IPv6 不通）
@@ -2039,7 +2039,37 @@ docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/d
 
 与命令行手动验证的关系：脚本是手动 9 条命令的封装，结果等价；日常回归用脚本，排查问题用命令行逐步看。
 
-### 15.9 批次④剩余
+### 15.9 CI 环境适配（封板后修复）
+
+**现象**：推送到远端后，GitHub Actions 的 backend job 报 10 个测试失败。
+
+**归类与根因**：
+
+1. **`scripts` 模块导入失败（6 个用例）**：`test_admin_lock.py` B1–B4、`test_rollback_rule_cli_refuse_exit_1`。本地在容器里通过 `PYTHONPATH=/app:/` 能 `import scripts`，CI 的 pytest 环境没带这个路径。
+2. **子进程脚本路径硬编码（4 个用例）**：`test_bootstrap_admin.py` 写死了 `/scripts/bootstrap_admin.py`（容器内路径），CI 宿主机没有 `/scripts`。
+3. **硬编码 admin ID（1 个用例）**：`test_feedback_e2e_mock_knowledge_gap_generates_gap` 硬编码 `X-User-Id: 3232`，CI 的库是新的，没这个用户，触发 401。
+
+**修复**：
+
+- **`ci.yml` 加 `PYTHONPATH`**：`env: PYTHONPATH: ${{ github.workspace }}` 让仓库根进 `sys.path`，解决 `import scripts`。
+- **`test_bootstrap_admin.py` 双分支路径**：`_bootstrap_script_path()` 先判容器内 `/scripts` 存在，否则用 `Path(__file__).parents[2]/scripts`，解决宿主机执行路径找不到。
+- **`test_feedback_e2e.py` 动态 ID**：弃用硬编码 `3232`，改用 `test_admin_user` fixture，消除对本地固定数据的依赖。
+
+**教训**：
+
+1. **本地全绿 ≠ CI 全绿**：依赖容器挂载路径（`/scripts`）、固定主键（`id=3232`）、特定环境变量（`PYTHONPATH`）的测试，在独立 CI runner 上必然失败。开发环境与 CI 环境的差异，必须在推代码前主动核对。
+2. **子进程调用的路径用 `Path(__file__)` 推导**：不能硬编码宿主机/容器内的绝对路径，应基于测试文件相对位置定位仓库根。
+3. **测试数据不硬编码 ID**：使用 fixture 动态创建用户并获取 ID，或从环境变量读取。在接入 JWT（D30）后，ID 更不可能是固定值。
+
+**验收结果**：
+
+| 项 | 结果 |
+|---|---|
+| 容器内受影响三组测试 | ✅ 19 passed, 1 skipped |
+| GitHub Actions backend job | ✅ 661 passed, 2 skipped, 24 deselected |
+| GitHub Actions frontend job | ✅ `type-check` 0 errors + `build` 成功 |
+
+### 15.10 批次④剩余
 
 #10、#8 已完成；#9 vLLM 按用户决定继续占位（只写文档，不改代码）。批次④在本节收尾后即可封板，随后执行 `git push -u origin feature/sprint3-rbac` 触发 CI。
 
