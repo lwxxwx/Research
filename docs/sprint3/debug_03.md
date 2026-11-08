@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈后端 + 前端 + 测试〉；原复盘顺延为 §15）
+> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈后端 + 前端 + 测试〉、§15 S3-LEGACY-B4 Nginx 前端镜像化；原复盘顺延为 §16）
 
 ---
 
@@ -22,8 +22,9 @@
 12. [S3-LEGACY-B1：返回值契约升级的技术总结](#12-s3-legacy-b1返回值契约升级的技术总结2026-11-08)
 13. [S3-LEGACY-B2：软删除迁移与提出人反查](#13-s3-legacy-b2软删除迁移与提出人反查2026-11-08)
 14. [S3-LEGACY-B3：用户名模式 JWT 的技术总结与风险备忘](#14-s3-legacy-b3用户名模式-jwt-的技术总结与风险备忘2026-11-08)
-15. [Sprint 3 复盘：10 大类踩坑总览](#15-sprint-3-复盘10-大类踩坑总览)
-16. [附：版本与适用范围](#16-附版本与适用范围)
+15. [S3-LEGACY-B4：Nginx 前端镜像化的构建环境坑](#15-s3-legacy-b4nginx-前端镜像化的构建环境坑2026-11-08)
+16. [Sprint 3 复盘：10 大类踩坑总览](#16-sprint-3-复盘10-大类踩坑总览)
+17. [附：版本与适用范围](#17-附版本与适用范围)
 
 ---
 
@@ -1896,12 +1897,59 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 
 ---
 
-## 15. Sprint 3 复盘：10 大类踩坑总览
+## 15. S3-LEGACY-B4：Nginx 前端镜像化的构建环境坑（2026-11-08）
+
+> **状态**：✅ 已完成（#10 Nginx COPY dist）
+> **范围**：`frontend/Dockerfile` 多阶段构建、三份 compose 改造。
+
+### 15.1 坑：Docker Hub `node:20-alpine` 拉取超时（IPv6 不通）
+
+**现象**：
+
+`docker compose build frontend` 报：
+
+```text
+failed to fetch anonymous token: Get "https://auth.docker.io/token?...":
+dial tcp [2a03:2880:f134:183:face:b00c:0:25de]:443: connectex: A connection attempt failed...
+```
+
+**根因**：
+
+Docker Hub 返回 IPv6 地址（`2a03:2880:...`），本机网络 IPv6 不通，BuildKit 又优先走 IPv6，导致拉取 `node:20-alpine` 基础镜像超时。与 Dockerfile / compose 改动无关。
+
+**修复**：
+
+用国内反代拉取后 tag 成官方名，让构建命中本地缓存：
+
+```powershell
+docker pull docker.1ms.run/library/node:20-alpine
+docker tag docker.1ms.run/library/node:20-alpine node:20-alpine
+docker compose -f "$PWD/infra/docker/docker-compose.yml" -f "$PWD/infra/docker/docker-compose.dev.yml" build frontend
+```
+
+**教训**：
+
+1. **Dockerfile 不写镜像域名**：反代域名只用于 `docker pull` + `docker tag` 的本地准备，写进 `FROM` 会让生产 / CI 在无法访问该域名时构建失败。
+2. **BuildKit 优先 IPv6 是 Windows 上的常见坑**：报错里出现 `2a03:2880:` 这类地址基本可判定为 IPv6 超时，优先用反代 + tag 绕过，或给 Docker Desktop 配代理 / registry mirror（治本）。
+3. **验证前端镜像产物要用容器内 `cat` 或 `curl.exe`**：PowerShell 5.1 的 `Invoke-WebRequest` + `Select-String` 对 UTF-8 中文会显示乱码导致匹配不到，不代表页面内容错。本次 `exec frontend cat /usr/share/nginx/html/index.html` 确认标题正确，`/cases` 返回 200 确认 SPA fallback 生效。
+
+### 15.2 验证结果
+
+| 项 | 结果 |
+|---|---|
+| `build frontend` | ✅ |
+| 容器内 `index.html` 标题 | ✅ `电子设计EDA原理图评审与演进系统 · Sprint 1` |
+| `assets/` | ✅ 20 个 G4 打包产物 |
+| `/cases` 深链 | ✅ 200 |
+
+---
+
+## 16. Sprint 3 复盘：10 大类踩坑总览
 
 > **用途**：Sprint 3（G1–G6）共沉淀 10 篇阶段记录、约 40 个具体坑点。本节按"类别"重新归并，供 Sprint 4 开发、联调和运维按类检索，不必逐节翻。
 > **读法**：先看"一句话规则"，命中同一类现象再回原节看完整代码。
 
-### 15.1 十类总览
+### 16.1 十类总览
 
 #### ① Migration 与版本链
 
@@ -1973,7 +2021,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 - **防复发**：`finally` 先还原 mock 再恢复数据；扫描源用 `app.routes`；307/405 先当构造错误排除。
 - **原节**：§10.3、§10.5
 
-### 15.2 按现象快速定位
+### 16.2 按现象快速定位
 
 | 你看到的现象 | 先看哪类 | 具体节 |
 |---|---|---|
@@ -1990,7 +2038,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 | 测试"重试了但没测到重试" | ④ 并发 / ⑩ 替身 | §10.3 |
 | 扫描报告一堆 404 / 403 | ⑩ 工具口径 | §10.5 |
 
-### 15.3 新增坑点的登记模板
+### 16.3 新增坑点的登记模板
 
 后续遇到新坑，按同一结构追加，保证可检索、可复算：
 
@@ -2013,7 +2061,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 2. <下次如何更早发现>
 ```
 
-### 15.4 Sprint 3 交付回顾
+### 16.4 Sprint 3 交付回顾
 
 | 维度 | 结果 |
 |---|---|
@@ -2025,11 +2073,12 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 
 ---
 
-## 16. 附：版本与适用范围
+## 17. 附：版本与适用范围
 
 - 前端：Vue 3 + Vite 5 + TypeScript
 - 后端：FastAPI + Pydantic + uv
 - 基础设施：Docker Compose + PostgreSQL 15
 - 适用范围：Sprint 3 G2–G6 开发联调阶段（G6 于 2026-11-07 封板，基线 645 passed）
 - 配套文档：`changelog_03.md`（变更与决策）、`Sprint3_详细执行计划_V1.0.md`（计划依据）
-- 使用建议：Sprint 4 开工前先读 §15 的 10 类总览与"按现象快速定位"表；遇到新坑按 §15.3 模板登记，保持四段结构；测试时注意重试机制。
+- 使用建议：Sprint 4 开工前先读 §16 的 10 类总览与"按现象快速定位"表；遇到新坑按 §16.3 模板登记，保持四段结构；
+  若需调试，参考 §16.2 按现象快速定位。

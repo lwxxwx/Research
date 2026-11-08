@@ -3,7 +3,7 @@
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
 > 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 完成（Commit 1–3；T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）✅ 完成（Commit 1–3，**Sprint 3 封板**）
-> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（Commit 1/2/3 全部完成）；全量基线 645 → 656）
+> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（Commit 1/2/3 全部完成）、批次④ 工程与运维（#10 完成）；全量基线 645 → 656）
 
 ---
 
@@ -1175,6 +1175,40 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 
 ---
 
+## 遗留项收尾·批次④：工程与运维（2026-11-08）
+
+> 状态：🟡 进行中（#10 Nginx COPY dist 完成；#8 `rollback_rule.py` 与 #9 vLLM 待做）
+
+### B4.1 #10 Nginx 前端镜像（D23 落地）
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `frontend/Dockerfile`（新建） | 多阶段构建：`node:20-alpine` 跑 `npm ci && npm run build` → `nginx:alpine` 执行 `COPY dist`；`default.conf` 用 `try_files` 做 SPA 深链回退 |
+| 2 | `frontend/.dockerignore`（新建） | 排除 `node_modules` / `dist` / `.git`，缩小构建上下文 |
+| 3 | `infra/docker/docker-compose.yml` | `frontend` 从 `image: nginx:alpine` + placeholder 挂载改为 `build: ../../frontend` + `image: schematic-review-frontend:${TAG:-latest}`；服务注释更新 |
+| 4 | `infra/docker/docker-compose.dev.yml` | 删除注释掉的 `- ../../frontend/dist:/usr/share/nginx/html:ro` 段 |
+| 5 | `infra/docker/docker-compose.prod.yml` | 过期注释更新为「镜像由 `frontend/Dockerfile` 构建，COPY dist 进 Nginx」 |
+
+**范围边界**：本地开发继续用 5173（vite dev server 热更）；3000 仅用于验证生产打包制品。`frontend-placeholder/` 目录保留不删（不再被引用，注释说明已废弃）。
+
+**验收证据**：
+
+| 项 | 结果 |
+|---|---|
+| `docker compose build frontend` | ✅ 构建成功 |
+| 容器内 `/usr/share/nginx/html` | ✅ `index.html` + `assets/`（G4 打包产物） |
+| `index.html` 标题 | ✅ `电子设计EDA原理图评审与演进系统 · Sprint 1` |
+| `http://localhost:3000/cases` 深链 | ✅ 200（SPA fallback 生效） |
+
+**构建环境说明**：本机 Docker Hub 的 `node:20-alpine` 拉取超时，改用 `docker.1ms.run` 反代 `docker pull` + `docker tag` 成官方名后构建成功；Dockerfile 不写镜像域名，避免生产/CI 环境不可达（详见 debug §15）。
+
+### B4.2 #8 `rollback_rule.py` 与 #9 vLLM（待做）
+
+- **#8**：用户确认方案 1（`rule_definition_history` 版本表）+ 甲（逻辑进 `rule_evolution_service.rollback_rule()`，CLI 薄壳，测试进 `test_feedback_rule.py`）。待做。
+- **#9**：用户确认继续占位、本期不解决；本批只写文档记录占位状态与启用四步骤，不改代码。待做。
+
+---
+
 ## Sprint 3 封板声明（2026-11-07）
 
 > **结论**：G1–G6 六个阶段全部完成，Sprint 3（角色权限与端到端闭环）达到封板标准。
@@ -1232,7 +1266,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
 | G5 | 反馈闭环 E2E | ✅ 完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测；T-05 状态码扫描并入 G6 Commit 2） |
 | G6 | 完整回归 + B 类并发 + 部署检查清单 | ✅ 完成（Commit 1–3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts` + 部署检查清单 + T-05 状态码扫描 + 封板） |
-| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② ③ 完成；批次④ 待做 |
+| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② ③ 完成；批次④ 进行中（#10 完成，#8/#9 待做） |
 
 > **G1–G6 全部 ✅（6/6）**，Sprint 3 封板，详见前节「Sprint 3 封板声明」。
 
