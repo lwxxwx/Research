@@ -285,6 +285,9 @@ class FeedbackItem(Base):
     attached_refs: Mapped[List[Dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
     created_by: Mapped[Optional[int]] = mapped_column(BigInteger, ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), server_default=text("NOW()"))
+    is_deleted: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     # 关系
     review_result: Mapped[Optional["ReviewResult"]] = relationship(back_populates="feedbacks")
     defect: Mapped[Optional["ReviewDefect"]] = relationship(back_populates="feedbacks")
