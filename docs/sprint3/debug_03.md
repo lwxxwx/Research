@@ -2,7 +2,7 @@
 
 > **用途**：沉淀 Sprint 3 开发过程中遇到的典型 Bug、环境问题及排查思路，供后续开发、联调及运维部署参考。
 > **归档日期**：2026-11-03
-> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT；原复盘顺延为 §15）
+> **最后更新**：2026-11-08（新增 §12 S3-LEGACY-B1 返回值契约升级、§13 S3-LEGACY-B2 软删除迁移与提出人反查、§14 S3-LEGACY-B3 用户名模式 JWT〈含前端 token 接入〉；原复盘顺延为 §15）
 
 ---
 
@@ -1810,7 +1810,7 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 
 ## 14. S3-LEGACY-B3：用户名模式 JWT 的技术总结与风险备忘（2026-11-08）
 
-> **状态**：🟡 进行中（后端一次通过，前端与测试待做）
+> **状态**：🟡 进行中（后端一次通过；前端接入已完成，JWT 测试待做）
 > **范围**：`AUTH_MODE` 三态分派、JWT 签发/校验、prod 强制 `jwt`。后端全量 647 passed、0 failed，零回归。
 
 ### 14.1 一次通过的做法
@@ -1837,6 +1837,39 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 | Bearer 路径 | ✅ 200 |
 | `X-User-Id` 路径（both） | ✅ 200 |
 | 全量非 integration | ✅ 647 passed, 2 skipped, 24 deselected, 0 failed |
+
+---
+
+### 14.4 前端 token 接入（Commit 2）
+
+**做法**：
+
+1. **token 与 `user_id` 并列存 `localStorage`**：`access_token` 只用于注入请求头，`role` 仍只存 Pinia 内存（R8 不变）。
+2. **请求头注入顺序：Bearer 优先、回退 `X-User-Id`**：与后端 `AUTH_MODE=both` 的分派一致，前后端迁移期行为对称。
+3. **`handleUnauthorized` 一次清两个 key**：`user_id` + `access_token` 同时清，避免「token 清了 user_id 没清」导致 `bootstrap()` 仍发请求。
+
+**初次改错的地方（已修正）**：
+
+- 注入段误写在 `request()` 函数外，`headers` 在该作用域不存在；
+- `ACCESS_TOKEN_STORAGE_KEY` 定义在文件末尾，`handleUnauthorized` 在前部使用，触发 `const` 暂时性死区；
+- `handleUnauthorized` 里清理逻辑写了两遍（原有 + 新增），且新增块在 `window.location.href` 之后，跳转后不保证执行。
+
+**修正方式**：常量上移与 `USER_ID_STORAGE_KEY` 并列；注入段放回 `request()` 内替换原 `[S3-G4]` 块；`handleUnauthorized` 合并为一次清理再跳转。
+
+**教训**：
+
+1. `const` 常量必须在首次引用前定义，文件末尾定义 + 前部使用 = 运行时 `ReferenceError`，TS 不一定报错。
+2. 改函数内逻辑时，先确认落点在函数体内，不要贴到文件末尾。
+3. 清理逻辑「跳转前 vs 跳转后」语义不同：`window.location.href` 之后不保证继续执行，清理必须放跳转前。
+
+**验证结果**：
+
+| 项 | 结果 |
+|---|---|
+| `type-check` / `build` | ✅ 0 errors / 成功 |
+| 登录后请求头 | ✅ Bearer |
+| 刷新后 token 恢复 | ✅ |
+| 全量非 integration | ✅ 647 passed |
 
 ---
 
@@ -1976,4 +2009,4 @@ sqlalchemy.exc.IntegrityError: duplicate key value violates unique constraint
 - 基础设施：Docker Compose + PostgreSQL 15
 - 适用范围：Sprint 3 G2–G6 开发联调阶段（G6 于 2026-11-07 封板，基线 645 passed）
 - 配套文档：`changelog_03.md`（变更与决策）、`Sprint3_详细执行计划_V1.0.md`（计划依据）
-- 使用建议：Sprint 4 开工前先读 §15 的 10 类总览与"按现象快速定位"表；遇到新坑按 §15.3 模板登记，保持四段结构
+- 使用建议：Sprint 4 开工前先读 §15 的 10 类总览与"按现象快速定位"表；遇到新坑按 §15.3 模板登记，保持四段结构；测试时注意重试机制。

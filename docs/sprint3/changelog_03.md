@@ -3,7 +3,7 @@
 > 起始：2026-11-03
 > 依据：`Sprint3_详细执行计划_V1.0.md`（最终定稿）
 > 阶段：G1（方案评审）✅ 完成，G2（Migration + auth 底座）✅ 完成，G3-A（业务路由挂鉴权）✅ 全部批次完成，G3-C（审计字段后端注入）✅ 完成，G3-B（对象级数据范围 + IDOR 防护）✅ 完成，G3-D（负向安全测试补全 + G3 封板）✅ 完成，G4（前端登录 + 路由守卫 + 菜单权限）✅ 完成，G5（反馈闭环 E2E — 知识缺口生成链路）✅ 完成（Commit 1–3；T-05 状态码扫描并入 G6 Commit 2），G6（完整回归 + B 类并发测试 + 部署检查清单）✅ 完成（Commit 1–3，**Sprint 3 封板**）
-> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（后端已完成）；全量基线 645 → 647）
+> 最后更新：2026-11-08（新增「遗留项收尾」批次① 代码契约 D24/D25、批次② 数据与审计 D26–D29、批次③ 安全身份 D30–D32（Commit 1 后端 + Commit 2 前端已完成，浏览器手测通过）；全量基线 645 → 647）
 
 ---
 
@@ -1076,7 +1076,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 
 ## 遗留项收尾·批次③：安全身份（JWT）（2026-11-08）
 
-> 状态：🟡 进行中（后端 JWT 签发/校验完成，前端改造与测试待做）
+> 状态：🟡 进行中（Commit 1 后端 JWT、Commit 2 前端接入已完成，JWT 测试待做）
 > 范围：#6 用户名模式 JWT。**不加 `password_hash`、不实现密码登录**，账号密码登录记为后续需求。
 
 ### B3.1 新增技术决策 D30–D32
@@ -1115,13 +1115,36 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | `X-User-Id` 路径 `/auth/me` | ✅ `3232 / admin / admin`（both 模式双路径并存） |
 | 全量非 integration | ✅ **647 passed, 2 skipped, 24 deselected, 0 failed**（零回归） |
 
-### B3.5 待做（本批后续 commit）
+### B3.5 交付进度
 
 | Commit | 内容 | 状态 |
 |---|---|---|
-| 1 | 后端 JWT 签发 / 校验 / `AUTH_MODE` 分派 / prod 强制覆盖 | ✅ 完成（文档即本节） |
-| 2 | 前端 `stores/auth.ts` / `api/auth.ts` / `api/http.ts` 接入 token | ⏳ 待做 |
+| 1 | 后端 JWT 签发 / 校验 / `AUTH_MODE` 分派 / prod 强制覆盖 | ✅ 完成 |
+| 2 | 前端 `stores/auth.ts` / `api/auth.ts` / `api/http.ts` 接入 token | ✅ 完成 |
 | 3 | JWT 测试：签发、校验、过期、prod 强制覆盖、三态分派 | ⏳ 待做 |
+
+### B3.6 前端交付清单（Commit 2）
+
+| # | 文件 | 改动 |
+|---|---|---|
+| 1 | `frontend/src/api/auth.ts` | `LoginResponse` 加 `access_token` / `token_type` / `expires_in` |
+| 2 | `frontend/src/stores/auth.ts` | 新增 `ACCESS_TOKEN_STORAGE_KEY`、`setToken()`；`login()` 存 token；`clear()` / `setUser(null)` 清 token；`bootstrap()` 依赖 token 存在 |
+| 3 | `frontend/src/api/http.ts` | 常量 `ACCESS_TOKEN_STORAGE_KEY` 上移；新增 `getStoredToken()`；请求头注入改为 **Bearer 优先、回退 `X-User-Id`**；`handleUnauthorized()` 合并为一次清理（`user_id` + `access_token`）后跳登录 |
+
+**前端验收证据**：
+
+| 项 | 结果 |
+|---|---|
+| `npm run type-check` | ✅ 0 errors |
+| `npm run build` | ✅ 1996 modules transformed |
+| 登录后请求头 | ✅ `Authorization: Bearer <jwt>` |
+| 刷新页面 | ✅ token 从 localStorage 恢复，请求头持续携带 Bearer |
+| 全量非 integration | ✅ 647 passed, 0 failed（前端改动不影响后端） |
+
+> 浏览器手测（`localhost:5173`）：
+> 1. admin 登录 → Network 中 `GET /api/v1/auth/me` 的 **Request Headers** 携带 `Authorization: Bearer <jwt>`（`POST /auth/login` 的响应体在 Preview 中看，含 `access_token` / `token_type: bearer` / `expires_in: 28800`）。
+> 2. F5 刷新 → localStorage 中 `user_id` 与 `access_token` 仍在，`/auth/me` 继续携带 Bearer，会话保持。
+> 3. 退出 → localStorage 的 `user_id` 与 `access_token` 同时清空，跳回 `/login?redirect=...`。
 
 ---
 
@@ -1182,7 +1205,7 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G4 | 前端登录 + 路由守卫 + 菜单权限 | ✅ 完成 |
 | G5 | 反馈闭环 E2E | ✅ 完成（Commit 1–3：生成函数 + ID 生成器 + `_dispatch_evolution` 接线 + 三层 DTO 透传 + E2E/负向补测；T-05 状态码扫描并入 G6 Commit 2） |
 | G6 | 完整回归 + B 类并发 + 部署检查清单 | ✅ 完成（Commit 1–3：B 类并发测试 + `bootstrap_admin.py` 重试 + `vite-env.d.ts` + 部署检查清单 + T-05 状态码扫描 + 封板） |
-| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② 完成；批次③ 后端完成（前端/测试待做）；批次④ 待做 |
+| 遗留项收尾 | #1–#10 十项收尾：批次① 代码契约（#1/#2）、批次② 数据与审计（#3/#4/#5/#7）、批次③ 安全身份（#6）、批次④ 工程/运维（#8/#9/#10） | 🟡 批次① ② 完成；批次③ Commit 1、2 完成（JWT 测试待做）；批次④ 待做 |
 
 > **G1–G6 全部 ✅（6/6）**，Sprint 3 封板，详见前节「Sprint 3 封板声明」。
 
@@ -1204,5 +1227,6 @@ G5 必须补实现（判定为情况 B，按 Sprint3 §10 判定规则）。
 | G6 Commit 2 完成 | **645 passed, 2 skipped, 24 deselected, 0 failed**（+ T-05 状态码扫描用例；6 条冒烟路径全过） |
 | 遗留收尾 批次① 完成 | 645 passed, 2 skipped, 24 deselected, 0 failed（只改返回值契约，不新增用例） |
 | 遗留收尾 批次② 完成 | **647 passed, 2 skipped, 24 deselected, 0 failed**（+2 用例：gap 幂等、非 gap 类型 `knowledge_gap_ref is None`） |
-| 遗留收尾 批次③ 后端完成 | 647 passed, 2 skipped, 24 deselected, 0 failed（JWT 签发/校验接入，`both` 模式双路径并存，零回归；前端与 JWT 测试待做） |
+| 遗留收尾 批次③ Commit 1 完成 | 647 passed, 2 skipped, 24 deselected, 0 failed（JWT 签发/校验接入，`both` 模式双路径并存，零回归） |
+| 遗留收尾 批次③ Commit 2 完成 | 647 passed, 0 failed（前端接入 token：`type-check` 0 errors、`build` 成功、浏览器手测 Bearer 注入与刷新恢复通过） |
 | **Sprint 3 封板（G6 Commit 3）** | **645 passed, 2 skipped, 24 deselected, 0 failed** + 冒烟 6/6 + `type-check` 0 errors / `build` 成功 |
