@@ -717,3 +717,195 @@ def test_submit_feedback_non_gap_type_ref_none(client, test_admin_user):
                 synchronize_session=False
             )
             db.commit()
+
+# ============================================================
+# [S3-LEGACY-B4] #8 rule rollback
+# ============================================================
+
+def _make_rule_with_history(version_current: str, version_target: str):
+    """造一条 rule_definition + 一条 history 目标版本，返回 rule_id。"""
+    import uuid
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+
+    rule_id = f"RULE-B4-{uuid.uuid4().hex[:8].upper()}"
+    with get_db_session() as db:
+        db.add(RuleDefinition(
+            rule_id=rule_id,
+            rule_name="current",
+            rule_category="other",
+            rule_yaml="rule_id: x\nversion: " + version_current,
+            severity="medium",
+            enabled=True,
+            version=version_current,
+        ))
+        db.add(RuleDefinitionHistory(
+            rule_id=rule_id,
+            version=version_target,
+            rule_name="target",
+            rule_category="other",
+            rule_yaml="rule_id: x\nversion: " + version_target,
+            severity="medium",
+            enabled=True,
+            change_source="publish",
+        ))
+        db.commit()
+    return rule_id
+
+
+def _cleanup_rule(rule_id: str) -> None:
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    with get_db_session() as db:
+        db.query(RuleDefinitionHistory).filter(
+            RuleDefinitionHistory.rule_id == rule_id
+        ).delete(synchronize_session=False)
+        db.query(RuleDefinition).filter(
+            RuleDefinition.rule_id == rule_id
+        ).delete(synchronize_session=False)
+        db.commit()
+
+
+def test_rollback_rule_success():
+    """回滚成功：主表内容/版本变目标值，history 新增 rollback 来源一条。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    from app.services.rule_evolution_service import RuleEvolutionService
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        svc = RuleEvolutionService()
+        with get_db_session() as db:
+            result = svc.rollback_rule(db, rule_id, "v1.0")
+        assert result is not None
+        assert result["from_version"] == "v2.0"
+        assert result["to_version"] == "v1.0"
+        with get_db_session() as db:
+            rd = db.query(RuleDefinition).filter(RuleDefinition.rule_id == rule_id).first()
+            assert rd.version == "v1.0"
+            assert rd.rule_name == "target"
+            rollback_rows = (
+                db.query(RuleDefinitionHistory)
+                .filter(
+                    RuleDefinitionHistory.rule_id == rule_id,
+                    RuleDefinitionHistory.change_source == "rollback",
+                )
+                .count()
+            )
+            assert rollback_rows == 1
+    finally:
+        _cleanup_rule(rule_id)
+
+
+def test_rollback_rule_target_not_found():
+    """目标版本不存在：返回 None，主表不变，history 无新增。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    from app.services.rule_evolution_service import RuleEvolutionService
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        svc = RuleEvolutionService()
+        with get_db_session() as db:
+            before = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+            result = svc.rollback_rule(db, rule_id, "v9.9")
+        assert result is None
+        with get_db_session() as db:
+            rd = db.query(RuleDefinition).filter(RuleDefinition.rule_id == rule_id).first()
+            assert rd.version == "v2.0"
+            after = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+            assert after == before
+    finally:
+        _cleanup_rule(rule_id)
+
+
+def test_rollback_rule_dry_run_no_write():
+    """dry_run=True：只校验，主表与 history 均无变化。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    from app.services.rule_evolution_service import RuleEvolutionService
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        svc = RuleEvolutionService()
+        with get_db_session() as db:
+            before = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+            result = svc.rollback_rule(db, rule_id, "v1.0", dry_run=True)
+        assert result is not None
+        assert result["dry_run"] is True
+        with get_db_session() as db:
+            rd = db.query(RuleDefinition).filter(RuleDefinition.rule_id == rule_id).first()
+            assert rd.version == "v2.0"
+            after = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+            assert after == before
+    finally:
+        _cleanup_rule(rule_id)
+
+
+def test_rollback_rule_cli_refuse_exit_1(monkeypatch):
+    """CLI：目标版本不存在 → main() 返回 1。"""
+    import sys
+    from scripts import rollback_rule
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        monkeypatch.setattr(
+            sys, "argv",
+            ["rollback_rule.py", "--rule-id", rule_id, "--to-version", "v9.9"],
+        )
+        assert rollback_rule.main() == 1
+    finally:
+        _cleanup_rule(rule_id)
+
+def test_rollback_rule_idempotent():
+    """连续回滚两次同一目标：第二次返回 noop=True，history 不再新增。"""
+    from app.persistence.db import get_db_session
+    from app.persistence.models import RuleDefinition, RuleDefinitionHistory
+    from app.services.rule_evolution_service import RuleEvolutionService
+
+    rule_id = _make_rule_with_history("v2.0", "v1.0")
+    try:
+        svc = RuleEvolutionService()
+
+        # 第一次回滚：正常执行
+        with get_db_session() as db:
+            first = svc.rollback_rule(db, rule_id, "v1.0")
+        assert first is not None
+        assert first.get("noop") is False
+        assert first["from_version"] == "v2.0"
+        assert first["to_version"] == "v1.0"
+
+        # 记录第一次回滚后 history 行数
+        with get_db_session() as db:
+            count_after_first = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+
+        # 第二次回滚同一目标：应命中幂等前置，返回 noop=True
+        with get_db_session() as db:
+            second = svc.rollback_rule(db, rule_id, "v1.0")
+        assert second is not None
+        assert second.get("noop") is True
+
+        # 主表版本仍为 v1.0，history 未新增
+        with get_db_session() as db:
+            rd = db.query(RuleDefinition).filter(
+                RuleDefinition.rule_id == rule_id
+            ).first()
+            assert rd.version == "v1.0"
+            count_after_second = db.query(RuleDefinitionHistory).filter(
+                RuleDefinitionHistory.rule_id == rule_id
+            ).count()
+        assert count_after_second == count_after_first, (
+            f"幂等命中时 history 不应新增：第一次 {count_after_first}，第二次 {count_after_second}"
+        )
+    finally:
+        _cleanup_rule(rule_id)
