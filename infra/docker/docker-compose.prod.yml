@@ -36,5 +36,6 @@ services:
     # ⚠️ 生产建议注释ports，使用外部反向代理接入
     # ports:
     #   - "${FRONTEND_PORT:-3000}:80"
-    # ⚠️ Sprint0：沿用基座 placeholder 挂载，生产真实 Vue dist 挂载留至 Sprint 1 处理
+    # Sprint 3 legacy 批次④（D23）：镜像由 frontend/Dockerfile 构建，COPY dist 进 Nginx；
+    # 不再依赖 frontend-placeholder 挂载。
     restart: unless-stopped

@@ -79,6 +79,4 @@ services:
     # 默认3000，规避8080端口冲突
     ports:
       - "${FRONTEND_PORT:-3000}:80"
-    # 新增：覆盖volumes，移除占位目录，挂载本地Vue dist产物
-    #volumes:
-    #  - ../../frontend/dist:/usr/share/nginx/html:ro
+    # Sprint 3 legacy 批次④：真实前端由镜像内 COPY dist 提供，不再挂载宿主机 dist
