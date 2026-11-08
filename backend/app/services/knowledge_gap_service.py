@@ -17,7 +17,7 @@ from app.core.exceptions import BusinessValueError
 from app.core.ids import make_prefixed_id
 from app.persistence.models import (
     KnowledgeGap, GapFeedbackLink, FeedbackItem,
-    ReviewDefect, ReviewResult, SchematicCase,   # ← 补 SchematicCase
+    ReviewDefect, ReviewResult, SchematicCase, FeedbackItem,  # ← 补 SchematicCase
 )
 
 
@@ -52,44 +52,75 @@ def list_gaps(
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """列表 + 筛选 + 分页。"""
+    """列表 + 筛选 + 分页。
+
+    D27：proposed_by 运行时 JOIN feedback_item 反查，无 DB 物理列；
+    source_feedback_id 为 NULL 或关联 feedback 已软删除时返回 None。
+    """
     if status is not None and status not in _ALLOWED_STATUS:
         raise BusinessValueError(f"status 必须为 {_ALLOWED_STATUS}，实际: {status!r}")
-    
-    q = db.query(KnowledgeGap)
-    if status is not None:
-        q = q.filter(KnowledgeGap.status == status)
-    if case_id is not None:
-        q = q.filter(KnowledgeGap.case_id == case_id)
-    if task_id is not None:
-        q = q.filter(KnowledgeGap.task_id == task_id)
 
-    total = q.count()
-    rows = q.order_by(KnowledgeGap.created_at.desc()).offset(offset).limit(limit).all()
+    base_q = db.query(KnowledgeGap)
+    if status is not None:
+        base_q = base_q.filter(KnowledgeGap.status == status)
+    if case_id is not None:
+        base_q = base_q.filter(KnowledgeGap.case_id == case_id)
+    if task_id is not None:
+        base_q = base_q.filter(KnowledgeGap.task_id == task_id)
+
+    total = base_q.count()
+
+    # 分页 + outerjoin 带出 proposed_by 所需字段（一次查询）
+    rows = (
+        base_q
+        .outerjoin(FeedbackItem, KnowledgeGap.source_feedback_id == FeedbackItem.id)
+        .add_columns(FeedbackItem.created_by, FeedbackItem.is_deleted)
+        .order_by(KnowledgeGap.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    items = []
+    for gap, fb_created_by, fb_is_deleted in rows:
+        item = _gap_to_dict(gap)
+        item["proposed_by"] = (
+            fb_created_by if (fb_created_by is not None and not fb_is_deleted) else None
+        )
+        items.append(item)
+
     return {
         "total": total,
-        "items": [_gap_to_dict(g) for g in rows],
+        "items": items,
         "limit": limit,
         "offset": offset,
     }
 
 
 def get_gap(db: Session, gap_id: str) -> dict[str, Any] | None:
-    """详情 + 来源追溯（source_feedback + all_feedbacks）。"""
+    """详情 + 来源追溯（source_feedback + all_feedbacks）。
+
+    D27：proposed_by 由 source_feedback 的 created_by 反查；
+    source_feedback_id 为 NULL 或关联 feedback 已软删除时返回 None。
+    """
     gap = db.query(KnowledgeGap).filter(KnowledgeGap.gap_id == gap_id).first()
     if gap is None:
         return None
 
     base = _gap_to_dict(gap)
 
-    # 主来源
+    # 主来源（顺带取 created_by / is_deleted，用于 proposed_by）
     source_feedback = None
+    proposed_by = None
     if gap.source_feedback_id:
         fb = db.query(FeedbackItem).filter(
             FeedbackItem.id == gap.source_feedback_id
         ).first()
         if fb:
             source_feedback = _feedback_to_dict(db, fb)
+            if not fb.is_deleted:
+                proposed_by = fb.created_by
+    base["proposed_by"] = proposed_by
 
     # 全部关联反馈（含主来源）
     links = db.query(GapFeedbackLink).filter(GapFeedbackLink.gap_id == gap.id).all()

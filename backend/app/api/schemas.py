@@ -374,6 +374,7 @@ class KnowledgeGapItem(BaseModel):
     updated_at: str | None = None
     resolved_at: str | None = None
     resolved_by: int | None = None
+    proposed_by: int | None = None   # ← 新增（运行时 JOIN，无 DB 物理列）
 
 
 class KnowledgeGapFeedbackRef(BaseModel):
