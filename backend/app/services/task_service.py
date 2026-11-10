@@ -90,7 +90,7 @@ def _make_task_id() -> str:
 # ============================================================
 # create_task：创建并运行评审任务
 # ============================================================
-def create_task(case_id: str, created_by: int | None = None) -> str:
+def create_task(case_id: str, created_by: int | None = None) -> dict[str, Any]:
     """
     创建并运行一次评审任务。
 
