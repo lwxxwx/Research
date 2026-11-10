@@ -4,42 +4,50 @@ __pycache__/
 *$py.class
 .venv/
 .uv/
-.pytest_cache/
-.ruff_cache/
+backend/.pytest_cache/
+backend/.ruff_cache/
 .coverage
 htmlcov/
 
 # --- Environment ---
 .env
 .env.local
+.env.*.local
 
 # --- Docker & Persistence ---
 pgdata/
-out/
+# out目录：仅忽略目录内全部文件，保留 .gitkeep
+out/*
+!out/.gitkeep
 
-# --- IDE ---
+# --- IDE Trae：仅忽略IDE缓存，保留 .trae/documents/ 归档文档！
+.trae/cache/
+.trae/logs/
+.trae/tmp/
+
+# --- IDE Other ---
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# --- OS ---
+# --- OS & Local scratch files ---
 Thumbs.db
 .DS_Store
+# 本地 PowerShell 长commit草稿，仅本机使用，不提交仓库
 commit_msg.txt
 
-# 临时诊断/清理脚本（不进版本库）
+# 临时诊断/清理脚本（不进版本库，本地保留）
 scripts/_diag_*.py
 scripts/_cleanup_*.py
 
 # ===== S2 临时调试脚本（不进版本库，本地保留）=====
 scripts/_tmp_*.py
 
-# --- Frontend (H 阶段) ---
+# --- Frontend ---
 frontend/node_modules/
 frontend/dist/
+frontend/dist-ssr/
+frontend/*.tsbuildinfo
+frontend/.vite/
 frontend/.env.local
-*.tsbuildinfo
-
-# --- Project files ---
-.trae/
